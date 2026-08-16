@@ -9,7 +9,36 @@
 <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
 <script src="https://unpkg.com/@babel/standalone@7.24.7/babel.min.js"></script>
-<script src="https://accounts.google.com/gsi/client" async defer></script>
+<script>
+// Microsoft Entra ID (Azure AD) — Johns Hopkins tenant.
+// Keep in sync with ENTRA_TENANT_ID / ENTRA_CLIENT_ID in google-apps-script.js.
+window.ENTRA_CONFIG = {
+  tenant_id: "9fa4f438-b1e6-473b-803f-86f8aedf0dec",
+  client_id: "5ac3d97f-238a-4e23-9bad-793830bd9b21",
+  scopes: ["openid", "profile", "email"],
+};
+</script>
+<script type="module">
+// MSAL v3+ ships ESM only (Microsoft retired their own CDN), so it is imported
+// as a module and handed to the Babel-compiled app below via window.msalReady.
+import { PublicClientApplication } from "https://cdn.jsdelivr.net/npm/@azure/msal-browser@5.18.0/+esm";
+window.msalReady = (async () => {
+  const app = new PublicClientApplication({
+    auth: {
+      clientId: window.ENTRA_CONFIG.client_id,
+      // Tenant-specific authority: Microsoft itself rejects non-JHU accounts,
+      // before any token ever reaches us.
+      authority: "https://login.microsoftonline.com/" + window.ENTRA_CONFIG.tenant_id,
+      redirectUri: location.origin + location.pathname,
+    },
+    cache: { cacheLocation: "localStorage" },
+  });
+  await app.initialize();
+  window.msalApp = app;
+  return app;
+})();
+window.msalReady.catch(e => console.error("[MSAL] init failed:", e));
+</script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
 :root{
@@ -87,8 +116,34 @@ const getTodayParts = () => {
 // Only allow http/https URLs — blocks javascript: and data: XSS vectors
 const safeUrl = u => /^https?:\/\//i.test(String(u||"").trim()) ? String(u).trim() : null;
 const APP_CONFIG = {
-  oauth_client_id: "253618186533-8b7mt0hgcgdb4qlh8tg2admilfifuhgq.apps.googleusercontent.com",
   apps_script_url: "https://script.google.com/macros/s/AKfycbzLLvwOatqT3j5XRvUD3_DPoFzip1GVp9o17XY31bXrxi5wCyUkm8OXcS5IC3AysXsVBw/exec",
+};
+
+// ─── MICROSOFT SIGN-IN HELPERS ───────────────────────────────────────────────
+const MSAL_SCOPES = () => (window.ENTRA_CONFIG && window.ENTRA_CONFIG.scopes) || ["openid","profile","email"];
+
+// Decode a JWT payload for display only — never for authorization decisions.
+// The Apps Script backend verifies the signature and every claim.
+const decodeJwt = (t) => {
+  try {
+    let b = String(t).split(".")[1].replace(/-/g, "+").replace(/_/g, "/");
+    while (b.length % 4) b += "=";
+    return JSON.parse(atob(b));
+  } catch { return null; }
+};
+
+// JHU sign-in names are <JHED>@jh.edu, which lands in preferred_username.
+// The `email` claim is optional in Entra and is often the @jhu.edu alias instead,
+// so preferred_username is the one that must match the Settings sheet lists.
+const userFromAuthResult = (r) => {
+  const c = decodeJwt(r.idToken) || {};
+  const email = String(c.preferred_username || c.upn || c.email || (r.account && r.account.username) || "").trim().toLowerCase();
+  return {
+    token: r.idToken,
+    name: c.name || (r.account && r.account.name) || email,
+    email,
+    homeAccountId: (r.account && r.account.homeAccountId) || "",
+  };
 };
 
 const DEFAULT_CATEGORIES = ["Robots & Motors","Sensors & Vision","Compute & Electronics","Wiring & Networking","Tools & Hardware","Consumables & Supplies","Safety & Facility","Other"];
@@ -584,8 +639,8 @@ const CheckoutModal = ({items,onClose,onAdd,preItem="",userName="",userEmail="",
           <Fld label="Return By (date) *"><Inp type="date" value={retDate} onChange={e=>setRetDate(e.target.value)}/></Fld>
           <Fld label="Return By (time)"><input type="time" value={retTime} onChange={e=>setRetTime(e.target.value)} style={timeInputStyle}/></Fld>
           <div style={{gridColumn:"1/-1"}}>
-            <Fld label="Group members (optional)" hint="Others who can also return these items — comma-separated @engineering.upenn.edu emails">
-              <Inp placeholder="alice@engineering.upenn.edu, bob@engineering.upenn.edu" value={groupEmails} onChange={e=>setGroupEmails(e.target.value)}/>
+            <Fld label="Group members (optional)" hint="Others who can also return these items — comma-separated @jh.edu sign-in addresses">
+              <Inp placeholder="jdoe1@jh.edu, asmith3@jh.edu" value={groupEmails} onChange={e=>setGroupEmails(e.target.value)}/>
             </Fld>
           </div>
         </div>
@@ -1478,31 +1533,34 @@ const CalView=({checkouts,deliveries})=>{
 
 // ─── LOGIN PAGE ──────────────────────────────────────────────────────────────
 const LoginPage = ({onSignIn}) => {
-  const btnRef = useRef(null);
   const [error, setError] = useState("");
-  const [gsiReady, setGsiReady] = useState(false);
+  const [msalReady, setMsalReady] = useState(false);
+  const [busy, setBusy] = useState(false);
+
   useEffect(()=>{
-    const init = () => {
-      if (typeof google === 'undefined' || !google.accounts) { setTimeout(init, 200); return; }
-      try {
-        google.accounts.id.initialize({
-          client_id: APP_CONFIG.oauth_client_id,
-          callback: (response) => {
-            try {
-              const payload = JSON.parse(atob(response.credential.split('.')[1]));
-              if (payload.hd !== "engineering.upenn.edu") { setError("Access restricted to @engineering.upenn.edu accounts only."); return; }
-              onSignIn({ token: response.credential, name: payload.name, email: payload.email, picture: payload.picture });
-            } catch(e) { setError("Failed to verify account. Please try again."); }
-          },
-          hd: "engineering.upenn.edu",
-          auto_select: true,
-        });
-        google.accounts.id.renderButton(btnRef.current, { type: "standard", theme: "filled_black", size: "large", text: "signin_with", shape: "pill", width: 300 });
-        setGsiReady(true);
-      } catch(e) { console.error("GSI init error:", e); }
-    };
-    init();
+    let alive = true;
+    Promise.resolve(window.msalReady || Promise.reject(new Error("MSAL script did not load")))
+      .then(()=>{ if (alive) setMsalReady(true); })
+      .catch(()=>{ if (alive) setError("Could not load Microsoft sign-in. Check your connection and refresh."); });
+    return ()=>{ alive = false; };
   }, []);
+
+  const signIn = async () => {
+    setError(""); setBusy(true);
+    try {
+      const app = await window.msalReady;
+      // The authority is tenant-specific, so Microsoft rejects non-JHU accounts
+      // at the sign-in page; the backend re-checks tid/aud on every request.
+      const result = await app.loginPopup({ scopes: MSAL_SCOPES(), prompt: "select_account" });
+      onSignIn(userFromAuthResult(result));
+    } catch(e) {
+      const code = String((e && (e.errorCode || e.message)) || "");
+      if (/user_cancelled|popup_window_closed/i.test(code)) setError("");
+      else if (/popup/i.test(code)) setError("Your browser blocked the sign-in popup. Allow popups for this site, then try again.");
+      else { console.error("[MSAL] sign-in failed:", e); setError("Sign-in failed — you must use a Johns Hopkins account."); }
+    } finally { setBusy(false); }
+  };
+
   return(
     <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"var(--bg0)"}}>
       <div style={{textAlign:"center",animation:"fadeUp .5s ease",maxWidth:420,padding:"0 24px"}}>
@@ -1511,11 +1569,23 @@ const LoginPage = ({onSignIn}) => {
         </div>
         <h1 style={{fontFamily:"'Roboto',sans-serif",fontWeight:900,fontSize:32,margin:"0 0 6px",letterSpacing:"-0.03em"}}>LabTrack</h1>
         <p style={{color:"var(--sub)",fontSize:15,margin:"0 0 8px",lineHeight:1.5}}>Figueroa Lab Inventory</p>
-        <p style={{color:"var(--dim)",fontSize:13,margin:"0 0 32px"}}>Penn Engineering</p>
+        <p style={{color:"var(--dim)",fontSize:13,margin:"0 0 32px"}}>Johns Hopkins University</p>
         <div>
-          <div ref={btnRef} style={{display:"flex",justifyContent:"center",marginBottom:16}}/>
-          {!gsiReady && <p style={{color:"var(--dim)",fontSize:12}}>Loading sign-in...</p>}
-          <p style={{color:"var(--dim)",fontSize:12}}>Sign in with your @engineering.upenn.edu account</p>
+          <div style={{display:"flex",justifyContent:"center",marginBottom:16}}>
+            <button onClick={signIn} disabled={!msalReady||busy}
+              style={{display:"flex",alignItems:"center",justifyContent:"center",gap:10,width:300,padding:"11px 20px",borderRadius:999,
+                      background:msalReady&&!busy?"#1b1b1b":"var(--bg2)",color:"#fff",border:"1px solid var(--border-hi)",
+                      fontFamily:"'Outfit',sans-serif",fontSize:15,fontWeight:600,
+                      cursor:msalReady&&!busy?"pointer":"not-allowed",opacity:msalReady&&!busy?1:0.55,transition:"all .15s"}}>
+              <svg width="17" height="17" viewBox="0 0 21 21" style={{flexShrink:0}}>
+                <rect x="1" y="1" width="9" height="9" fill="#f25022"/><rect x="11" y="1" width="9" height="9" fill="#7fba00"/>
+                <rect x="1" y="11" width="9" height="9" fill="#00a4ef"/><rect x="11" y="11" width="9" height="9" fill="#ffb900"/>
+              </svg>
+              {busy ? "Signing in…" : "Sign in with Microsoft"}
+            </button>
+          </div>
+          {!msalReady && !error && <p style={{color:"var(--dim)",fontSize:12}}>Loading sign-in...</p>}
+          <p style={{color:"var(--dim)",fontSize:12}}>Sign in with your Johns Hopkins account (@jh.edu)</p>
           {error && <p style={{color:"var(--red)",fontSize:13,marginTop:12,background:"var(--red-d)",padding:"8px 14px",borderRadius:8,border:"1px solid #ff4d6a30"}}>{error}</p>}
         </div>
       </div>
@@ -1662,7 +1732,7 @@ function LabInventory(){
   const [previewMode, setPreviewMode] = useState(false);
   const [editLocked, setEditLocked] = useState(true);
   const tid = useRef(0);
-  const refreshTimer = useRef(null);
+  const tokenRef = useRef(null);   // current Entra ID token; refreshed on demand by getFreshToken
   const deletedItemIds = useRef(new Set());
   const lastModified = useRef({items:0, orders:0, checkouts:0, deliveries:0});
   const apiQueue = useRef([]);
@@ -1681,7 +1751,21 @@ function LabInventory(){
   useEffect(()=>{
     try {
       const saved = localStorage.getItem("labtrack_user");
-      if (saved) setUser(JSON.parse(saved));
+      if (saved) {
+        const u = JSON.parse(saved);
+        setUser(u);
+        tokenRef.current = u.token || null;
+        // The stored token is almost always expired by now; MSAL holds the
+        // refresh token. If its cache was cleared, drop back to the login page.
+        if (u.token && u.token !== "local") {
+          Promise.resolve(window.msalReady).then(app => {
+            if (app.getAllAccounts().length === 0) {
+              setUser(null); tokenRef.current = null;
+              localStorage.removeItem("labtrack_user");
+            }
+          }).catch(()=>{});
+        }
+      }
       localStorage.removeItem("labtrack_categories"); // no longer cached; server is source of truth
       const dark = localStorage.getItem("labtrack_dark");
       if (dark !== null) {
@@ -1718,7 +1802,7 @@ function LabInventory(){
     }
     setFetchingData(true);
     (async ()=>{
-      const data = await API.fetchAll(user.token);
+      const data = await API.fetchAll(await getFreshToken());
       if (data && data.error === "NotMember") {
         setUser(null);
         localStorage.removeItem("labtrack_user");
@@ -1726,7 +1810,7 @@ function LabInventory(){
         setDataLoaded(true); setFetchingData(false); return;
       }
       if (data && data.error === "Unauthorized") {
-        setSessionExpired(true); try{google.accounts.id.prompt();}catch(e){}
+        setSessionExpired(true);
       }
       if (data && data.error) {
         console.error("[LabTrack] Backend error:", data.error, data.detail);
@@ -1773,7 +1857,7 @@ function LabInventory(){
     if (!user || !dataLoaded || !APP_CONFIG.apps_script_url || user.token === "local") return;
     const interval = setInterval(async ()=>{
       try {
-        const data = await API.fetchAll(user.token);
+        const data = await API.fetchAll(await getFreshToken());
         if (data && !data.error && data.items) {
           const now = Date.now(); const GRACE = 60000;
           const lm = lastModified.current;
@@ -1828,24 +1912,54 @@ function LabInventory(){
   },[]);
 
   const handleSignIn = (u) => {
+    tokenRef.current = u.token;
     setUser(u); setSessionExpired(false); setDataLoaded(false);
     localStorage.setItem("labtrack_user", JSON.stringify(u));
-    // Schedule silent token refresh 5 minutes before the JWT expires
-    if (refreshTimer.current) clearTimeout(refreshTimer.current);
-    try {
-      const exp = JSON.parse(atob(u.token.split('.')[1])).exp;
-      const msUntilRefresh = (exp * 1000) - Date.now() - 5 * 60 * 1000;
-      if (msUntilRefresh > 0) {
-        refreshTimer.current = setTimeout(()=>{ try { google.accounts.id.prompt(); } catch(e){} }, msUntilRefresh);
-      }
-    } catch(e) {}
   };
-  const handleSignOut = () => { if (refreshTimer.current) clearTimeout(refreshTimer.current); setUser(null); setDataLoaded(false); setItems([]); setDeliv([]); setCheckouts([]); setOrders([]); localStorage.removeItem("labtrack_user"); try { google.accounts.id.disableAutoSelect(); } catch {} };
+
+  const handleSignOut = () => {
+    tokenRef.current = null;
+    setUser(null); setDataLoaded(false); setItems([]); setDeliv([]); setCheckouts([]); setOrders([]);
+    localStorage.removeItem("labtrack_user");
+    Promise.resolve(window.msalReady)
+      .then(app => app.clearCache())   // drops MSAL's cached account + refresh token
+      .catch(()=>{});
+  };
+
+  // Returns a non-expired ID token, renewing it through MSAL's refresh token
+  // when needed. Replaces the old GSI timer: nothing is scheduled, the token is
+  // simply refreshed on the next API call after it goes stale.
+  const getFreshToken = async (interactive) => {
+    if (!user) return null;
+    if (user.token === "local") return "local";
+
+    const cur = tokenRef.current;
+    const claims = cur ? decodeJwt(cur) : null;
+    if (claims && claims.exp && (claims.exp * 1000 - Date.now()) > 5 * 60 * 1000) return cur;
+
+    try {
+      const app = await window.msalReady;
+      const accounts = app.getAllAccounts();
+      const account = accounts.find(a => a.homeAccountId === user.homeAccountId) || accounts[0];
+      if (!account) throw new Error("no cached account");
+      const req = { scopes: MSAL_SCOPES(), account };
+      const r = interactive ? await app.acquireTokenPopup(req) : await app.acquireTokenSilent(req);
+      tokenRef.current = r.idToken;
+      setSessionExpired(false);
+      return r.idToken;
+    } catch(e) {
+      // Refresh token expired or revoked — show the banner and let the request
+      // go out with the stale token so the server's rejection stays authoritative.
+      console.error("[MSAL] token refresh failed:", e);
+      setSessionExpired(true);
+      return cur;
+    }
+  };
 
   const handleSaveCategories = async (newCats) => {
     setCategories(newCats);
     if (APP_CONFIG.apps_script_url && user?.token !== "local") {
-      await API.post(user.token, "saveSettings", { key: "categories", value: JSON.stringify(newCats) });
+      await API.post(await getFreshToken(), "saveSettings", { key: "categories", value: JSON.stringify(newCats) });
     }
     addToast("success", "Categories updated");
   };
@@ -1878,17 +1992,18 @@ function LabInventory(){
     if (/delivery/i.test(action)) lastModified.current.deliveries = now;
     if (!APP_CONFIG.apps_script_url || user?.token === "local") return Promise.resolve(null);
     // Queue requests so rapid edits don't race in GAS
-    const token = user.token;
     return new Promise(resolve => {
-      apiQueue.current.push({action, payload, resolve, token});
+      apiQueue.current.push({action, payload, resolve});
       if (!apiRunning.current) {
         (async () => {
           apiRunning.current = true;
           while (apiQueue.current.length > 0) {
             const req = apiQueue.current.shift();
             try {
-              const result = await API.post(req.token, req.action, req.payload);
-              if (result?.error === "Unauthorized") { setSessionExpired(true); try{google.accounts.id.prompt();}catch(e){} }
+              // Token is fetched per request, not at enqueue time — a request that
+              // sat in the queue would otherwise go out with an expired token.
+              const result = await API.post(await getFreshToken(), req.action, req.payload);
+              if (result?.error === "Unauthorized") { setSessionExpired(true); }
               if (result?.error === "NotMember") { setUser(null); localStorage.removeItem("labtrack_user"); setError("Your account is not authorized to access this lab's system."); }
               if (result?.error && result.error !== "Unauthorized" && result.error !== "NotMember") addToast("error", `Error: ${result.error} — ${result.detail||""}`);
               req.resolve(result);
@@ -2876,7 +2991,7 @@ function LabInventory(){
             {icon:"cart",title:"Order Requests Tab",color:"var(--amber)",items:["Submit purchase requests with store, item, link, qty, and price.","Only the person who submitted an order (or an admin) can edit it.","Select multiple orders with checkboxes → Copy Text generates a bullet-list (qty · item · link · price) with grand total — ready to paste into an email or message. Save to Sheet writes the same summary as a table to your Google Sheet.","Admins can move orders through: Pending → Approved → Ordered → Received.","When marked Received, a staging form opens — fill in location, label ID, and serial number before it is added to inventory.","Deliveries are automatically logged when an order is marked Received."]},
             {icon:"calendar",title:"Calendar Tab",color:"var(--purple)",items:["Visual monthly calendar showing deliveries, active checkouts, and return due dates.","Color-coded: green = delivery, blue = checkout start, amber = return due.","Click any day to see all events on that date."]},
             {icon:"layers",title:"Item Statuses",color:"var(--sub)",items:["🟢 Available — ready to use","🔵 In Use — checked out by one or more people","🟡 Maintenance — temporarily out of service","🔴 Broken — damaged or needs repair","⚠️ Low Stock — qty is at or below the Min Stock threshold (shown as a badge)"]},
-            {icon:"settings",title:"Settings (Admin only)",color:"var(--orange)",items:["Manage Categories — add, remove, or rename categories; set label ID prefix per category (e.g. RM for Robots & Motors).","Admins list — edit in the Settings tab of the Google Sheet (JSON array of emails).","Slack notifications — set slack_mode in Settings tab: all | important | digest | off.","Session expires after ~1 hour and auto-renews silently. If you see a red banner at the top, click Sign In Again."]},
+            {icon:"settings",title:"Settings (Admin only)",color:"var(--orange)",items:["Manage Categories — add, remove, or rename categories; set label ID prefix per category (e.g. RM for Robots & Motors).","Admins list — edit in the Settings tab of the Google Sheet (JSON array of @jh.edu sign-in addresses, not @jhu.edu).","Slack notifications — set slack_mode in Settings tab: all | important | digest | off.","Your Microsoft token expires after ~1 hour and renews silently in the background. If you see a red banner at the top, click Sign In Again."]},
           ].map(s=>(
             <div key={s.title}>
               <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}><Ico n={s.icon} s={16} col={s.color}/><strong style={{color:s.color,fontFamily:"'Roboto',sans-serif"}}>{s.title}</strong></div>

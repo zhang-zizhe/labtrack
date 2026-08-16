@@ -20,7 +20,18 @@
  */
 
 // ─── CONFIG ──────────────────────────────────────────────────────────────────
-const ALLOWED_DOMAIN = "engineering.upenn.edu";
+// Microsoft Entra ID (Azure AD) — sign-in is restricted to the Johns Hopkins
+// tenant. The tenant ID below is JHU's; look it up again with:
+//   https://login.microsoftonline.com/jh.edu/v2.0/.well-known/openid-configuration
+const ENTRA_TENANT_ID = "9fa4f438-b1e6-473b-803f-86f8aedf0dec";
+const ENTRA_CLIENT_ID = "5ac3d97f-238a-4e23-9bad-793830bd9b21";  // App registration → Application (client) ID
+
+// Optional extra restriction on the sign-in name's domain. Empty array = any
+// account in the JHU tenant is allowed, which is what "must be a JHU person"
+// normally means. Note JHU sign-in names (UPNs) are <JHED>@jh.edu even though
+// mail is often @jhu.edu — so list "jh.edu" here, not "jhu.edu".
+const ALLOWED_UPN_DOMAINS = [];
+
 const SLACK_WEBHOOK_URL = "YOUR_SLACK_WEBHOOK_URL_HERE";
 
 // ─── SLACK HELPER ────────────────────────────────────────────────────────────
@@ -334,19 +345,150 @@ function checkOverduesAndAlert() {
   sendSlack("🔴", "Overdue Checkouts (" + overdues.length + ")", text, [], "high");
 }
 
-// ─── TOKEN VERIFICATION ──────────────────────────────────────────────────────
+// ─── TOKEN VERIFICATION (Microsoft Entra ID) ─────────────────────────────────
+// Unlike Google, Microsoft has no tokeninfo endpoint that validates a token for
+// you — we have to verify the RS256 signature ourselves against the tenant's
+// published JWKS, then check the claims.
+//
+// Returns { email, name, oid } on success, or null on any failure.
 function verifyToken(token) {
   if (!token || token === "local") return null;
   try {
-    const resp = UrlFetchApp.fetch(
-      "https://oauth2.googleapis.com/tokeninfo?id_token=" + token
-    );
-    const payload = JSON.parse(resp.getContentText());
-    if (payload.hd !== ALLOWED_DOMAIN) return null;
-    return payload;
+    var parts = String(token).split(".");
+    if (parts.length !== 3) return null;
+
+    var header = JSON.parse(base64UrlToString_(parts[0]));
+    if (header.alg !== "RS256" || !header.kid) return null;
+
+    // Look up the signing key by kid. If the cached JWKS doesn't have it, the
+    // tenant probably rotated keys — refetch once, bypassing the cache.
+    var jwk = getEntraSigningKey_(header.kid, false);
+    if (!jwk) jwk = getEntraSigningKey_(header.kid, true);
+    if (!jwk) return null;
+
+    if (!verifyRs256_(parts[0] + "." + parts[1],
+                      Utilities.base64DecodeWebSafe(parts[2]), jwk.n, jwk.e)) {
+      return null;
+    }
+
+    var claims = JSON.parse(base64UrlToString_(parts[1]));
+    var now = Math.floor(Date.now() / 1000);
+    var SKEW = 300;  // 5 min clock skew tolerance
+
+    if (!claims.exp || now > Number(claims.exp) + SKEW) return null;
+    if (claims.nbf && now < Number(claims.nbf) - SKEW) return null;
+    // aud: the token was minted for THIS app, not some other app that happens
+    // to be in the same tenant. This is what stops token replay from another site.
+    if (claims.aud !== ENTRA_CLIENT_ID) return null;
+    // tid + iss: the signer is the JHU tenant.
+    if (claims.tid !== ENTRA_TENANT_ID) return null;
+    if (claims.iss !== "https://login.microsoftonline.com/" + ENTRA_TENANT_ID + "/v2.0") return null;
+
+    var upn = String(claims.preferred_username || claims.upn || claims.email || "")
+                .trim().toLowerCase();
+    if (!upn || upn.indexOf("@") < 0) return null;
+
+    if (ALLOWED_UPN_DOMAINS.length > 0 &&
+        ALLOWED_UPN_DOMAINS.indexOf(upn.split("@")[1]) < 0) {
+      return null;
+    }
+
+    return { email: upn, name: claims.name || upn, oid: claims.oid || "" };
   } catch (e) {
     return null;
   }
+}
+
+// Fetch the tenant's signing keys, cached for 6h so the common path makes no
+// network call at all (the old Google tokeninfo check cost a round trip per request).
+function getEntraSigningKey_(kid, forceRefresh) {
+  var cache = CacheService.getScriptCache();
+  var cacheKey = "entra_jwks_" + ENTRA_TENANT_ID;
+  var raw = forceRefresh ? null : cache.get(cacheKey);
+  if (!raw) {
+    var resp = UrlFetchApp.fetch(
+      "https://login.microsoftonline.com/" + ENTRA_TENANT_ID + "/discovery/v2.0/keys",
+      { muteHttpExceptions: true }
+    );
+    if (resp.getResponseCode() !== 200) return null;
+    raw = resp.getContentText();
+    cache.put(cacheKey, raw, 21600);
+  }
+  var keys = (JSON.parse(raw) || {}).keys || [];
+  for (var i = 0; i < keys.length; i++) {
+    if (keys[i].kid === kid && keys[i].n && keys[i].e) return keys[i];
+  }
+  return null;
+}
+
+function base64UrlToString_(s) {
+  return Utilities.newBlob(Utilities.base64DecodeWebSafe(s)).getDataAsString();
+}
+
+// ─── RS256 SIGNATURE VERIFICATION ────────────────────────────────────────────
+// Apps Script's Utilities can sign with RSA but cannot verify, so this is a
+// direct implementation of RSASSA-PKCS1-v1_5 verification on top of BigInt.
+
+function bytesToBigInt_(bytes) {
+  var hex = "";
+  for (var i = 0; i < bytes.length; i++) {
+    var b = bytes[i] & 0xff;
+    hex += (b < 16 ? "0" : "") + b.toString(16);
+  }
+  return hex.length ? BigInt("0x" + hex) : BigInt(0);
+}
+
+function modPow_(base, exp, mod) {
+  var ZERO = BigInt(0), ONE = BigInt(1), TWO = BigInt(2);
+  var result = ONE;
+  var b = base % mod;
+  var e = exp;
+  while (e > ZERO) {
+    if (e % TWO === ONE) result = (result * b) % mod;
+    e = e / TWO;
+    b = (b * b) % mod;
+  }
+  return result;
+}
+
+// DER-encoded DigestInfo prefix for SHA-256
+var SHA256_DIGEST_INFO_ = [
+  0x30, 0x31, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01,
+  0x65, 0x03, 0x04, 0x02, 0x01, 0x05, 0x00, 0x04, 0x20
+];
+
+function verifyRs256_(signingInput, sigBytes, nB64u, eB64u) {
+  var nBytes = Utilities.base64DecodeWebSafe(nB64u);
+  var n = bytesToBigInt_(nBytes);
+  var e = bytesToBigInt_(Utilities.base64DecodeWebSafe(eB64u));
+  var s = bytesToBigInt_(sigBytes);
+  if (n === BigInt(0) || s >= n) return false;
+
+  var k = nBytes.length;
+  if (sigBytes.length !== k) return false;
+
+  // EM = sig^e mod n, left-padded to exactly k bytes
+  var hex = modPow_(s, e, n).toString(16);
+  while (hex.length < k * 2) hex = "0" + hex;
+  if (hex.length !== k * 2) return false;
+  var em = [];
+  for (var i = 0; i < k; i++) em.push(parseInt(hex.substr(i * 2, 2), 16));
+
+  // Expected: 0x00 || 0x01 || 0xFF...FF || 0x00 || DigestInfo || SHA-256(input)
+  var hash = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, signingInput);
+  var tail = SHA256_DIGEST_INFO_.concat(hash.map(function (b) { return b & 0xff; }));
+  var psLen = k - tail.length - 3;
+  if (psLen < 8) return false;
+
+  var expected = [0x00, 0x01];
+  for (var j = 0; j < psLen; j++) expected.push(0xff);
+  expected.push(0x00);
+  expected = expected.concat(tail);
+  if (expected.length !== em.length) return false;
+
+  var diff = 0;
+  for (var q = 0; q < em.length; q++) diff |= (em[q] ^ expected[q]);
+  return diff === 0;
 }
 
 // ─── ADMIN CHECK ─────────────────────────────────────────────────────────────
@@ -358,17 +500,23 @@ function isAdmin(email) {
     if (String(data[i][0]) === "admins") {
       try {
         var admins = JSON.parse(data[i][1]);
-        return Array.isArray(admins) && admins.indexOf(email) >= 0;
+        return Array.isArray(admins) && normalizeEmails_(admins).indexOf(email) >= 0;
       } catch(e) { return false; }
     }
   }
   return false;
 }
 
+// Entra UPNs are case-insensitive and users type them inconsistently, so the
+// sheet's admin/member lists are compared case-insensitively.
+function normalizeEmails_(list) {
+  return list.map(function (x) { return String(x).trim().toLowerCase(); });
+}
+
 // ─── MEMBER CHECK ────────────────────────────────────────────────────────────
-// If "members" key exists in Settings with a non-empty array, only those emails
-// can access the system. If the key is absent or empty, all @engineering.upenn.edu
-// accounts are allowed (backward compatible).
+// If "members" key exists in Settings with a non-empty array, only those sign-in
+// names can access the system. If the key is absent or empty, any account in the
+// JHU tenant is allowed (backward compatible).
 function isMember(email) {
   var settingsSheet = getSheet("Settings");
   if (!settingsSheet) return true;
@@ -378,11 +526,11 @@ function isMember(email) {
       try {
         var members = JSON.parse(data[i][1]);
         if (!Array.isArray(members) || members.length === 0) return true;
-        return members.indexOf(email) >= 0;
+        return normalizeEmails_(members).indexOf(email) >= 0;
       } catch(e) { return true; }
     }
   }
-  return true; // key not set → allow all engineering accounts
+  return true; // key not set → allow anyone in the JHU tenant
 }
 
 // ─── DELETE LOG ──────────────────────────────────────────────────────────────
@@ -680,9 +828,9 @@ function doPost(e) {
       if (idsMatch(data[i][idCol], coId)) {
         const coEmailCol = headers.indexOf("checkedOutByEmail");
         const groupEmailsCol = headers.indexOf("groupEmails");
-        const coEmail = coEmailCol >= 0 ? String(data[i][coEmailCol] || "") : "";
+        const coEmail = coEmailCol >= 0 ? String(data[i][coEmailCol] || "").trim().toLowerCase() : "";
         const groupEmailsStr = groupEmailsCol >= 0 ? String(data[i][groupEmailsCol] || "") : "";
-        const groupList = groupEmailsStr.split(",").map(e => e.trim()).filter(Boolean);
+        const groupList = groupEmailsStr.split(",").map(e => e.trim().toLowerCase()).filter(Boolean);
         if (!admin && coEmail && userEmail !== coEmail && !groupList.includes(userEmail)) {
           return jsonResponse({ error: "Forbidden", detail: "Only the person who checked out this item, group members, or an admin can return it." });
         }
@@ -728,7 +876,7 @@ function doPost(e) {
     for (let i = 1; i < data.length; i++) {
       if (idsMatch(data[i][idCol], o.id)) {
         const reqEmailCol = headers.indexOf("requestedByEmail");
-        const reqEmail = reqEmailCol >= 0 ? String(data[i][reqEmailCol] || "") : "";
+        const reqEmail = reqEmailCol >= 0 ? String(data[i][reqEmailCol] || "").trim().toLowerCase() : "";
         if (!admin && reqEmail && userEmail !== reqEmail) {
           return jsonResponse({ error: "Forbidden", detail: "Only the person who submitted this order or an admin can edit it." });
         }

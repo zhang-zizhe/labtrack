@@ -3,7 +3,7 @@
 ## Quick Start
 
 1. Go to **https://penn-figueroa-lab.github.io/lab-inventory/**
-2. Sign in with your **@engineering.upenn.edu** Google account
+2. Sign in with your **Johns Hopkins** account (`<JHED>@jh.edu`)
 3. Start managing inventory
 
 ---
@@ -30,8 +30,8 @@ The backend uses a Google Sheet with these tabs:
 | key | value |
 |-----|-------|
 | `categories` | `["Robots & Motors","Sensors & Vision","Compute & Electronics","Wiring & Networking","Tools & Hardware","Consumables & Supplies","Safety & Facility","Other"]` |
-| `admins` | `["admin@engineering.upenn.edu"]` |
-| `members` | `["user1@engineering.upenn.edu","user2@engineering.upenn.edu"]` — if present and non-empty, only these accounts can sign in; all other `@engineering.upenn.edu` accounts are rejected. Omit the key (or leave it as `[]`) to allow all engineering accounts. |
+| `admins` | `["jdoe12@jh.edu"]` — use the **sign-in name** (`<JHED>@jh.edu`), not the `@jhu.edu` mail alias. Compared case-insensitively. |
+| `members` | `["jdoe12@jh.edu","asmith3@jh.edu"]` — if present and non-empty, only these accounts can sign in; all other JHU accounts are rejected. Omit the key (or leave it as `[]`) to allow anyone in the JHU tenant. |
 | `slack_mode` | `all` or `important` or `digest` or `off` |
 
 **DeleteLog** (auto-created) — `date | type | name | details | deletedBy`
@@ -56,11 +56,66 @@ The backend uses a Google Sheet with these tabs:
 
 ---
 
+## Microsoft Entra ID Setup (sign-in)
+
+Sign-in is restricted to the Johns Hopkins Entra tenant
+(`9fa4f438-b1e6-473b-803f-86f8aedf0dec`, resolvable any time from
+`https://login.microsoftonline.com/jh.edu/v2.0/.well-known/openid-configuration`).
+
+### The app registration (already created)
+
+| Setting | Value |
+|---|---|
+| Application (client) ID | `5ac3d97f-238a-4e23-9bad-793830bd9b21` |
+| Object ID | `7635392b-d637-4a4f-aff9-709655b57edd` |
+| Display name | LabTrack - Figueroa Lab Inventory |
+| Supported account types | Single tenant (`AzureADMyOrg`) |
+| Platform | **Single-page application (SPA)** — *not* Web |
+| Redirect URIs | `https://penn-figueroa-lab.github.io/lab-inventory/`, `http://localhost:8000/` |
+| API permissions | `openid`, `profile`, `email`, `offline_access` (delegated, Microsoft Graph) |
+| Implicit grant | Off — MSAL uses authorization code flow with PKCE |
+
+The SPA platform type matters: it enables CORS on the token endpoint and issues
+SPA refresh tokens, which is what keeps sessions alive without third-party cookies.
+`offline_access` is added by MSAL automatically to obtain that refresh token.
+
+The client ID is already filled into **both** files, and they must stay in sync —
+the backend checks that the token was minted for this exact app:
+
+- `index.html` → `window.ENTRA_CONFIG.client_id` (near the top)
+- `google-apps-script.js` → `ENTRA_CLIENT_ID`
+
+To restrict further than "anyone at JHU", set `ALLOWED_UPN_DOMAINS = ["jh.edu"]`
+in `google-apps-script.js`, or use the `members` allowlist in the Settings tab.
+
+> **`jh.edu` vs `jhu.edu`**: JHU sign-in names (UPNs) are `<JHED>@jh.edu`, but mail
+> is often `@jhu.edu`. The app keys off the sign-in name, so `admins`/`members`
+> lists and group-checkout emails must use `@jh.edu`.
+
+The JHU tenant allows users to register apps (`allowedToCreateApps: true`), so no
+admin was needed to create this. It does **not** allow users to consent to apps, so
+a Global Administrator or Cloud Application Administrator must grant consent once
+before anyone can sign in — see below. The Entra admin center portal returns 401
+for ordinary accounts; use Microsoft Graph via `az rest` instead, which the portal
+restriction does not cover.
+
+### One-time admin consent (required before first sign-in)
+
+Ask a JHU Entra administrator to do **either**:
+
+- Open <https://login.microsoftonline.com/9fa4f438-b1e6-473b-803f-86f8aedf0dec/adminconsent?client_id=5ac3d97f-238a-4e23-9bad-793830bd9b21> and accept, or
+- Entra admin center → Enterprise applications → *LabTrack - Figueroa Lab Inventory* → Permissions → **Grant admin consent**
+
+Without this, sign-in stops at *"Approval required — this app requires your admin's approval"*.
+
+---
+
 ## Apps Script Deployment
 
 1. In the Google Sheet: **Extensions → Apps Script**
 2. Paste contents of `google-apps-script.js`
-3. Replace `"YOUR_SLACK_WEBHOOK_URL_HERE"` on line ~19 with your Slack webhook URL
+3. Confirm `ENTRA_CLIENT_ID` matches `index.html`, and replace
+   `"YOUR_SLACK_WEBHOOK_URL_HERE"` with your Slack webhook URL
 4. **Set script timezone**: Project Settings → Time zone → **America/New_York**
 5. **Deploy → New deployment** → Web app → Execute as: Me → Who has access: Anyone
 6. Copy the Web app URL
@@ -108,9 +163,10 @@ Admins can send the digest at any time by clicking the **Digest** button in the 
 
 ## Admin System
 
-Add emails to the `admins` list in the Settings tab to grant admin access:
+Add sign-in names to the `admins` list in the Settings tab to grant admin access.
+Use the `@jh.edu` UPN, not the `@jhu.edu` mail alias:
 ```
-["admin1@engineering.upenn.edu","admin2@engineering.upenn.edu"]
+["jdoe12@jh.edu","asmith3@jh.edu"]
 ```
 
 **Admins can**: delete items/orders, manage categories, change settings, send digest manually, change order status (Approve/Reject/etc.), edit any order request, return any checked-out item
@@ -143,13 +199,21 @@ All deletions are logged in the DeleteLog tab with timestamp, details, and who d
 
 ## Frontend Configuration
 
-In `index.html`, update `APP_CONFIG`:
+In `index.html`, update the Entra config in `<head>` and `APP_CONFIG` in the app script:
 ```js
+window.ENTRA_CONFIG = {
+  tenant_id: "9fa4f438-b1e6-473b-803f-86f8aedf0dec",  // Johns Hopkins
+  client_id: "5ac3d97f-238a-4e23-9bad-793830bd9b21",
+  scopes: ["openid", "profile", "email"],
+};
+
 const APP_CONFIG = {
-  oauth_client_id: "YOUR_OAUTH_CLIENT_ID",
   apps_script_url: "YOUR_APPS_SCRIPT_WEB_APP_URL",
 };
 ```
+
+MSAL is loaded as an ES module from jsDelivr (`@azure/msal-browser@5.18.0`) because
+Microsoft retired their own CDN and no longer ships a UMD build.
 
 ## GitHub Pages Deployment
 
@@ -165,9 +229,14 @@ Repo Settings → Pages → Deploy from branch: `main` / `/ (root)`
 
 ## Security
 
-- Google Sign-In restricted to `@engineering.upenn.edu` domain (client + server verified via Google tokeninfo API); optionally further restricted to a specific `members` list in the Settings tab
+- **Sign-in restricted to the JHU Entra tenant**, enforced twice:
+  1. The app registration is single-tenant and MSAL uses a tenant-specific authority, so Microsoft refuses to issue a token to a non-JHU account in the first place.
+  2. Apps Script re-verifies every request: it fetches the tenant's JWKS, verifies the RS256 signature itself (`verifyRs256_`), and checks `aud` (token was minted for *this* app), `tid`, `iss`, `exp`, and `nbf`. Unlike Google, Microsoft has no tokeninfo endpoint, so none of this can be delegated.
+- Checking `aud` is what blocks token replay: a token some other app obtained for a JHU user cannot be used against this backend.
+- Optionally restricted further by `ALLOWED_UPN_DOMAINS` in Apps Script and the `members` list in the Settings tab
+- JWKS is cached 6h in `CacheService`, so the common request path makes **no** outbound network call (the old Google tokeninfo check cost a round trip per request)
 - Slack webhook stored only in Apps Script (server-side), never in client code
-- No secrets in HTML — only the OAuth Client ID (designed to be public) and Apps Script URL
+- No secrets in HTML — only the Entra client ID and tenant ID (both designed to be public) and the Apps Script URL
 - **Server-side RBAC**: every sensitive action is verified in Apps Script regardless of client state:
   - Category changes → admin only
   - Order edits → requester (`requestedByEmail`) or admin only
@@ -179,7 +248,13 @@ Repo Settings → Pages → Deploy from branch: `main` / `/ (root)`
 
 | Issue | Fix |
 |-------|-----|
-| "Access restricted" | Must use `@engineering.upenn.edu` account |
+| "Sign-in failed — you must use a Johns Hopkins account" | Signed in with a personal/other-tenant Microsoft account |
+| "Approval required — this app requires your admin's approval" | Admin consent hasn't been granted yet; see the one-time admin consent step above |
+| Sign-in popup blocked | Allow popups for the site, or switch `loginPopup` → `loginRedirect` in `index.html` |
+| `AADSTS700016` (app not found) | `client_id` is still the placeholder, or the app registration is in another tenant |
+| `AADSTS50011` (redirect mismatch) | Add the exact GitHub Pages URL as a **SPA** redirect URI in the app registration |
+| Signed in fine but everything returns "Unauthorized" | `ENTRA_CLIENT_ID` in Apps Script doesn't match `client_id` in `index.html` (the `aud` check fails) |
+| "not authorized to access this lab's system" | Account isn't in the `members` list — remember it must be `@jh.edu`, not `@jhu.edu` |
 | Data not syncing | Check Apps Script URL; redeploy as new version |
 | Delete not working | Check you're in the `admins` list in Settings tab |
 | Digest not sending | Verify trigger is set; check script timezone = America/New_York |
