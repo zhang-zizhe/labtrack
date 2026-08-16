@@ -985,6 +985,11 @@ function doPost(e) {
 
   // ── Update Order Status ───────────────────────────────────────────────────
   if (action === "updateOrderStatus") {
+    // Admin-only: this is the approval control for purchasing. Without the check
+    // any member could POST their own request straight to "Approved".
+    if (!admin) {
+      return jsonResponse({ error: "Forbidden", detail: "Only admins can change order status" });
+    }
     const orderId = body.orderId;
     const newStatus = body.status;
     const prev = updateRow("Orders", orderId, { status: newStatus });

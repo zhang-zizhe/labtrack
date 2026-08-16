@@ -95,7 +95,7 @@ function makeSpreadsheet(initial) {
   };
 }
 
-function run(scriptPath, slackMode) {
+function run(scriptPath, slackMode, asAdmin) {
   const slack = [];
 
   const ss = makeSpreadsheet({
@@ -151,8 +151,11 @@ function run(scriptPath, slackMode) {
   vm.runInContext(src, ctx, { filename: scriptPath });
 
   // Bypass the real Entra verification — it needs JWKS over the network and is
-  // untouched by this refactor.
-  ctx.verifyToken = () => ({ email: "zzhan409@jh.edu", name: "Zizhe Zhang", oid: "oid-1" });
+  // orthogonal to storage. isAdmin still runs for real against the seeded
+  // Settings, so the admin-only branches are genuinely exercised.
+  ctx.verifyToken = asAdmin === false
+    ? () => ({ email: "member@jh.edu",   name: "Regular Member", oid: "oid-2" })
+    : () => ({ email: "zzhan409@jh.edu", name: "Zizhe Zhang",    oid: "oid-1" });
 
   const post = payload => {
     const res = ctx.doPost({ postData: { contents: JSON.stringify(Object.assign({ token: "t" }, payload)) } });
@@ -237,6 +240,9 @@ function run(scriptPath, slackMode) {
 
 const target = process.argv[2] || __dirname + "/google-apps-script.js";
 console.log(JSON.stringify({
-  all:    run(target, "all"),
-  digest: run(target, "digest"),
+  all:      run(target, "all"),
+  digest:   run(target, "digest"),
+  // Same script as a non-admin: every admin-only action must come back Forbidden
+  // and leave no trace in the sheets.
+  nonAdmin: run(target, "all", false),
 }, null, 2));
