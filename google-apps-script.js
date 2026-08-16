@@ -34,6 +34,25 @@ const ALLOWED_UPN_DOMAINS = [];
 
 const SLACK_WEBHOOK_URL = "YOUR_SLACK_WEBHOOK_URL_HERE";
 
+// ─── DEV ESCAPE HATCH ────────────────────────────────────────────────────────
+// Set to a random string to accept "dev:<key>" as a token and skip Entra
+// verification entirely, so the app can be exercised end-to-end before admin
+// consent is granted. It must match LAB_CONFIG.dev_key in index.html.
+//
+// ⚠️  This removes authentication from a web app deployed as "Anyone". The key
+//     is visible in the page source, so treat it as public: use it only on
+//     localhost against a scratch Sheet, and set it back to "" before this
+//     deployment holds real inventory. The frontend shows a red banner while on.
+//
+// DEV_NO_AUTH_EMAIL is the identity assumed while the hatch is open — point it
+// at a real UPN in the admins list to exercise admin-only paths.
+const DEV_NO_AUTH_KEY = "";
+const DEV_NO_AUTH_EMAIL = "zzhan409@jh.edu";
+
+// Seeded into the Settings "admins" list by setupNewLab() on a fresh sheet.
+// Must be the sign-in name (<JHED>@jh.edu), not the @jhu.edu mail alias.
+const INITIAL_ADMIN = "zzhan409@jh.edu";
+
 // ─── SLACK HELPER ────────────────────────────────────────────────────────────
 // slack_mode in Settings tab: "all" | "important" | "digest" | "off"
 // "important" = only deletions, urgent/high orders, overdue returns
@@ -325,6 +344,14 @@ function checkOverduesAndAlert() {
 // Returns { email, name, oid } on success, or null on any failure.
 function verifyToken(token) {
   if (!token || token === "local") return null;
+
+  // Dev escape hatch — inert unless DEV_NO_AUTH_KEY is set. See the warning at
+  // the top of this file before enabling it.
+  if (DEV_NO_AUTH_KEY && String(token) === "dev:" + DEV_NO_AUTH_KEY) {
+    var devEmail = String(DEV_NO_AUTH_EMAIL || "").trim().toLowerCase();
+    return { email: devEmail, name: "Dev Mode (" + devEmail + ")", oid: "dev" };
+  }
+
   try {
     var parts = String(token).split(".");
     if (parts.length !== 3) return null;
@@ -491,6 +518,46 @@ function isMember(email) {
     if (!Array.isArray(members) || members.length === 0) return true;
     return normalizeEmails_(members).indexOf(email) >= 0;
   } catch(e) { return true; }
+}
+
+// ─── FIRST-RUN SETUP ─────────────────────────────────────────────────────────
+// Run once from the Apps Script editor (Run → setupNewLab) against a fresh
+// spreadsheet: creates every tab with the correct headers and seeds Settings.
+// Idempotent — existing tabs and existing settings keys are left untouched, so
+// it is safe to re-run after adding a table.
+function setupNewLab() {
+  var created = [], seeded = [];
+
+  Object.keys(TABLE_HEADERS).forEach(function(name) {
+    if (!getSheet(name)) { getOrCreateSheet(name); created.push(name); }
+  });
+
+  var existing = readSettings();
+  var defaults = {
+    categories: JSON.stringify(["Robots & Motors","Sensors & Vision","Compute & Electronics",
+                                "Wiring & Networking","Tools & Hardware","Consumables & Supplies",
+                                "Safety & Facility","Other"]),
+    admins:     JSON.stringify([String(INITIAL_ADMIN).trim().toLowerCase()]),
+    members:    JSON.stringify([]),   // empty = anyone in the tenant may sign in
+    slack_mode: "all",
+  };
+  Object.keys(defaults).forEach(function(k) {
+    if (existing[k] === undefined) { writeSetting(k, defaults[k]); seeded.push(k); }
+  });
+
+  // A brand-new spreadsheet ships with an empty "Sheet1" that is now dead weight.
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var stray = ss.getSheetByName("Sheet1");
+  if (stray && ss.getSheets().length > 1 && stray.getLastRow() === 0) ss.deleteSheet(stray);
+
+  var msg = "LabTrack setup complete."
+    + "\n  tabs created : " + (created.join(", ") || "(none — all existed)")
+    + "\n  settings set : " + (seeded.join(", ") || "(none — all existed)")
+    + "\n  admins       : " + readSettings()["admins"]
+    + "\n\nNext: Deploy → New deployment → Web app (Execute as: Me, Access: Anyone),"
+    + "\nthen paste the /exec URL into LAB_CONFIG.apps_script_url in index.html.";
+  Logger.log(msg);
+  return msg;
 }
 
 // ─── DELETE LOG ──────────────────────────────────────────────────────────────

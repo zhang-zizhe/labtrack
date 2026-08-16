@@ -3,13 +3,34 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-<title>LabTrack — Lab Inventory</title>
+<title>LabTrack — Alliance AI Lab</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔬</text></svg>"/>
 <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700;900&family=IBM+Plex+Mono:wght@400;500;600&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
 <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
 <script src="https://unpkg.com/@babel/standalone@7.24.7/babel.min.js"></script>
 <script>
+// ─── PER-DEPLOYMENT CONFIG ───────────────────────────────────────────────────
+// Everything that differs between one lab's deployment and another lives in
+// this block. Standing LabTrack up for a new lab means editing here, creating
+// its own backend, and registering its origin as a redirect URI — nothing else
+// in this file is lab-specific.
+window.LAB_CONFIG = {
+  lab_name:    "Alliance AI Lab",
+  institution: "Johns Hopkins University",
+  signin_hint: "@jh.edu",          // shown on the login page; UPN domain, not the mail alias
+
+  // This lab's own Apps Script deployment. Empty = no backend, so the app runs
+  // entirely out of localStorage — which is what you want before the Sheet exists.
+  apps_script_url: "",
+
+  // Set to a random string to skip sign-in and talk to the backend directly;
+  // must match DEV_NO_AUTH_KEY in google-apps-script.js. The value is visible in
+  // page source, so this is for localhost against a scratch Sheet only — never a
+  // deployment holding real inventory. A red banner shows while it is on.
+  dev_key: "",
+};
+
 // Microsoft Entra ID (Azure AD) — Johns Hopkins tenant.
 // Keep in sync with ENTRA_TENANT_ID / ENTRA_CLIENT_ID in google-apps-script.js.
 window.ENTRA_CONFIG = {
@@ -115,9 +136,14 @@ const getTodayParts = () => {
 // ─── CONFIG ──────────────────────────────────────────────────────────────────
 // Only allow http/https URLs — blocks javascript: and data: XSS vectors
 const safeUrl = u => /^https?:\/\//i.test(String(u||"").trim()) ? String(u).trim() : null;
+const LAB = window.LAB_CONFIG || {};
 const APP_CONFIG = {
-  apps_script_url: "https://script.google.com/macros/s/AKfycbzLLvwOatqT3j5XRvUD3_DPoFzip1GVp9o17XY31bXrxi5wCyUkm8OXcS5IC3AysXsVBw/exec",
+  apps_script_url: LAB.apps_script_url || "",
 };
+// Dev mode bypasses sign-in entirely — see the note in LAB_CONFIG.
+const DEV_MODE = !!LAB.dev_key;
+// Tokens that MSAL knows nothing about, so it must not be asked to renew them.
+const isBypassToken = t => t === "local" || String(t||"").indexOf("dev:") === 0;
 
 // ─── MICROSOFT SIGN-IN HELPERS ───────────────────────────────────────────────
 const MSAL_SCOPES = () => (window.ENTRA_CONFIG && window.ENTRA_CONFIG.scopes) || ["openid","profile","email"];
@@ -639,7 +665,7 @@ const CheckoutModal = ({items,onClose,onAdd,preItem="",userName="",userEmail="",
           <Fld label="Return By (date) *"><Inp type="date" value={retDate} onChange={e=>setRetDate(e.target.value)}/></Fld>
           <Fld label="Return By (time)"><input type="time" value={retTime} onChange={e=>setRetTime(e.target.value)} style={timeInputStyle}/></Fld>
           <div style={{gridColumn:"1/-1"}}>
-            <Fld label="Group members (optional)" hint="Others who can also return these items — comma-separated @jh.edu sign-in addresses">
+            <Fld label="Group members (optional)" hint={"Others who can also return these items — comma-separated "+LAB.signin_hint+" sign-in addresses"}>
               <Inp placeholder="jdoe1@jh.edu, asmith3@jh.edu" value={groupEmails} onChange={e=>setGroupEmails(e.target.value)}/>
             </Fld>
           </div>
@@ -1557,7 +1583,7 @@ const LoginPage = ({onSignIn}) => {
       const code = String((e && (e.errorCode || e.message)) || "");
       if (/user_cancelled|popup_window_closed/i.test(code)) setError("");
       else if (/popup/i.test(code)) setError("Your browser blocked the sign-in popup. Allow popups for this site, then try again.");
-      else { console.error("[MSAL] sign-in failed:", e); setError("Sign-in failed — you must use a Johns Hopkins account."); }
+      else { console.error("[MSAL] sign-in failed:", e); setError("Sign-in failed — you must use a " + (LAB.institution || "university") + " account."); }
     } finally { setBusy(false); }
   };
 
@@ -1568,8 +1594,8 @@ const LoginPage = ({onSignIn}) => {
           <Ico n="layers" s={32} col="var(--bg0)"/>
         </div>
         <h1 style={{fontFamily:"'Roboto',sans-serif",fontWeight:900,fontSize:32,margin:"0 0 6px",letterSpacing:"-0.03em"}}>LabTrack</h1>
-        <p style={{color:"var(--sub)",fontSize:15,margin:"0 0 8px",lineHeight:1.5}}>Figueroa Lab Inventory</p>
-        <p style={{color:"var(--dim)",fontSize:13,margin:"0 0 32px"}}>Johns Hopkins University</p>
+        <p style={{color:"var(--sub)",fontSize:15,margin:"0 0 8px",lineHeight:1.5}}>{LAB.lab_name} Inventory</p>
+        <p style={{color:"var(--dim)",fontSize:13,margin:"0 0 32px"}}>{LAB.institution}</p>
         <div>
           <div style={{display:"flex",justifyContent:"center",marginBottom:16}}>
             <button onClick={signIn} disabled={!msalReady||busy}
@@ -1585,8 +1611,23 @@ const LoginPage = ({onSignIn}) => {
             </button>
           </div>
           {!msalReady && !error && <p style={{color:"var(--dim)",fontSize:12}}>Loading sign-in...</p>}
-          <p style={{color:"var(--dim)",fontSize:12}}>Sign in with your Johns Hopkins account (@jh.edu)</p>
+          <p style={{color:"var(--dim)",fontSize:12}}>Sign in with your {LAB.institution} account ({LAB.signin_hint})</p>
           {error && <p style={{color:"var(--red)",fontSize:13,marginTop:12,background:"var(--red-d)",padding:"8px 14px",borderRadius:8,border:"1px solid #ff4d6a30"}}>{error}</p>}
+
+          {/* Offline sandbox. Never touches the backend — every API call is
+              short-circuited on token === "local", and the server rejects that
+              value outright, so this cannot reach real data. */}
+          <div style={{display:"flex",alignItems:"center",gap:10,margin:"26px 0 14px",color:"var(--dim)",fontSize:11}}>
+            <div style={{flex:1,height:1,background:"var(--border)"}}/>OR<div style={{flex:1,height:1,background:"var(--border)"}}/>
+          </div>
+          <button onClick={()=>onSignIn({token:"local",name:"Local Preview",email:"local@preview"})}
+            style={{width:300,padding:"9px 20px",borderRadius:999,background:"transparent",color:"var(--sub)",
+                    border:"1px solid var(--border)",fontFamily:"'Outfit',sans-serif",fontSize:13,fontWeight:500,cursor:"pointer"}}>
+            Preview without signing in
+          </button>
+          <p style={{color:"var(--dim)",fontSize:11,marginTop:8,lineHeight:1.5}}>
+            Explore the interface with sample data stored only in this browser. Nothing is saved to the lab.
+          </p>
         </div>
       </div>
     </div>
@@ -1757,7 +1798,7 @@ function LabInventory(){
         tokenRef.current = u.token || null;
         // The stored token is almost always expired by now; MSAL holds the
         // refresh token. If its cache was cleared, drop back to the login page.
-        if (u.token && u.token !== "local") {
+        if (u.token && !isBypassToken(u.token)) {
           Promise.resolve(window.msalReady).then(app => {
             if (app.getAllAccounts().length === 0) {
               setUser(null); tokenRef.current = null;
@@ -1765,6 +1806,14 @@ function LabInventory(){
             }
           }).catch(()=>{});
         }
+      } else if (DEV_MODE) {
+        // Skip the login page and talk to the backend directly. Only works while
+        // DEV_NO_AUTH_KEY is set to the same value in google-apps-script.js.
+        // Name and email here are display-only placeholders; the backend
+        // substitutes DEV_NO_AUTH_EMAIL as the identity it actually authorizes.
+        const devUser = { token: "dev:" + LAB.dev_key, name: "Dev Mode", email: "dev@localhost" };
+        setUser(devUser);
+        tokenRef.current = devUser.token;
       }
       localStorage.removeItem("labtrack_categories"); // no longer cached; server is source of truth
       const dark = localStorage.getItem("labtrack_dark");
@@ -1931,7 +1980,7 @@ function LabInventory(){
   // simply refreshed on the next API call after it goes stale.
   const getFreshToken = async (interactive) => {
     if (!user) return null;
-    if (user.token === "local") return "local";
+    if (isBypassToken(user.token)) return user.token;
 
     const cur = tokenRef.current;
     const claims = cur ? decodeJwt(cur) : null;
@@ -1990,7 +2039,11 @@ function LabInventory(){
     if (/checkout|return/i.test(action)) { lastModified.current.checkouts = now; lastModified.current.items = now; }
     if (/order/i.test(action)) lastModified.current.orders = now;
     if (/delivery/i.test(action)) lastModified.current.deliveries = now;
-    if (!APP_CONFIG.apps_script_url || user?.token === "local") return Promise.resolve(null);
+    // No backend (local preview, or apps_script_url not set yet): the local state
+    // change IS the write, so report success. Returning null here would read as a
+    // failed request and make optimistic updates roll themselves back.
+    // `offline` marks it so server-only actions can tell the difference.
+    if (!APP_CONFIG.apps_script_url || user?.token === "local") return Promise.resolve({ ok: true, offline: true });
     // Queue requests so rapid edits don't race in GAS
     return new Promise(resolve => {
       apiQueue.current.push({action, payload, resolve});
@@ -2384,6 +2437,16 @@ function LabInventory(){
           <button onClick={handleSignOut} style={{background:"#dc2626",color:"#fff",border:"none",borderRadius:8,padding:"6px 14px",fontSize:12,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap"}}>Sign In Again →</button>
         </div>
       )}
+      {/* Dev mode banner — deliberately loud and not dismissible, because leaving
+          dev_key set on a real deployment means the backend has no authentication. */}
+      {DEV_MODE&&(
+        <div style={{background:"#7f1d1d",borderBottom:"2px solid #ef4444",padding:"9px 24px",display:"flex",alignItems:"center",gap:8}}>
+          <Ico n="alert" s={15} col="#fecaca"/>
+          <span style={{color:"#fecaca",fontSize:12.5,fontWeight:700,letterSpacing:"0.01em"}}>
+            DEV MODE — authentication is disabled. Clear <code style={{fontFamily:"'IBM Plex Mono',monospace"}}>dev_key</code> and <code style={{fontFamily:"'IBM Plex Mono',monospace"}}>DEV_NO_AUTH_KEY</code> before this holds real inventory.
+          </span>
+        </div>
+      )}
       {/* Admin preview mode banner */}
       {previewMode&&(
         <div style={{background:"var(--blue-d)",borderBottom:"1px solid #4da6ff30",padding:"8px 24px",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
@@ -2672,15 +2735,17 @@ function LabInventory(){
                   }}>
                     <Ico n="mail" s={14} col="var(--amber)"/>Copy Text ({selectedOrders.size})
                   </Btn>
-                  <Btn v="ghost" onClick={async()=>{
+                  {/* Writes a formatted tab in the Sheet, so it needs the backend —
+                      hidden without one, like the Digest and Backup buttons. */}
+                  {APP_CONFIG.apps_script_url && <Btn v="ghost" onClick={async()=>{
                     const sel=activeOrders.filter(o=>selectedOrders.has(String(o.id)));
                     addToast("info","Creating sheet summary…");
                     const r=await postAction("generatePurchaseSummary",{orders:sel});
-                    if(r&&r.ok) addToast("success","Purchase summary saved to Google Sheet ✓");
+                    if(r&&r.ok&&!r.offline) addToast("success","Purchase summary saved to Google Sheet ✓");
                     else addToast("error","Could not create sheet — check GAS deployment");
                   }}>
                     <Ico n="layers" s={14}/>Save to Sheet
-                  </Btn>
+                  </Btn>}
                 </>)}
                 <Btn v="ghost" onClick={()=>setModal("delivery")}><Ico n="truck" s={14}/>Log Delivery</Btn>
                 <Btn onClick={()=>{if(editLocked){addToast("error","Editing is locked — click 🔒 in the header to unlock");return;}setModal("order");}}><Ico n="cart" s={14} col="#000"/>New Request</Btn>
