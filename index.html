@@ -32,10 +32,16 @@ window.LAB_CONFIG = {
 };
 
 // Microsoft Entra ID (Azure AD) — Johns Hopkins tenant.
-// Keep in sync with ENTRA_TENANT_ID / ENTRA_CLIENT_ID in google-apps-script.js.
+// Keep client_id in sync with ENTRA_CLIENT_ID in google-apps-script.js: the
+// backend checks that the token was minted for this exact app, so a mismatch
+// makes every request come back Unauthorized.
+//
+// This is the Alliance lab's own registration, separate from the Figueroa one.
+// Sharing a client_id would mean either lab's token satisfied the other's aud
+// check, and Alliance users would see "Figueroa Lab Inventory" when signing in.
 window.ENTRA_CONFIG = {
-  tenant_id: "9fa4f438-b1e6-473b-803f-86f8aedf0dec",
-  client_id: "5ac3d97f-238a-4e23-9bad-793830bd9b21",
+  tenant_id: "9fa4f438-b1e6-473b-803f-86f8aedf0dec",  // Johns Hopkins
+  client_id: "06d4df0f-39e8-4c3a-aa24-8e76a45d1aa3",  // LabTrack — Alliance AI Lab
   scopes: ["openid", "profile", "email"],
 };
 </script>

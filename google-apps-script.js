@@ -24,7 +24,7 @@
 // tenant. The tenant ID below is JHU's; look it up again with:
 //   https://login.microsoftonline.com/jh.edu/v2.0/.well-known/openid-configuration
 const ENTRA_TENANT_ID = "9fa4f438-b1e6-473b-803f-86f8aedf0dec";
-const ENTRA_CLIENT_ID = "5ac3d97f-238a-4e23-9bad-793830bd9b21";  // App registration → Application (client) ID
+const ENTRA_CLIENT_ID = "06d4df0f-39e8-4c3a-aa24-8e76a45d1aa3";  // "LabTrack — Alliance AI Lab" app registration
 
 // Optional extra restriction on the sign-in name's domain. Empty array = any
 // account in the JHU tenant is allowed, which is what "must be a JHU person"

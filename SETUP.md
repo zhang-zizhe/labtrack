@@ -1,10 +1,27 @@
-# LabTrack Setup Guide
+# LabTrack Setup Guide — Alliance AI Lab
 
 ## Quick Start
 
-1. Go to **https://penn-figueroa-lab.github.io/lab-inventory/**
+1. Go to **https://labtrack.zizhe.io/**
 2. Sign in with your **Johns Hopkins** account (`<JHED>@jh.edu`)
 3. Start managing inventory
+
+> **Sign-in does not work yet.** A JHU Entra administrator must grant admin
+> consent once before anyone can sign in — see [Microsoft Entra ID Setup](#microsoft-entra-id-setup-sign-in).
+> Until then, use **Preview without signing in** on the login page to explore the
+> interface, or the [dev escape hatch](#running-without-sign-in) to test against a
+> real Sheet.
+
+## Current status
+
+| | |
+|---|---|
+| App | ✅ deployed at `labtrack.zizhe.io` (temporary home; the intended one is a subdomain of the lab domain, which needs a JHU CS IT DNS request) |
+| Entra app registration | ✅ created — `06d4df0f-39e8-4c3a-aa24-8e76a45d1aa3` |
+| Admin consent | ❌ **not granted** — the one thing blocking real sign-in |
+| Backend | ❌ no Sheet yet; `apps_script_url` is empty, so the app runs out of localStorage |
+| Slack | ❌ webhook not created |
+| Data store | Google Sheet for now, **SharePoint List is the destination** — see [Moving the data](#moving-the-data-to-sharepoint) |
 
 ---
 
@@ -66,14 +83,27 @@ Sign-in is restricted to the Johns Hopkins Entra tenant
 
 | Setting | Value |
 |---|---|
-| Application (client) ID | `5ac3d97f-238a-4e23-9bad-793830bd9b21` |
-| Object ID | `7635392b-d637-4a4f-aff9-709655b57edd` |
-| Display name | LabTrack - Figueroa Lab Inventory |
+| Application (client) ID | `06d4df0f-39e8-4c3a-aa24-8e76a45d1aa3` |
+| Object ID | `131c5c77-3d58-40b5-979f-3773a54776ca` |
+| Service principal ID | `6b25d3e1-700e-42b8-ac1d-79bf68e258c5` |
+| Display name | LabTrack — Alliance AI Lab |
 | Supported account types | Single tenant (`AzureADMyOrg`) |
 | Platform | **Single-page application (SPA)** — *not* Web |
-| Redirect URIs | `https://penn-figueroa-lab.github.io/lab-inventory/`, `http://localhost:8000/` |
+| Redirect URIs | `https://labtrack.zizhe.io/`, `http://localhost:8000/`, `http://localhost:8000/index.html` |
 | API permissions | `openid`, `profile`, `email`, `offline_access` (delegated, Microsoft Graph) |
 | Implicit grant | Off — MSAL uses authorization code flow with PKCE |
+
+This is **separate from the Figueroa lab's registration** (`5ac3d97f-…`), on purpose.
+Sharing one would mean either lab's token passed the other backend's `aud` check,
+and Alliance users would see "Figueroa Lab Inventory" on the Microsoft sign-in screen.
+
+Adding a redirect URI later (a new domain, say) is additive:
+
+```bash
+az rest --method PATCH \
+  --url https://graph.microsoft.com/v1.0/applications/131c5c77-3d58-40b5-979f-3773a54776ca \
+  --body '{"spa":{"redirectUris":["https://labtrack.zizhe.io/","http://localhost:8000/","<new URL>"]}}'
+```
 
 The SPA platform type matters: it enables CORS on the token endpoint and issues
 SPA refresh tokens, which is what keeps sessions alive without third-party cookies.
@@ -103,24 +133,85 @@ restriction does not cover.
 
 Ask a JHU Entra administrator to do **either**:
 
-- Open <https://login.microsoftonline.com/9fa4f438-b1e6-473b-803f-86f8aedf0dec/adminconsent?client_id=5ac3d97f-238a-4e23-9bad-793830bd9b21> and accept, or
-- Entra admin center → Enterprise applications → *LabTrack - Figueroa Lab Inventory* → Permissions → **Grant admin consent**
+- Open <https://login.microsoftonline.com/9fa4f438-b1e6-473b-803f-86f8aedf0dec/adminconsent?client_id=06d4df0f-39e8-4c3a-aa24-8e76a45d1aa3> and accept, or
+- Entra admin center → Enterprise applications → *LabTrack — Alliance AI Lab* → Permissions → **Grant admin consent**
 
 Without this, sign-in stops at *"Approval required — this app requires your admin's approval"*.
+
+What to tell them: no client secret, no application permissions, and no Graph data
+is read beyond the signed-in user's own name and sign-in address. Single tenant, so
+only JHU accounts can use it at all.
+
+Check whether it has landed:
+
+```bash
+az rest --method GET \
+  --url https://graph.microsoft.com/v1.0/servicePrincipals/6b25d3e1-700e-42b8-ac1d-79bf68e258c5/oauth2PermissionGrants
+# "value": []  → not granted yet
+```
+
+> **If you also want the SharePoint scope, add it to the registration *before*
+> asking.** One request to IT covers both; asking later means a second round trip.
+> See [Moving the data](#moving-the-data-to-sharepoint) for which scope to pick.
+
+---
+
+## Running without sign-in
+
+Two ways to use the app while admin consent is pending. They are different tools:
+
+| | Preview | Dev key |
+|---|---|---|
+| Button/switch | "Preview without signing in" on the login page | `LAB_CONFIG.dev_key` + `DEV_NO_AUTH_KEY` |
+| Backend | none — data lives in `localStorage` | the real Sheet |
+| Risk | none | **removes authentication from the deployment** |
+| Use for | reviewing the interface, demos | testing sync, RBAC, Slack, the digest |
+
+**Preview** needs no setup. Nothing reaches the backend: every API call is
+short-circuited client-side, and `verifyToken` rejects the token value `"local"`
+as its first statement, so it cannot touch real data even in principle.
+
+**Dev key** — set the same random string in both files:
+
+```js
+// index.html
+window.LAB_CONFIG = { …, dev_key: "some-random-string" };
+
+// google-apps-script.js
+const DEV_NO_AUTH_KEY  = "some-random-string";
+const DEV_NO_AUTH_EMAIL = "zzhan409@jh.edu";   // identity the backend assumes
+```
+
+> ⚠️ The key is in the page source, and the web app is deployed as "Anyone".
+> Anyone who opens the URL can read the key and then read and write the Sheet.
+> **Use it on `http://localhost:8000/` against a scratch Sheet only**, and deploy
+> the normal auth-gated build to the public URL. A permanent red banner shows
+> while it is on. Set both back to `""` before real inventory goes in.
 
 ---
 
 ## Apps Script Deployment
 
-1. In the Google Sheet: **Extensions → Apps Script**
-2. Paste contents of `google-apps-script.js`
-3. Confirm `ENTRA_CLIENT_ID` matches `index.html`, and replace
+1. Create a **new, empty Google Sheet** — Alliance gets its own, separate from
+   Figueroa's. Everything below assumes a blank one.
+2. **Extensions → Apps Script**, paste the contents of `google-apps-script.js`
+3. **Run → `setupNewLab`.** This creates all eight tabs with the correct headers
+   and seeds Settings (categories, admins, members, slack_mode). It is idempotent,
+   so it is safe to re-run later. Without it you would be building tabs by hand and
+   column order matters.
+4. Confirm `ENTRA_CLIENT_ID` matches `client_id` in `index.html`, and replace
    `"YOUR_SLACK_WEBHOOK_URL_HERE"` with your Slack webhook URL
-4. **Set script timezone**: Project Settings → Time zone → **America/New_York**
-5. **Deploy → New deployment** → Web app → Execute as: Me → Who has access: Anyone
-6. Copy the Web app URL
+5. **Set script timezone**: Project Settings → Time zone → **America/New_York**
+6. **Deploy → New deployment** → Web app → Execute as: Me → Who has access: Anyone
+7. Copy the Web app URL into `LAB_CONFIG.apps_script_url` in `index.html`
 
 > After code updates, always create a **new version** via Deploy → Manage deployments.
+
+> **`Execute as: Me` binds the deployment to one Google account permanently.**
+> JHU has no Google Workspace, so that account is necessarily a personal one.
+> This is acceptable while the Sheet is an interim store — but it is also the
+> reason the data is headed for SharePoint. If the Sheet ends up being kept, move
+> it to a lab-held Google account rather than a graduating student's.
 
 ### Slack Notification Modes
 
@@ -199,31 +290,169 @@ All deletions are logged in the DeleteLog tab with timestamp, details, and who d
 
 ## Frontend Configuration
 
-In `index.html`, update the Entra config in `<head>` and `APP_CONFIG` in the app script:
+Everything lab-specific lives in one block at the top of `index.html`. Standing
+LabTrack up for another lab means editing this and nothing else in the file:
+
 ```js
-window.ENTRA_CONFIG = {
-  tenant_id: "9fa4f438-b1e6-473b-803f-86f8aedf0dec",  // Johns Hopkins
-  client_id: "5ac3d97f-238a-4e23-9bad-793830bd9b21",
-  scopes: ["openid", "profile", "email"],
+window.LAB_CONFIG = {
+  lab_name:        "Alliance AI Lab",
+  institution:     "Johns Hopkins University",
+  signin_hint:     "@jh.edu",
+  apps_script_url: "",   // this lab's own deployment; empty = localStorage only
+  dev_key:         "",   // see "Running without sign-in"
 };
 
-const APP_CONFIG = {
-  apps_script_url: "YOUR_APPS_SCRIPT_WEB_APP_URL",
+window.ENTRA_CONFIG = {
+  tenant_id: "9fa4f438-b1e6-473b-803f-86f8aedf0dec",  // Johns Hopkins
+  client_id: "06d4df0f-39e8-4c3a-aa24-8e76a45d1aa3",  // Alliance AI Lab
+  scopes: ["openid", "profile", "email"],
 };
 ```
 
 MSAL is loaded as an ES module from jsDelivr (`@azure/msal-browser@5.18.0`) because
 Microsoft retired their own CDN and no longer ships a UMD build.
 
-## GitHub Pages Deployment
+MSAL derives its redirect URI from `location.origin + location.pathname`, so the
+app follows whatever host serves it — each origin just has to be registered as a
+SPA redirect URI on the app registration.
+
+## Deployment
+
+GitHub Pages with a custom subdomain:
 
 ```bash
-git add index.html google-apps-script.js SETUP.md
-git commit -m "Deploy LabTrack"
-git push origin main
+git push origin <branch>
 ```
 
-Repo Settings → Pages → Deploy from branch: `main` / `/ (root)`
+1. Repo Settings → Pages → deploy from the branch, `/ (root)`
+2. The `CNAME` file at the repo root sets the custom domain (`labtrack.zizhe.io`)
+3. DNS: `CNAME  labtrack → zhang-zizhe.github.io`
+
+> **Set the DNS record to "DNS only" (grey cloud) in Cloudflare at first.**
+> A proxied record breaks GitHub's HTTP-01 certificate validation and Pages hangs
+> at *"certificate not yet created"*. Once the certificate issues, the proxy can be
+> switched back on with SSL mode = Full.
+
+Moving to a different domain later means: update `CNAME`, add the DNS record, and
+add the new origin to the app registration's SPA redirect URIs (see above) —
+otherwise sign-in fails with `AADSTS50011`.
+
+## Local development
+
+```bash
+python3 -m http.server 8000     # then open http://localhost:8000/index.html
+```
+
+`http://localhost:8000/` is already a registered redirect URI.
+
+### Tests
+
+```bash
+node --check google-apps-script.js       # backend syntax
+node test-storage-layer.js > after.json  # behaviour snapshot — see below
+```
+
+The app is one big inline Babel block, so a JSX syntax error renders a blank page
+with no stack trace. Compiling it with `@babel/standalone` 7.24.7 before deploying
+is worth the thirty seconds.
+
+---
+
+## Storage layer
+
+All data access in `google-apps-script.js` goes through ten functions:
+
+```
+readTable   findRow   appendRow   updateRow   deleteRow   clearTable
+readSettings   writeSetting   getSheet   getOrCreateSheet
+```
+
+Everything else in the backend — token verification, RBAC, Slack, the digest,
+audit logging — is storage-agnostic, and the frontend only ever calls
+`API.fetchAll(token)` and `API.post(token, action, payload)`. **Changing where the
+data lives means reimplementing that section and nothing else.**
+
+Two functions deliberately sit outside the layer and are marked `SHEETS-ONLY`,
+because they emit formatted spreadsheets as output rather than storing data:
+`backupSpreadsheet()` and the `generatePurchaseSummary` action. Both are dropped
+rather than ported.
+
+`test-storage-layer.js` stubs the Apps Script globals with an in-memory
+spreadsheet and runs every action, `doGet`, and the digest under both
+`slack_mode=all` and `slack_mode=digest`. It is a differential test — the output
+only means something compared against another run:
+
+```bash
+node test-storage-layer.js > before.json
+#   …swap the storage layer…
+node test-storage-layer.js > after.json
+diff before.json after.json          # must be empty for a pure refactor
+```
+
+## Moving the data to SharePoint
+
+The lab's site is `https://livejohnshopkins.sharepoint.com/sites/AllianceLab`, which
+is in **the same Entra tenant as sign-in** (`9fa4f438-…`) — so one app registration
+and one consent request can cover both. (Note `cs.jhu.edu` resolves to a *different*
+tenant, `63fbd982-…`; it is not involved.)
+
+Use a SharePoint **List**, not an Excel file. Microsoft's own guidance is to avoid
+concurrent writes to the same workbook and to serialize requests per workbook —
+which a multi-user checkout flow violates by design.
+
+### What still needs an administrator
+
+Owning the SharePoint site is *not* the permission that matters here. Three separate
+steps, and the `*.Selected` scopes grant nothing until all three are done:
+
+1. **Consent** the app to `Sites.Selected` or `Lists.SelectedOperations.Selected`
+   — JHU Global Administrator or Cloud Application Administrator
+2. **Bind** the app to the specific site or list via
+   `POST /sites/{siteId}/permissions` with role `write` — needs
+   `Sites.FullControl.All`, i.e. a SharePoint or Global Administrator; a site owner
+   cannot do it
+3. Acquire a token that actually carries the scope
+
+Site ID for step 2:
+
+```
+livejohnshopkins.sharepoint.com,3fcb7469-0cf8-442a-9937-2e9dd83d9623,f5a0656e-bb85-4bdb-a176-ca2ae36097d1
+```
+
+### Which scope
+
+| Scope | GUID | Consent type | Scope of access |
+|---|---|---|---|
+| `Sites.Selected` | `f89c84ef-20d0-4b54-87e9-02e856d66d53` | User | one site collection |
+| `Lists.SelectedOperations.Selected` | `033b51ee-d6fa-4add-b627-ee680c7212b5` | Admin | one list |
+
+Delegated mode is preferable to application mode: the app can never exceed the
+signed-in user's own SharePoint permissions, and there is no client secret to store.
+Note JHU disables self-service consent entirely, so both need an administrator here
+regardless of the "consent type" column.
+
+### The thing to decide first
+
+> **If lab members can see the List in SharePoint, they can edit it there directly.**
+> That makes the app's RBAC — admin-only delete, requester-only order edit,
+> owner-only return — a guard against mistakes rather than a security boundary,
+> no matter what the code does. Making it a real boundary means locking the List so
+> only the app can write, which forces application-mode access, a client secret, and
+> a server to hold it.
+
+Also worth knowing before planning around it: **Power Automate cannot cover the
+scheduled digest and Slack posts on a standard M365 A3/A5 licence** — the HTTP
+connector is premium.
+
+### What the abstraction will not absorb
+
+| | |
+|---|---|
+| **Concurrent ID generation** | `LockService` currently generates sub-IDs inside a lock. SharePoint has no equivalent — this needs optimistic concurrency (ETag + `If-Match` + retry). The one genuinely tricky part |
+| Column order → typed fields | Sheets are positional; Lists are named and typed. The adapter maps between them — and the "wrong column order breaks everything" class of bug disappears |
+| Pagination | `readTable` reads a whole tab; Graph list items page via `@odata.nextLink` |
+| Item images | `<50 KB` base64 in a cell. SharePoint plain-text fields cap at 63,999 characters ≈ 50 KB — fits, but barely. Eventually belongs in a document library |
+| Backup | `backupSpreadsheet()` becomes meaningless; SharePoint has version history and a recycle bin |
 
 ---
 
@@ -252,7 +481,11 @@ Repo Settings → Pages → Deploy from branch: `main` / `/ (root)`
 | "Approval required — this app requires your admin's approval" | Admin consent hasn't been granted yet; see the one-time admin consent step above |
 | Sign-in popup blocked | Allow popups for the site, or switch `loginPopup` → `loginRedirect` in `index.html` |
 | `AADSTS700016` (app not found) | `client_id` is still the placeholder, or the app registration is in another tenant |
-| `AADSTS50011` (redirect mismatch) | Add the exact GitHub Pages URL as a **SPA** redirect URI in the app registration |
+| `AADSTS50011` (redirect mismatch) | Add the exact origin as a **SPA** redirect URI in the app registration — the platform type must be SPA, not Web |
+| Changes appear then vanish; nothing persists | No backend — `apps_script_url` is empty, or you are in Preview mode. Both keep data in `localStorage` only |
+| Red "DEV MODE" banner across the top | `dev_key` is set in `index.html`. Fine on localhost; clear it and `DEV_NO_AUTH_KEY` before deploying |
+| Tabs missing / "column order" errors on a new Sheet | Run `setupNewLab` from the Apps Script editor instead of creating tabs by hand |
+| Pages stuck on "certificate not yet created" | The Cloudflare DNS record is proxied. Set it to DNS only (grey cloud) until the certificate issues |
 | Signed in fine but everything returns "Unauthorized" | `ENTRA_CLIENT_ID` in Apps Script doesn't match `client_id` in `index.html` (the `aud` check fails) |
 | "not authorized to access this lab's system" | Account isn't in the `members` list — remember it must be `@jh.edu`, not `@jhu.edu` |
 | Data not syncing | Check Apps Script URL; redeploy as new version |
