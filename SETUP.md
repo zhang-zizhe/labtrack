@@ -440,6 +440,63 @@ regardless of the "consent type" column.
 > only the app can write, which forces application-mode access, a client secret, and
 > a server to hold it.
 
+#### Why SharePoint permissions don't fix this
+
+The obvious move is to give members read-only access on the List and let the app do
+the writing. **In delegated mode that cannot work**, and it isn't a matter of finding
+the right setting. Microsoft's rule for delegated tokens is that the app's and the
+user's permissions are *intersected* — "the application can never exceed the user's
+permissions":
+
+```
+LabTrack's effective rights  =  what the app was granted  ∩  what the user already has
+```
+
+| Members' rights on the List | Result |
+|---|---|
+| Read | the app cannot write on their behalf — checkout, return and ordering all fail |
+| Contribute | the app can write — but so can they, directly in the SharePoint UI |
+
+There is no delegated configuration that separates "can write through the app" from
+"can write directly".
+
+Hiding the List (`Hidden` / "Hide from browser") is not an answer either: it removes
+the List from the UI without changing any permission, and anyone with the URL still
+reaches it. Obscurity, not a boundary.
+
+#### What list permissions *do* buy
+
+Some of it maps for free. List Settings → Advanced Settings → **Item-level
+Permissions** has exactly two dropdowns:
+
+- Read access — *Read all items* / *Read items that were created by the user*
+- Create and Edit access — *Create and edit all items* / ***Create items and edit
+  items that were created by the user*** / *None*
+
+| LabTrack rule | Enforceable by SharePoint? |
+|---|---|
+| Only the requester may edit their own order | ✅ that second option, exactly |
+| Only admins may delete | ⚠️ partly — members can still delete what they created |
+| Checkout owner + group members may return | ❌ several people writing one record needs per-item permissions, which breaks inheritance and runs into the unique-permission-scope limits |
+| **Only admins may change order status** | ❌ that is column-level permission, which SharePoint does not have |
+
+Holders of Design or Full Control override item-level permissions, which conveniently
+matches "admins are exempt".
+
+The rule that does *not* map is the one that matters most — changing order status is
+the purchase-approval control, and it is what commit `0c070b3` had to fix in the
+Apps Script backend for exactly this reason.
+
+#### Practical recommendation
+
+For a lab of this size, the middle path is probably right: turn on item-level
+permissions to get the requester-only rule for free, keep the rest of the rules in
+the app as mistake-prevention, and rely on SharePoint version history and the recycle
+bin to undo accidents. The threat being defended against is a slip, not an attacker.
+
+Go application-mode only if the PI decides purchase approval has to be a hard
+boundary — and price in the client secret and somewhere to run it.
+
 Also worth knowing before planning around it: **Power Automate cannot cover the
 scheduled digest and Slack posts on a standard M365 A3/A5 licence** — the HTTP
 connector is premium.
