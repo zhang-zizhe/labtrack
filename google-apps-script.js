@@ -40,12 +40,8 @@ const SLACK_WEBHOOK_URL = "YOUR_SLACK_WEBHOOK_URL_HERE";
 // "digest" = queues to SlackQueue tab, sent by daily trigger (sendDailyDigest)
 function getSlackMode() {
   try {
-    var s = getSheet("Settings");
-    if (!s) return "all";
-    var d = s.getDataRange().getValues();
-    for (var i = 1; i < d.length; i++) {
-      if (String(d[i][0]) === "slack_mode") return String(d[i][1]).trim() || "all";
-    }
+    var mode = readSettings()["slack_mode"];
+    if (mode !== undefined) return String(mode).trim() || "all";
   } catch(e) {}
   return "all";
 }
@@ -59,8 +55,10 @@ function sendSlack(emoji, title, details, fields, priority) {
   if (mode === "important" && !isHigh) return;
   if (mode === "digest") {
     // Queue it instead of sending immediately (high-priority still sends now)
-    var queue = getOrCreateSheet("SlackQueue", ["time", "emoji", "title", "details", "fields"]);
-    queue.appendRow([new Date().toISOString(), emoji, title, details || "", JSON.stringify(fields || [])]);
+    appendRow("SlackQueue", {
+      time: new Date().toISOString(), emoji: emoji, title: title,
+      details: details || "", fields: JSON.stringify(fields || []),
+    });
     if (!isHigh) return; // high-priority also sends immediately
   }
   try {
@@ -84,25 +82,16 @@ function sendSlack(emoji, title, details, fields, priority) {
 
 // ─── DIGEST HELPERS ──────────────────────────────────────────────────────────
 function getPendingOrders_() {
-  var sheet = getSheet("Orders");
-  if (!sheet) return [];
-  var data = sheetToJson(sheet);
-  return data.filter(function(o){ return o.status==="Pending"||o.status==="Approved"||o.status==="Ordered"; });
+  return readTable("Orders").filter(function(o){ return o.status==="Pending"||o.status==="Approved"||o.status==="Ordered"; });
 }
 
 function getOverdueCheckouts_() {
-  var sheet = getSheet("Checkouts");
-  if (!sheet) return [];
-  var data = sheetToJson(sheet);
   var today = new Date().toISOString().slice(0,10);
-  return data.filter(function(c){ return c.status==="Active" && c.ret && String(c.ret).slice(0,10) < today; });
+  return readTable("Checkouts").filter(function(c){ return c.status==="Active" && c.ret && String(c.ret).slice(0,10) < today; });
 }
 
 function getLowStockItems_() {
-  var sheet = getSheet("Items");
-  if (!sheet) return [];
-  var data = sheetToJson(sheet);
-  return data.filter(function(i){ return i.qty!==undefined && i.minQty!==undefined && Number(i.minQty) > 0 && Number(i.qty) <= Number(i.minQty); });
+  return readTable("Items").filter(function(i){ return i.qty!==undefined && i.minQty!==undefined && Number(i.minQty) > 0 && Number(i.qty) <= Number(i.minQty); });
 }
 
 // Sort orders so Urgent/High come first
@@ -136,12 +125,7 @@ function sendDailyDigest() {
   var lowStock  = getLowStockItems_();
 
   // Queue (today's activity log)
-  var queue = getSheet("SlackQueue");
-  var queuedRows = [];
-  if (queue) {
-    var qd = queue.getDataRange().getValues();
-    if (qd.length > 1) queuedRows = qd.slice(1);
-  }
+  var queuedRows = readTable("SlackQueue");
 
   var blocks = [
     { type: "header", text: { type: "plain_text", text: "📊 LabTrack Daily Summary — " + dateStr, emoji: true } },
@@ -204,7 +188,7 @@ function sendDailyDigest() {
   if (queuedRows.length > 0) {
     var counts = {};
     queuedRows.forEach(function(r) {
-      var emoji = String(r[1]).trim();
+      var emoji = String(r.emoji).trim();
       counts[emoji] = (counts[emoji] || 0) + 1;
     });
     var countLine = Object.keys(counts).map(function(e){ return e + " ×" + counts[e]; }).join("  ·  ");
@@ -222,10 +206,7 @@ function sendDailyDigest() {
   } catch(e) { console.log("Digest send failed: " + e.message); }
 
   // Clear queue
-  if (queue && queuedRows.length > 0) {
-    var qdata = queue.getDataRange().getValues();
-    if (qdata.length > 1) queue.deleteRows(2, qdata.length - 1);
-  }
+  if (queuedRows.length > 0) clearTable("SlackQueue");
 }
 
 // Admin can trigger manually (via UI button → doPost "sendDigest")
@@ -269,6 +250,9 @@ function createTriggers() {
 // Keeps the most recent BACKUP_KEEP_COUNT copies and trashes the rest.
 // Called automatically every Sunday at 3am (set up via createTriggers()),
 // or manually via the "Backup Now" button in the admin UI.
+// SHEETS-ONLY — does not survive a storage migration. This copies the whole
+// spreadsheet file to Drive; a SharePoint List has version history and a recycle
+// bin instead, so on migration this function is deleted rather than ported.
 function backupSpreadsheet() {
   var BACKUP_KEEP_COUNT = 12; // keep ~3 months of weekly backups
   var FOLDER_NAME = "LabTrack Backups";
@@ -310,21 +294,9 @@ function backupSpreadsheet() {
     files[i].file.setTrashed(true);
   }
 
-  // Record last backup time in Settings sheet
+  // Record last backup time in Settings
   var displayTime = dateStr + " " + pad(now.getHours()) + ":" + pad(now.getMinutes());
-  var settingsSheet = getSheet("Settings");
-  if (settingsSheet) {
-    var sData = settingsSheet.getDataRange().getValues();
-    var found = false;
-    for (var j = 1; j < sData.length; j++) {
-      if (String(sData[j][0]) === "last_backup") {
-        settingsSheet.getRange(j + 1, 2).setValue(displayTime);
-        found = true;
-        break;
-      }
-    }
-    if (!found) settingsSheet.appendRow(["last_backup", displayTime]);
-  }
+  writeSetting("last_backup", displayTime);
 
   sendSlack("💾", "Weekly Backup Complete", null, [
     "*File*\n" + backupName,
@@ -493,18 +465,12 @@ function verifyRs256_(signingInput, sigBytes, nB64u, eB64u) {
 
 // ─── ADMIN CHECK ─────────────────────────────────────────────────────────────
 function isAdmin(email) {
-  var settingsSheet = getSheet("Settings");
-  if (!settingsSheet) return false;
-  var data = settingsSheet.getDataRange().getValues();
-  for (var i = 1; i < data.length; i++) {
-    if (String(data[i][0]) === "admins") {
-      try {
-        var admins = JSON.parse(data[i][1]);
-        return Array.isArray(admins) && normalizeEmails_(admins).indexOf(email) >= 0;
-      } catch(e) { return false; }
-    }
-  }
-  return false;
+  var raw = readSettings()["admins"];
+  if (raw === undefined) return false;
+  try {
+    var admins = JSON.parse(raw);
+    return Array.isArray(admins) && normalizeEmails_(admins).indexOf(email) >= 0;
+  } catch(e) { return false; }
 }
 
 // Entra UPNs are case-insensitive and users type them inconsistently, so the
@@ -518,27 +484,21 @@ function normalizeEmails_(list) {
 // names can access the system. If the key is absent or empty, any account in the
 // JHU tenant is allowed (backward compatible).
 function isMember(email) {
-  var settingsSheet = getSheet("Settings");
-  if (!settingsSheet) return true;
-  var data = settingsSheet.getDataRange().getValues();
-  for (var i = 1; i < data.length; i++) {
-    if (String(data[i][0]) === "members") {
-      try {
-        var members = JSON.parse(data[i][1]);
-        if (!Array.isArray(members) || members.length === 0) return true;
-        return normalizeEmails_(members).indexOf(email) >= 0;
-      } catch(e) { return true; }
-    }
-  }
-  return true; // key not set → allow anyone in the JHU tenant
+  var raw = readSettings()["members"];
+  if (raw === undefined) return true; // key not set → allow anyone in the JHU tenant
+  try {
+    var members = JSON.parse(raw);
+    if (!Array.isArray(members) || members.length === 0) return true;
+    return normalizeEmails_(members).indexOf(email) >= 0;
+  } catch(e) { return true; }
 }
 
 // ─── DELETE LOG ──────────────────────────────────────────────────────────────
 function logDeletion(type, name, details, deletedBy) {
-  var sheet = getOrCreateSheet("DeleteLog", ["date", "type", "name", "details", "deletedBy"]);
-  var now = new Date();
-  var dateStr = now.toISOString().slice(0, 19).replace("T", " ");
-  sheet.appendRow([dateStr, type, name, details, deletedBy]);
+  appendRow("DeleteLog", {
+    date: new Date().toISOString().slice(0, 19).replace("T", " "),
+    type: type, name: name, details: details, deletedBy: deletedBy,
+  });
   sendSlack("🗑️", type + " Deleted: " + name, null, ["*Deleted by*\n" + deletedBy, "*Details*\n" + details], "normal");
 }
 
@@ -546,13 +506,42 @@ function logDeletion(type, name, details, deletedBy) {
 // Logs every significant write action for accountability / troll detection.
 // Columns: date | user | email | action | details
 function logAudit(userName, userEmail, action, details) {
-  var sheet = getOrCreateSheet("AuditLog", ["date", "user", "email", "action", "details"]);
-  var now = new Date();
-  var dateStr = now.toISOString().slice(0, 19).replace("T", " ");
-  sheet.appendRow([dateStr, userName || "", userEmail || "", action, details || ""]);
+  appendRow("AuditLog", {
+    date: new Date().toISOString().slice(0, 19).replace("T", " "),
+    user: userName || "", email: userEmail || "", action: action, details: details || "",
+  });
 }
 
-// ─── HELPERS ──────────────────────────────────────────────────────────────────
+// ─── STORAGE LAYER ────────────────────────────────────────────────────────────
+// The only code that knows the data lives in a Google Sheet. Everything else —
+// auth, RBAC, Slack, digest, audit logging, and every action handler in
+// doGet/doPost — is storage-agnostic and goes through the functions here.
+//
+// To move the data elsewhere (SharePoint Lists via Graph, a real database, …),
+// reimplement this section and nothing else.
+//
+// Two things deliberately sit OUTSIDE this layer because they are not storage at
+// all — they emit formatted spreadsheets as output artifacts, and have no
+// equivalent after a migration. Both are marked SHEETS-ONLY:
+//   · backupSpreadsheet()                    → superseded by the target store's own versioning
+//   · doPost action "generatePurchaseSummary" → would become a generated file/export
+//
+// `match` throughout is either an id — compared leniently via idsMatch, because
+// Sheets happily turns "007" into the number 7 — or a predicate over the row object.
+
+// Canonical column order. Sheets are positional, so this is authoritative for
+// writes. A typed store would use it only as the field list.
+const TABLE_HEADERS = {
+  Items:      ["id","name","cat","qty","unit","loc","minQty","img","desc","status","usedBy","serial","displayId","shared","consumable"],
+  Deliveries: ["id","item","qty","unit","from","receivedBy","date","tracking","status"],
+  Checkouts:  ["id","itemId","item","user","out","ret","status","checkedOutByEmail","groupEmails"],
+  Orders:     ["id","store","item","link","qty","unit","price","cat","requestedBy","reason","urgency","date","status","requestedByEmail"],
+  Settings:   ["key","value"],
+  DeleteLog:  ["date","type","name","details","deletedBy"],
+  AuditLog:   ["date","user","email","action","details"],
+  SlackQueue: ["time","emoji","title","details","fields"],
+};
+
 function getSheet(name) {
   return SpreadsheetApp.getActiveSpreadsheet().getSheetByName(name);
 }
@@ -562,8 +551,9 @@ function getOrCreateSheet(name, headers) {
   var sheet = ss.getSheetByName(name);
   if (!sheet) {
     sheet = ss.insertSheet(name);
-    if (headers && headers.length > 0) {
-      sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+    var h = headers || TABLE_HEADERS[name];
+    if (h && h.length > 0) {
+      sheet.getRange(1, 1, 1, h.length).setValues([h]);
     }
   }
   return sheet;
@@ -614,19 +604,103 @@ function sheetToJson(sheet) {
   });
 }
 
-function appendRow(sheetName, obj, headers) {
-  const sheet = getSheet(sheetName);
-  const row = headers.map(h => {
-    const val = obj[h];
-    if (h === "usedBy" && Array.isArray(val)) return JSON.stringify(val);
-    return val !== undefined ? val : "";
-  });
-  sheet.appendRow(row);
-  const lastRow = sheet.getLastRow();
-  const idCol = headers.indexOf("id");
-  if (idCol >= 0) {
-    sheet.getRange(lastRow, idCol + 1).setNumberFormat("@");
+// Read every row of a table as plain objects.
+function readTable(name) {
+  return sheetToJson(getSheet(name));
+}
+
+// Locate one row, keeping the sheet handle and row number alongside the parsed
+// object. Private: only the writers below use the positional part.
+function locateRow_(name, match) {
+  var sheet = getSheet(name);
+  if (!sheet) return null;
+  var data = sheet.getDataRange().getValues();
+  if (data.length < 2) return null;
+  var headers = data[0];
+  var idCol = headers.indexOf("id");
+  for (var i = 1; i < data.length; i++) {
+    var obj = {};
+    for (var c = 0; c < headers.length; c++) obj[headers[c]] = data[i][c];
+    var hit = (typeof match === "function")
+      ? match(obj)
+      : (idCol >= 0 && idsMatch(data[i][idCol], match));
+    if (hit) return { sheet: sheet, headers: headers, rowNum: i + 1, raw: data[i], obj: obj };
   }
+  return null;
+}
+
+// Find one row, or null. The result is a snapshot — mutating it does nothing.
+function findRow(name, match) {
+  var hit = locateRow_(name, match);
+  return hit ? hit.obj : null;
+}
+
+// Sheets cells hold scalars only, so arrays are serialized on the way in.
+function serializeCell_(header, val) {
+  if (header === "usedBy" && Array.isArray(val)) return JSON.stringify(val);
+  return (val === undefined || val === null) ? "" : val;
+}
+
+function appendRow(name, obj) {
+  var sheet = getOrCreateSheet(name);
+  var headers = TABLE_HEADERS[name] || sheet.getDataRange().getValues()[0];
+  sheet.appendRow(headers.map(function(h) { return serializeCell_(h, obj[h]); }));
+  // Keep ids textual — Sheets would otherwise render "0012" as 12 and break lookups.
+  var idCol = headers.indexOf("id");
+  if (idCol >= 0) sheet.getRange(sheet.getLastRow(), idCol + 1).setNumberFormat("@");
+}
+
+// Patch the named fields of one row, leaving every other column untouched (rows
+// written by an older schema keep their extra columns). Returns the row as it was
+// BEFORE the update, or null if no row matched.
+function updateRow(name, match, patch) {
+  var hit = locateRow_(name, match);
+  if (!hit) return null;
+  var row = hit.raw.slice();
+  Object.keys(patch).forEach(function(f) {
+    var col = hit.headers.indexOf(f);
+    if (col >= 0 && patch[f] !== undefined) row[col] = serializeCell_(f, patch[f]);
+  });
+  hit.sheet.getRange(hit.rowNum, 1, 1, row.length).setValues([row]);
+  return hit.obj;
+}
+
+// Returns the deleted row, or null — every caller logs what it removed.
+function deleteRow(name, match) {
+  var hit = locateRow_(name, match);
+  if (!hit) return null;
+  hit.sheet.deleteRow(hit.rowNum);
+  return hit.obj;
+}
+
+// Drop every row but the header.
+function clearTable(name) {
+  var sheet = getSheet(name);
+  if (!sheet) return;
+  var n = sheet.getLastRow();
+  if (n > 1) sheet.deleteRows(2, n - 1);
+}
+
+// Settings is key/value rather than a record table, so it gets its own pair.
+function readSettings() {
+  var out = {};
+  var sheet = getSheet("Settings");
+  if (!sheet) return out;
+  var data = sheet.getDataRange().getValues();
+  for (var i = 1; i < data.length; i++) out[String(data[i][0])] = data[i][1];
+  return out;
+}
+
+function writeSetting(key, value) {
+  var sheet = getOrCreateSheet("Settings");
+  var data = sheet.getDataRange().getValues();
+  for (var i = 1; i < data.length; i++) {
+    if (String(data[i][0]) === String(key)) {
+      sheet.getRange(i + 1, 2).setValue(value);
+      return;
+    }
+  }
+  sheet.appendRow([key, value]);
 }
 
 function jsonResponse(data) {
@@ -656,21 +730,12 @@ function doGet(e) {
       return jsonResponse({ error: "NotMember", detail: "Your account is not authorized to access this lab's system. Contact a lab admin." });
     }
 
-    var settings = {};
-    var settingsSheet = getSheet("Settings");
-    if (settingsSheet) {
-      var sData = settingsSheet.getDataRange().getValues();
-      for (var i = 1; i < sData.length; i++) {
-        settings[String(sData[i][0])] = sData[i][1];
-      }
-    }
-
     return jsonResponse({
-      items: sheetToJson(getSheet("Items")),
-      deliveries: sheetToJson(getSheet("Deliveries")),
-      checkouts: sheetToJson(getSheet("Checkouts")),
-      orders: sheetToJson(getSheet("Orders")),
-      settings: settings,
+      items: readTable("Items"),
+      deliveries: readTable("Deliveries"),
+      checkouts: readTable("Checkouts"),
+      orders: readTable("Orders"),
+      settings: readSettings(),
       userRole: isAdmin(user.email) ? "admin" : "member",
     });
   } catch (err) {
@@ -702,7 +767,7 @@ function doPost(e) {
     try {
       const it = body.item;
       // Always generate displayId server-side (inside the lock) to prevent collisions.
-      const allItems = sheetToJson(getSheet("Items"));
+      const allItems = readTable("Items");
       const isSubId = /^.+-\d{3}$/.test(String(it.displayId||""));
       if (!isSubId) {
         // Regular item: global sequential 6-digit counter across all prefixes.
@@ -726,9 +791,7 @@ function doPost(e) {
         );
         it.displayId = baseId + "-" + String(maxSuffix + 1).padStart(3, "0");
       }
-      appendRow("Items", it, [
-        "id", "name", "cat", "qty", "unit", "loc", "minQty", "img", "desc", "status", "usedBy", "serial", "displayId", "shared", "consumable"
-      ]);
+      appendRow("Items", it);
       sendSlack("📦", "New Item Added: " + it.name, null, ["*Category*\n" + (it.cat||"—"), "*Qty*\n" + (it.qty||0) + " " + (it.unit||""), "*Location*\n" + (it.loc||"—"), "*Added by*\n" + userName]);
       logAudit(userName, userEmail, "AddItem", it.name + " | qty:" + (it.qty||0) + " " + (it.unit||"") + " | cat:" + (it.cat||"") + " | id:" + (it.displayId||""));
       return jsonResponse({ ok: true, displayId: it.displayId });
@@ -740,26 +803,15 @@ function doPost(e) {
   // ── Update Item ───────────────────────────────────────────────────────────
   if (action === "updateItem") {
     const it = body.item;
-    const sheet = getSheet("Items");
-    const data = sheet.getDataRange().getValues();
-    const headers = data[0];
-    const idCol = headers.indexOf("id");
     const fields = ["name", "cat", "qty", "unit", "loc", "minQty", "img", "desc", "status", "serial", "displayId", "shared", "consumable"];
+    const patch = {};
+    fields.forEach(f => { if (it[f] !== undefined) patch[f] = it[f]; });
 
-    for (let i = 1; i < data.length; i++) {
-      if (idsMatch(data[i][idCol], it.id)) {
-        // Batch update: build full row and write once instead of cell-by-cell
-        var row = data[i].slice();
-        fields.forEach(f => {
-          const col = headers.indexOf(f);
-          if (col >= 0 && it[f] !== undefined) row[col] = it[f];
-        });
-        sheet.getRange(i + 1, 1, 1, row.length).setValues([row]);
-        logAudit(userName, userEmail, "UpdateItem", (it.name||"") + " | id:" + (it.displayId||it.id||""));
-        return jsonResponse({ ok: true });
-      }
+    if (!updateRow("Items", it.id, patch)) {
+      return jsonResponse({ error: "Item not found", detail: "No item with id " + it.id });
     }
-    return jsonResponse({ error: "Item not found", detail: "No item with id " + it.id });
+    logAudit(userName, userEmail, "UpdateItem", (it.name||"") + " | id:" + (it.displayId||it.id||""));
+    return jsonResponse({ ok: true });
   }
 
   // ── Delete Item (admin only) ──────────────────────────────────────────────
@@ -768,33 +820,23 @@ function doPost(e) {
       return jsonResponse({ error: "Forbidden", detail: "Only admins can delete items" });
     }
     const itemId = body.itemId;
-    const sheet = getSheet("Items");
-    const data = sheet.getDataRange().getValues();
-    const headers = data[0];
-    const idCol = headers.indexOf("id");
-
-    for (let i = 1; i < data.length; i++) {
-      if (idsMatch(data[i][idCol], itemId)) {
-        // Build details string from the row
-        var rowObj = {};
-        headers.forEach(function(h, ci) { rowObj[h] = data[i][ci]; });
-        var itemName = rowObj.name || "Unknown";
-        var details = "cat:" + (rowObj.cat||"") + " qty:" + (rowObj.qty||"") + " loc:" + (rowObj.loc||"") + " serial:" + (rowObj.serial||"");
-        logDeletion("Item", itemName, details, userName);
-        logAudit(userName, userEmail, "DeleteItem", itemName + " | " + details);
-        sheet.deleteRow(i + 1);
-        return jsonResponse({ ok: true });
-      }
+    const row = findRow("Items", itemId);
+    if (!row) {
+      return jsonResponse({ error: "Item not found", detail: "No item with id " + itemId });
     }
-    return jsonResponse({ error: "Item not found", detail: "No item with id " + itemId });
+    // Log before destroying, so a failure here can't lose the audit trail.
+    var itemName = row.name || "Unknown";
+    var details = "cat:" + (row.cat||"") + " qty:" + (row.qty||"") + " loc:" + (row.loc||"") + " serial:" + (row.serial||"");
+    logDeletion("Item", itemName, details, userName);
+    logAudit(userName, userEmail, "DeleteItem", itemName + " | " + details);
+    deleteRow("Items", itemId);
+    return jsonResponse({ ok: true });
   }
 
   // ── Add Delivery ──────────────────────────────────────────────────────────
   if (action === "addDelivery") {
     const d = body.delivery;
-    appendRow("Deliveries", d, [
-      "id", "item", "qty", "unit", "from", "receivedBy", "date", "tracking", "status"
-    ]);
+    appendRow("Deliveries", d);
     sendSlack("🚚", "Delivery Received: " + d.item, null, ["*Qty*\n" + d.qty + " " + d.unit, "*Supplier*\n" + (d.from||"—"), "*Received by*\n" + (d.receivedBy||userName), "*Tracking*\n" + (d.tracking||"—")]);
     logAudit(userName, userEmail, "AddDelivery", d.item + " × " + d.qty + " " + (d.unit||"") + " from " + (d.from||"—"));
     return jsonResponse({ ok: true });
@@ -803,9 +845,7 @@ function doPost(e) {
   // ── Add Checkout ──────────────────────────────────────────────────────────
   if (action === "addCheckout") {
     const c = body.checkout;
-    appendRow("Checkouts", c, [
-      "id", "itemId", "item", "user", "out", "ret", "status", "checkedOutByEmail", "groupEmails"
-    ]);
+    appendRow("Checkouts", c);
     updateItemStatus(c.item, "In Use", c.user, "add");
     sendSlack("🔑", "Item Checked Out: " + c.item, null, ["*Person*\n" + c.user, "*Date*\n" + (c.out||"—"), "*Return by*\n" + (c.ret||"—")]);
     logAudit(userName, userEmail, "Checkout", c.item + " → " + c.user + " | return by:" + (c.ret||"—"));
@@ -815,37 +855,22 @@ function doPost(e) {
   // ── Return Item ───────────────────────────────────────────────────────────
   if (action === "returnItem") {
     const coId = body.checkoutId;
-    const sheet = getSheet("Checkouts");
-    const data = sheet.getDataRange().getValues();
-    const headers = data[0];
-    const idCol = headers.indexOf("id");
-    const statusCol = headers.indexOf("status");
-    const retCol = headers.indexOf("ret");
-    const itemCol = headers.indexOf("item");
-    const userCol = headers.indexOf("user");
-
-    for (let i = 1; i < data.length; i++) {
-      if (idsMatch(data[i][idCol], coId)) {
-        const coEmailCol = headers.indexOf("checkedOutByEmail");
-        const groupEmailsCol = headers.indexOf("groupEmails");
-        const coEmail = coEmailCol >= 0 ? String(data[i][coEmailCol] || "").trim().toLowerCase() : "";
-        const groupEmailsStr = groupEmailsCol >= 0 ? String(data[i][groupEmailsCol] || "") : "";
-        const groupList = groupEmailsStr.split(",").map(e => e.trim().toLowerCase()).filter(Boolean);
-        if (!admin && coEmail && userEmail !== coEmail && !groupList.includes(userEmail)) {
-          return jsonResponse({ error: "Forbidden", detail: "Only the person who checked out this item, group members, or an admin can return it." });
-        }
-        const now = new Date();
-        const nowStr = now.getFullYear()+"-"+String(now.getMonth()+1).padStart(2,"0")+"-"+String(now.getDate()).padStart(2,"0")
-                      +" "+String(now.getHours()).padStart(2,"0")+":"+String(now.getMinutes()).padStart(2,"0");
-        if (retCol >= 0) sheet.getRange(i + 1, retCol + 1).setValue(nowStr);
-        sheet.getRange(i + 1, statusCol + 1).setValue("Returned");
-        const itemName = data[i][itemCol];
-        const returnedUser = data[i][userCol];
-        updateItemStatus(itemName, "Available", returnedUser, "remove");
-        sendSlack("✅", "Item Returned: " + itemName, null, ["*Returned by*\n" + userName]);
-        logAudit(userName, userEmail, "Return", itemName + " | originally checked out by:" + returnedUser);
-        break;
+    const co = findRow("Checkouts", coId);
+    if (co) {
+      // Legacy rows written before these columns existed have no owner recorded,
+      // and stay returnable by anyone.
+      const coEmail = String(co.checkedOutByEmail || "").trim().toLowerCase();
+      const groupList = String(co.groupEmails || "").split(",").map(e => e.trim().toLowerCase()).filter(Boolean);
+      if (!admin && coEmail && userEmail !== coEmail && !groupList.includes(userEmail)) {
+        return jsonResponse({ error: "Forbidden", detail: "Only the person who checked out this item, group members, or an admin can return it." });
       }
+      const now = new Date();
+      const nowStr = now.getFullYear()+"-"+String(now.getMonth()+1).padStart(2,"0")+"-"+String(now.getDate()).padStart(2,"0")
+                    +" "+String(now.getHours()).padStart(2,"0")+":"+String(now.getMinutes()).padStart(2,"0");
+      updateRow("Checkouts", coId, { ret: nowStr, status: "Returned" });
+      updateItemStatus(co.item, "Available", co.user, "remove");
+      sendSlack("✅", "Item Returned: " + co.item, null, ["*Returned by*\n" + userName]);
+      logAudit(userName, userEmail, "Return", co.item + " | originally checked out by:" + co.user);
     }
     return jsonResponse({ ok: true });
   }
@@ -853,9 +878,7 @@ function doPost(e) {
   // ── Add Order ─────────────────────────────────────────────────────────────
   if (action === "addOrder") {
     const o = body.order;
-    appendRow("Orders", o, [
-      "id", "store", "item", "link", "qty", "unit", "price", "cat", "requestedBy", "reason", "urgency", "date", "status", "requestedByEmail"
-    ]);
+    appendRow("Orders", o);
     var linkText = o.link ? " | <" + o.link + "|Purchase Link>" : "";
     sendSlack("🛒", "New Order Request: " + o.item,
       "*Store:* " + (o.store||"—") + linkText,
@@ -868,26 +891,20 @@ function doPost(e) {
   // ── Update Order ──────────────────────────────────────────────────────────
   if (action === "updateOrder") {
     const o = body.order;
-    const sheet = getSheet("Orders");
-    const data = sheet.getDataRange().getValues();
-    const headers = data[0];
-    const idCol = headers.indexOf("id");
-    const fields = ["store","item","link","qty","unit","price","cat","requestedBy","reason","urgency","date","status"];
-    for (let i = 1; i < data.length; i++) {
-      if (idsMatch(data[i][idCol], o.id)) {
-        const reqEmailCol = headers.indexOf("requestedByEmail");
-        const reqEmail = reqEmailCol >= 0 ? String(data[i][reqEmailCol] || "").trim().toLowerCase() : "";
-        if (!admin && reqEmail && userEmail !== reqEmail) {
-          return jsonResponse({ error: "Forbidden", detail: "Only the person who submitted this order or an admin can edit it." });
-        }
-        var row = data[i].slice();
-        fields.forEach(f => { const col = headers.indexOf(f); if (col >= 0 && o[f] !== undefined) row[col] = o[f]; });
-        sheet.getRange(i + 1, 1, 1, row.length).setValues([row]);
-        logAudit(userName, userEmail, "UpdateOrder", (o.item||"") + " | store:" + (o.store||"—"));
-        return jsonResponse({ ok: true });
-      }
+    const existing = findRow("Orders", o.id);
+    if (!existing) return jsonResponse({ error: "Order not found" });
+
+    // Legacy rows without requestedByEmail are not restricted.
+    const reqEmail = String(existing.requestedByEmail || "").trim().toLowerCase();
+    if (!admin && reqEmail && userEmail !== reqEmail) {
+      return jsonResponse({ error: "Forbidden", detail: "Only the person who submitted this order or an admin can edit it." });
     }
-    return jsonResponse({ error: "Order not found" });
+    const fields = ["store","item","link","qty","unit","price","cat","requestedBy","reason","urgency","date","status"];
+    const patch = {};
+    fields.forEach(f => { if (o[f] !== undefined) patch[f] = o[f]; });
+    updateRow("Orders", o.id, patch);
+    logAudit(userName, userEmail, "UpdateOrder", (o.item||"") + " | store:" + (o.store||"—"));
+    return jsonResponse({ ok: true });
   }
 
   // ── Send Digest (admin only) ───────────────────────────────────────────────
@@ -903,23 +920,14 @@ function doPost(e) {
   if (action === "updateOrderStatus") {
     const orderId = body.orderId;
     const newStatus = body.status;
-    const sheet = getSheet("Orders");
-    const data = sheet.getDataRange().getValues();
-    const headers = data[0];
-    const idCol = headers.indexOf("id");
-    const statusCol = headers.indexOf("status");
-    const itemCol = headers.indexOf("item");
-
-    for (let i = 1; i < data.length; i++) {
-      if (idsMatch(data[i][idCol], orderId)) {
-        sheet.getRange(i + 1, statusCol + 1).setValue(newStatus);
-        var orderItem = data[i][itemCol] || "";
-        sendSlack("📋", "Order Status Updated: " + orderItem, null, ["*New Status*\n" + newStatus, "*Updated by*\n" + userName]);
-        logAudit(userName, userEmail, "OrderStatus", orderItem + " → " + newStatus);
-        return jsonResponse({ ok: true });
-      }
+    const prev = updateRow("Orders", orderId, { status: newStatus });
+    if (!prev) {
+      return jsonResponse({ error: "Order not found", detail: "No order with id " + orderId });
     }
-    return jsonResponse({ error: "Order not found", detail: "No order with id " + orderId });
+    var orderItem = prev.item || "";
+    sendSlack("📋", "Order Status Updated: " + orderItem, null, ["*New Status*\n" + newStatus, "*Updated by*\n" + userName]);
+    logAudit(userName, userEmail, "OrderStatus", orderItem + " → " + newStatus);
+    return jsonResponse({ ok: true });
   }
 
   // ── Delete Order (admin only) ─────────────────────────────────────────────
@@ -928,22 +936,15 @@ function doPost(e) {
       return jsonResponse({ error: "Forbidden", detail: "Only admins can delete orders" });
     }
     const orderId = body.orderId;
-    const sheet = getSheet("Orders");
-    const data = sheet.getDataRange().getValues();
-    const headers = data[0];
-    const idCol = headers.indexOf("id");
-    const itemCol = headers.indexOf("item");
-
-    for (let i = 1; i < data.length; i++) {
-      if (idsMatch(data[i][idCol], orderId)) {
-        var orderName = data[i][itemCol] || "Unknown";
-        logDeletion("Order", orderName, "id:" + orderId, userName);
-        logAudit(userName, userEmail, "DeleteOrder", orderName);
-        sheet.deleteRow(i + 1);
-        return jsonResponse({ ok: true });
-      }
+    const order = findRow("Orders", orderId);
+    if (!order) {
+      return jsonResponse({ error: "Order not found", detail: "No order with id " + orderId });
     }
-    return jsonResponse({ error: "Order not found", detail: "No order with id " + orderId });
+    var orderName = order.item || "Unknown";
+    logDeletion("Order", orderName, "id:" + orderId, userName);
+    logAudit(userName, userEmail, "DeleteOrder", orderName);
+    deleteRow("Orders", orderId);
+    return jsonResponse({ ok: true });
   }
 
   // ── Save Settings (admin only) ────────────────────────────────────────────
@@ -951,21 +952,7 @@ function doPost(e) {
     if (!admin) {
       return jsonResponse({ error: "Forbidden", detail: "Only admins can change settings" });
     }
-    const key = body.key;
-    const value = body.value;
-    var sheet = getOrCreateSheet("Settings", ["key", "value"]);
-    var data = sheet.getDataRange().getValues();
-    var found = false;
-    for (var i = 1; i < data.length; i++) {
-      if (String(data[i][0]) === String(key)) {
-        sheet.getRange(i + 1, 2).setValue(value);
-        found = true;
-        break;
-      }
-    }
-    if (!found) {
-      sheet.appendRow([key, value]);
-    }
+    writeSetting(body.key, body.value);
     return jsonResponse({ ok: true });
   }
 
@@ -976,6 +963,9 @@ function doPost(e) {
   }
 
   // ── Generate Purchase Summary sheet ──────────────────────────────────────
+  // SHEETS-ONLY — builds a formatted spreadsheet as an output artifact rather
+  // than storing data, so it deliberately bypasses the storage layer. On a
+  // migration this becomes a generated file/export, not a ported function.
   if (action === "generatePurchaseSummary") {
     var orders = body.orders || [];
     if (orders.length === 0) return jsonResponse({ error: "No orders provided" });
@@ -1073,28 +1063,21 @@ function doPost(e) {
 
 // ─── Update item status & usedBy in Items sheet ──────────────────────────────
 function updateItemStatus(itemName, newStatus, userName, mode) {
-  const sheet = getSheet("Items");
-  const data = sheet.getDataRange().getValues();
-  const headers = data[0];
-  const nameCol = headers.indexOf("name");
-  const statusCol = headers.indexOf("status");
-  const usedByCol = headers.indexOf("usedBy");
+  const byName = function(r) { return r.name === itemName; };
+  const item = findRow("Items", byName);
+  if (!item) return;
 
-  const sharedCol = headers.indexOf("shared");
-  for (let i = 1; i < data.length; i++) {
-    if (data[i][nameCol] === itemName) {
-      var row = data[i].slice();
-      const isShared = sharedCol >= 0 && (data[i][sharedCol] === true || String(data[i][sharedCol]).toLowerCase() === "true");
-      if (!(newStatus === "In Use" && isShared)) row[statusCol] = newStatus;
-      if (usedByCol >= 0) {
-        let usedBy = [];
-        try { usedBy = JSON.parse(data[i][usedByCol]) || []; } catch(e) {}
-        if (mode === "add" && !usedBy.includes(userName)) usedBy.push(userName);
-        else if (mode === "remove") usedBy = usedBy.filter(u => u !== userName);
-        row[usedByCol] = JSON.stringify(usedBy);
-      }
-      sheet.getRange(i + 1, 1, 1, row.length).setValues([row]);
-      break;
-    }
-  }
+  const patch = {};
+  // A shared item stays "Available" while checked out — several people hold it at once.
+  const isShared = item.shared === true || String(item.shared).toLowerCase() === "true";
+  if (!(newStatus === "In Use" && isShared)) patch.status = newStatus;
+
+  let usedBy = [];
+  try { usedBy = JSON.parse(item.usedBy) || []; } catch(e) {}
+  if (!Array.isArray(usedBy)) usedBy = [];
+  if (mode === "add" && !usedBy.includes(userName)) usedBy.push(userName);
+  else if (mode === "remove") usedBy = usedBy.filter(u => u !== userName);
+  patch.usedBy = usedBy;   // serialized on write by the storage layer
+
+  updateRow("Items", byName, patch);
 }
