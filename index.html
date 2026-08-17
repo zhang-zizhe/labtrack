@@ -68,24 +68,65 @@ window.msalReady.catch(e => console.error("[MSAL] init failed:", e));
 </script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
+/* ── JHU palette ─────────────────────────────────────────────────────────────
+   Light is the default. Surfaces, text and semantic hues mirror the lab site's
+   tokens (assets/css/app.scss on jhu-alliancelab.github.io) so LabTrack reads as
+   part of alliance-ai.cs.jhu.edu rather than a separate product.
+
+   Heritage Blue #002D72 is JHU's primary and carries every UI accent here.
+   Text placed on an accent fill uses --on-accent, which flips with the mode —
+   the accent is dark in light mode and light in dark mode.
+
+   The four hues that share the calendar (delivery / checked out / return due /
+   overdue) were validated together rather than picked by eye, all-pairs, per
+   mode. Light on #ffffff: worst CVD ΔE 16.8, normal-vision 21.6, contrast pass
+   except Spirit Blue at 2.44 — which is covered, every chip and the legend
+   carry a text label. Dark on #0f1825: CVD 9.7, normal-vision 16.7, contrast
+   pass; Spirit Blue and gold sit slightly above the dark lightness band
+   (0.71 / 0.69 vs 0.67), a deliberate trade — both discriminability gates pass
+   and the band governs even visual weight, not legibility.
+
+   Green is deliberately NOT one of those four. Green-for-delivery beside
+   red-for-overdue measured ΔE 5.1 under deuteranopia, below the floor of 6:
+   the two lab members most likely to care about an overdue item could not tell
+   the chips apart. Green now only marks "available" / "all clear", where it
+   never sits next to red. */
 :root{
-  --bg0:#07090f; --bg1:#0d1117; --bg2:#141b24; --bg3:#1c2535; --bg4:#222e42;
-  --border:#1e2d42; --border-hi:#2d4060;
-  --text:#e8edf5; --sub:#7a8fa6; --dim:#3d5068;
-  --cyan:#00d4c8; --cyan-d:#00332f; --cyan-m:#009e97;
-  --amber:#f5a623; --amber-d:#3d2900;
-  --red:#ff4d6a; --red-d:#2d0010;
-  --green:#00e676; --green-d:#003322;
-  --blue:#4da6ff; --blue-d:#0a1f3d;
-  --purple:#b47dff; --purple-d:#1a0e2e;
-  --orange:#ff8c42; --orange-d:#2d1800;
+  --bg0:#f4f7fb; --bg1:#ffffff; --bg2:#ebf3fb; --bg3:#dfeaf7; --bg4:#cdd8ea;
+  --border:#cdd8ea; --border-hi:#b0d0f4;
+  --text:#1a2030; --sub:#334155; --dim:#64748b;
+  --on-accent:#ffffff;
+  --cyan:#002d72; --cyan-d:#e6eefa; --cyan-m:#004eb3;   /* Heritage Blue — primary accent */
+  --spirit:#68ace5; --spirit-d:#e6f1fb;                  /* Spirit Blue — delivery */
+  --blue:#004eb3; --blue-d:#e2ecfa;                      /* checked out / in use */
+  --amber:#a8820a; --amber-d:#f8f1d8;                    /* return due — JHU gold, darkened into band */
+  --red:#9a2c2c; --red-d:#f9e9e9;                        /* overdue / danger */
+  --green:#2e7d32; --green-d:#e8f3e9;                    /* available / all clear */
+  --purple:#6a4c93; --purple-d:#efeaf7;
+  --orange:#b5651d; --orange-d:#faeee3;
+}
+/* ── Dark mode — its own steps from the same hue families, not a flip ── */
+html.dark{
+  --bg0:#0b1220; --bg1:#0f1825; --bg2:#16202f; --bg3:#1f2b3d; --bg4:#2a3850;
+  --border:#22314a; --border-hi:#33456a;
+  --text:#e6ecf5; --sub:#9baac0; --dim:#64748b;
+  --on-accent:#0f1825;
+  --cyan:#68ace5; --cyan-d:#122a44; --cyan-m:#4a8fd0;
+  --spirit:#5ba9e8; --spirit-d:#122a44;
+  --blue:#3a6fbe; --blue-d:#101f38;
+  --amber:#be9420; --amber-d:#2b2210;
+  --red:#ce5a5a; --red-d:#2e1414;
+  --green:#4c9e5a; --green-d:#0f2618;
+  --purple:#9c86c4; --purple-d:#1d1830;
+  --orange:#cf8a4e; --orange-d:#2b1c10;
 }
 body{background:var(--bg0);color:var(--text);font-family:'Outfit',sans-serif;margin:0;}
 ::-webkit-scrollbar{width:5px;height:5px;}
 ::-webkit-scrollbar-track{background:var(--bg1);}
 ::-webkit-scrollbar-thumb{background:var(--border-hi);border-radius:3px;}
 select option{background:var(--bg2);}
-input[type=date]::-webkit-calendar-picker-indicator,input[type=time]::-webkit-calendar-picker-indicator{filter:invert(0.5);}
+input[type=date]::-webkit-calendar-picker-indicator,input[type=time]::-webkit-calendar-picker-indicator{filter:none;}
+html.dark input[type=date]::-webkit-calendar-picker-indicator,html.dark input[type=time]::-webkit-calendar-picker-indicator{filter:invert(0.6);}
 
 @keyframes fadeUp{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
 @keyframes fadeIn{from{opacity:0}to{opacity:1}}
@@ -95,7 +136,9 @@ input[type=date]::-webkit-calendar-picker-indicator,input[type=time]::-webkit-ca
 @keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
 
 .card-item{transition:all .2s cubic-bezier(.4,0,.2,1);cursor:pointer;}
-.card-item:hover{transform:translateY(-3px);box-shadow:0 14px 36px rgba(0,0,0,.55),0 0 0 1px rgba(0,212,200,.1);border-color:var(--border-hi)!important;}
+/* Shadow tinted with Heritage Blue, matching --shadow-md on the lab site. */
+.card-item:hover{transform:translateY(-3px);box-shadow:0 8px 26px rgba(0,45,114,.13),0 0 0 1px rgba(104,172,229,.45);border-color:var(--border-hi)!important;}
+html.dark .card-item:hover{box-shadow:0 14px 36px rgba(0,0,0,.55),0 0 0 1px rgba(104,172,229,.18);}
 .row-hover:hover{background:var(--bg3)!important;}
 .ibtn:hover{background:var(--bg3)!important;color:var(--text)!important;}
 .chip-sel{background:var(--cyan-d)!important;color:var(--cyan)!important;border-color:var(--cyan-m)!important;}
@@ -103,22 +146,8 @@ input[type=date]::-webkit-calendar-picker-indicator,input[type=time]::-webkit-ca
 .item-sel-row:hover{background:var(--cyan-d)!important;}
 .overdue-pulse{animation:pulse 2s infinite;}
 .sticky-th{position:sticky;top:0;background:var(--bg2);z-index:1;}
-/* ── Light mode ── */
-html.light{
-  --bg0:#f5f7fa;--bg1:#ffffff;--bg2:#edf2f7;--bg3:#e2e8f0;--bg4:#cbd5e0;
-  --border:#c5d0db;--border-hi:#a0b4c8;
-  --text:#1a202c;--sub:#4a5568;--dim:#94a3b8;
-  --cyan-d:#e6fffd;--amber-d:#fffbeb;--red-d:#fff5f5;
-  --green-d:#f0fff4;--blue-d:#ebf8ff;--purple-d:#faf5ff;--orange-d:#fff5f0;
-}
-html.light body{background:var(--bg0);color:var(--text);}
-html.light ::-webkit-scrollbar-track{background:var(--bg1);}
-html.light ::-webkit-scrollbar-thumb{background:var(--border-hi);}
-html.light select option{background:var(--bg2);}
-html.light input[type=date]::-webkit-calendar-picker-indicator,html.light input[type=time]::-webkit-calendar-picker-indicator{filter:none;}
-html.light .card-item:hover{box-shadow:0 8px 24px rgba(0,0,0,.12),0 0 0 1px rgba(0,212,200,.25);}
-html.light .sticky-th{background:var(--bg2);}
-html.light .row-hover:hover{background:var(--bg3)!important;}
+/* Every rule above reads from the tokens, so switching html.dark is the whole
+   theme switch — there is no second set of mode-specific rules to keep in sync. */
 </style>
 </head>
 <body>
@@ -181,7 +210,10 @@ const userFromAuthResult = (r) => {
 const DEFAULT_CATEGORIES = ["Robots & Motors","Sensors & Vision","Compute & Electronics","Wiring & Networking","Tools & Hardware","Consumables & Supplies","Safety & Facility","Other"];
 const ITEMS_PER_PAGE = 24;
 
-const CAT_PALETTE = ["var(--cyan)","var(--purple)","var(--amber)","var(--green)","var(--blue)","var(--orange)","var(--red)","#e879f9","#67e8f9","var(--sub)"];
+// Category tint. The category name is always rendered as text beside it, so this
+// reinforces identity rather than carrying it — which is what lets it run past the
+// three or four hues a colour-only categorical scale could safely hold.
+const CAT_PALETTE = ["var(--cyan)","var(--purple)","var(--amber)","var(--green)","var(--blue)","var(--orange)","var(--red)","var(--spirit)","var(--cyan-m)","var(--sub)"];
 const getCatAccent = (cat, categories) => {
   const idx = categories.indexOf(cat);
   if (idx < 0) return "var(--sub)";
@@ -190,16 +222,19 @@ const getCatAccent = (cat, categories) => {
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
 const isOverdue = (co) => co.status === "Active" && co.ret && getDatePart(co.ret) < getToday();
+// Borders are mixed from the same token as the text, so they follow the theme
+// instead of being frozen hex+alpha from the old palette.
+const mix = (v,pct) => `color-mix(in srgb, var(${v}) ${pct}%, transparent)`;
 const STATUS_C = {
-  "Available":  {bg:"var(--green-d)", t:"var(--green)",  b:"#00e67628"},
-  "In Use":     {bg:"var(--blue-d)",  t:"var(--blue)",   b:"#4da6ff28"},
-  "Maintenance":{bg:"var(--amber-d)", t:"var(--amber)",  b:"#f5a62328"},
-  "Broken":     {bg:"var(--red-d)",   t:"var(--red)",    b:"#ff4d6a28"},
-  "Low Stock":  {bg:"var(--red-d)",   t:"var(--red)",    b:"#ff4d6a28"},
-  "Logged":     {bg:"var(--green-d)", t:"var(--green)",  b:"#00e67628"},
-  "Active":     {bg:"var(--blue-d)",  t:"var(--blue)",   b:"#4da6ff28"},
+  "Available":  {bg:"var(--green-d)", t:"var(--green)",  b:mix("--green",35)},
+  "In Use":     {bg:"var(--blue-d)",  t:"var(--blue)",   b:mix("--blue",35)},
+  "Maintenance":{bg:"var(--amber-d)", t:"var(--amber)",  b:mix("--amber",35)},
+  "Broken":     {bg:"var(--red-d)",   t:"var(--red)",    b:mix("--red",35)},
+  "Low Stock":  {bg:"var(--red-d)",   t:"var(--red)",    b:mix("--red",35)},
+  "Logged":     {bg:"var(--green-d)", t:"var(--green)",  b:mix("--green",35)},
+  "Active":     {bg:"var(--blue-d)",  t:"var(--blue)",   b:mix("--blue",35)},
   "Returned":   {bg:"var(--bg4)",     t:"var(--sub)",    b:"var(--border)"},
-  "Overdue":    {bg:"var(--red-d)",   t:"var(--red)",    b:"#ff4d6a28"},
+  "Overdue":    {bg:"var(--red-d)",   t:"var(--red)",    b:mix("--red",35)},
 };
 
 // ─── IMAGE COMPRESSION ──────────────────────────────────────────────────────
@@ -303,6 +338,18 @@ const MemberAvatar = ({name,sz=32}) => {
   const initials = name.split(" ").filter(Boolean).map(w=>w[0]).join("").slice(0,2)||"?";
   return <div style={{width:sz,height:sz,borderRadius:"50%",flexShrink:0,background:`hsl(${hue},50%,22%)`,border:`2px solid hsl(${hue},50%,38%)`,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:800,fontSize:sz*.36,color:`hsl(${hue},65%,82%)`,fontFamily:"'Roboto',sans-serif"}}>{initials}</div>;
 };
+// Item thumbnail. With no photo it draws a tile from the tokens instead of
+// fetching one from placehold.co — the old URL baked dark hex into the request,
+// so it stayed dark in light mode, and it was a network dependency for something
+// the page can draw itself.
+const ItemImage = ({src, cat, style}) => (
+  src
+    ? <img src={src} alt={cat||""} style={{objectFit:"cover",display:"block",...style}}/>
+    : <div style={{display:"flex",alignItems:"center",justifyContent:"center",background:"var(--bg2)",
+                   color:"var(--dim)",fontSize:10,fontWeight:700,fontFamily:"'IBM Plex Mono',monospace",
+                   letterSpacing:"0.08em",textTransform:"uppercase",textAlign:"center",padding:"0 12px",
+                   overflow:"hidden",...style}}>No photo</div>
+);
 const Inp = ({style,...p}) => (
   <input style={{width:"100%",background:"var(--bg3)",border:"1px solid var(--border)",color:"var(--text)",borderRadius:8,padding:"9px 12px",fontSize:14,outline:"none",fontFamily:"'Outfit',sans-serif",transition:"border-color .15s",...style}}
     onFocus={e=>e.target.style.borderColor="var(--cyan-m)"}
@@ -321,11 +368,11 @@ const Fld = ({label,hint,children}) => (
 );
 const Btn = ({children,onClick,v="primary",style,disabled,sm}) => {
   const VS={
-    primary:{background:"var(--cyan)",color:"#000",border:"none"},
+    primary:{background:"var(--cyan)",color:"var(--on-accent)",border:"none"},
     ghost:{background:"transparent",color:"var(--sub)",border:"1px solid var(--border)"},
-    danger:{background:"var(--red-d)",color:"var(--red)",border:"1px solid #ff4d6a30"},
-    success:{background:"var(--green-d)",color:"var(--green)",border:"1px solid #00e67630"},
-    amber:{background:"var(--amber-d)",color:"var(--amber)",border:"1px solid #f5a62330"},
+    danger:{background:"var(--red-d)",color:"var(--red)",border:"1px solid color-mix(in srgb, var(--red) 30%, transparent)"},
+    success:{background:"var(--green-d)",color:"var(--green)",border:"1px solid color-mix(in srgb, var(--green) 30%, transparent)"},
+    amber:{background:"var(--amber-d)",color:"var(--amber)",border:"1px solid color-mix(in srgb, var(--amber) 30%, transparent)"},
   };
   return <button disabled={disabled} onClick={onClick} style={{...VS[v],borderRadius:8,padding:sm?"5px 11px":"9px 18px",fontSize:sm?11:14,fontWeight:600,cursor:disabled?"not-allowed":"pointer",opacity:disabled?.4:1,display:"inline-flex",alignItems:"center",gap:6,fontFamily:"'Outfit',sans-serif",transition:"all .15s",whiteSpace:"nowrap",...style}}>{children}</button>;
 };
@@ -355,7 +402,7 @@ const Modal = ({onClose,title,mw=560,children,noPad,dirty=false,saving=false}) =
           <div style={{width:13,height:13,border:"2px solid var(--border)",borderTopColor:"var(--cyan)",borderRadius:"50%",animation:"spin 1s linear infinite",flexShrink:0}}/>
           Saving to Google Sheets — please wait…
         </div>}
-        {!saving&&warnClose&&<div style={{background:"var(--amber-d)",borderBottom:"1px solid #f5a62340",padding:"8px 20px",display:"flex",alignItems:"center",gap:8,fontSize:12,color:"var(--amber)",flexShrink:0}}>⚠ Click outside again to discard unsaved changes</div>}
+        {!saving&&warnClose&&<div style={{background:"var(--amber-d)",borderBottom:"1px solid color-mix(in srgb, var(--amber) 38%, transparent)",padding:"8px 20px",display:"flex",alignItems:"center",gap:8,fontSize:12,color:"var(--amber)",flexShrink:0}}>⚠ Click outside again to discard unsaved changes</div>}
         {title!==false&&(
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"20px 24px 16px",borderBottom:"1px solid var(--border)",flexShrink:0}}>
             <h2 style={{margin:0,color:"var(--text)",fontSize:17,fontFamily:"'Roboto',sans-serif",fontWeight:700}}>{title}</h2>
@@ -537,11 +584,11 @@ const ManageCategoriesModal = ({categories, onSave, onClose}) => {
       </div>
       <div style={{display:"flex",gap:8,marginBottom:16}}>
         <Inp placeholder="New category name..." value={newCat} onChange={e=>setNewCat(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")addCat();}} style={{flex:1}}/>
-        <Btn sm onClick={addCat} disabled={!newCat.trim()}><Ico n="plus" s={12} col="#000"/>Add</Btn>
+        <Btn sm onClick={addCat} disabled={!newCat.trim()}><Ico n="plus" s={12} col="var(--on-accent)"/>Add</Btn>
       </div>
       <div style={{borderTop:"1px solid var(--border)",paddingTop:14,display:"flex",gap:10,justifyContent:"flex-end"}}>
         <Btn v="ghost" onClick={onClose}>Cancel</Btn>
-        <Btn onClick={saveAll}><Ico n="check" s={14} col="#000"/>Save</Btn>
+        <Btn onClick={saveAll}><Ico n="check" s={14} col="var(--on-accent)"/>Save</Btn>
       </div>
     </Modal>
   );
@@ -698,7 +745,7 @@ const CheckoutModal = ({items,onClose,onAdd,preItem="",userName="",userEmail="",
         </div>
         <div style={{borderTop:"1px solid var(--border)",paddingTop:14,display:"flex",gap:10,justifyContent:"flex-end"}}>
           <Btn v="ghost" onClick={onClose}>Cancel</Btn>
-          <Btn onClick={submit} disabled={!canSubmit}><Ico n="check" s={14} col="#000"/>Confirm Checkout{valid.length>1?` (${valid.length} items)`:""}</Btn>
+          <Btn onClick={submit} disabled={!canSubmit}><Ico n="check" s={14} col="var(--on-accent)"/>Confirm Checkout{valid.length>1?` (${valid.length} items)`:""}</Btn>
         </div>
       </div>
     </Modal>
@@ -722,7 +769,7 @@ const DeliveryModal = ({onClose,onAdd,userName=""}) => {
       </div>
       <div style={{borderTop:"1px solid var(--border)",marginTop:4,paddingTop:16,display:"flex",gap:10,justifyContent:"flex-end"}}>
         <Btn v="ghost" onClick={onClose}>Cancel</Btn>
-        <Btn onClick={()=>{if(f.item&&f.qty){onAdd({id:uid(),...f,status:"Logged"});onClose();}}} disabled={!f.item||!f.qty}><Ico n="check" s={14} col="#000"/>Log Delivery</Btn>
+        <Btn onClick={()=>{if(f.item&&f.qty){onAdd({id:uid(),...f,status:"Logged"});onClose();}}} disabled={!f.item||!f.qty}><Ico n="check" s={14} col="var(--on-accent)"/>Log Delivery</Btn>
       </div>
     </Modal>
   );
@@ -779,11 +826,11 @@ const AddItemModal = ({onClose,onAdd,categories,allItems,onShowLabel}) => {
         <div style={{gridColumn:"1/-1"}}>
           <Fld label="Item Name"><Inp placeholder="e.g. UR5 Robot Arm" value={f.name} onChange={s("name")}/></Fld>
           {dupCheck.length>0&&(
-            <div style={{marginTop:6,background:"var(--amber-d)",border:"1px solid #f5a62340",borderRadius:7,padding:"8px 12px",fontSize:12,color:"var(--amber)"}}>
+            <div style={{marginTop:6,background:"var(--amber-d)",border:"1px solid color-mix(in srgb, var(--amber) 38%, transparent)",borderRadius:7,padding:"8px 12px",fontSize:12,color:"var(--amber)"}}>
               <strong>Possible duplicate{dupCheck.length>1?"s":""} already in inventory:</strong>
               <div style={{marginTop:4,display:"flex",flexWrap:"wrap",gap:6}}>
                 {dupCheck.slice(0,5).map(i=>(
-                  <span key={i.id} style={{background:"rgba(245,166,35,0.12)",border:"1px solid #f5a62330",borderRadius:5,padding:"1px 7px",fontFamily:"'IBM Plex Mono',monospace",fontSize:11}}>
+                  <span key={i.id} style={{background:"rgba(245,166,35,0.12)",border:"1px solid color-mix(in srgb, var(--amber) 30%, transparent)",borderRadius:5,padding:"1px 7px",fontFamily:"'IBM Plex Mono',monospace",fontSize:11}}>
                     {i.name} <span style={{color:"var(--sub)"}}>({i.displayId||"no ID"}, qty {i.qty})</span>
                   </span>
                 ))}
@@ -854,7 +901,7 @@ const AddItemModal = ({onClose,onAdd,categories,allItems,onShowLabel}) => {
       </div>
       <div style={{borderTop:"1px solid var(--border)",marginTop:4,paddingTop:16,display:"flex",gap:10,justifyContent:"flex-end"}}>
         <Btn v="ghost" onClick={onClose}>Cancel</Btn>
-        <Btn onClick={submit} disabled={!f.name||!f.qty||submitting}><Ico n="plus" s={14} col="#000"/>{submitting?"Adding…":(splitUnits&&canSplit?`Create ${n} Items`:"Add Item")}</Btn>
+        <Btn onClick={submit} disabled={!f.name||!f.qty||submitting}><Ico n="plus" s={14} col="var(--on-accent)"/>{submitting?"Adding…":(splitUnits&&canSplit?`Create ${n} Items`:"Add Item")}</Btn>
       </div>
     </Modal>
   );
@@ -905,7 +952,7 @@ const EditItemModal = ({item,onClose,onSave,onDelete,onAdd,categories,isAdmin}) 
                   Creates {n} items: <span style={{fontFamily:"'IBM Plex Mono',monospace"}}>{baseId}-001</span> → <span style={{fontFamily:"'IBM Plex Mono',monospace"}}>{baseId}-{String(n).padStart(3,"0")}</span>. This item becomes <span style={{fontFamily:"'IBM Plex Mono',monospace"}}>{baseId}-001</span> with qty 1.
                 </div>
                 <div style={{display:"flex",gap:8}}>
-                  <Btn sm onClick={handleSplit}><Ico n="check" s={12} col="#000"/>Confirm Split</Btn>
+                  <Btn sm onClick={handleSplit}><Ico n="check" s={12} col="var(--on-accent)"/>Confirm Split</Btn>
                   <Btn v="ghost" sm onClick={()=>setSplitConfirm(false)}>Cancel</Btn>
                 </div>
               </div>
@@ -928,7 +975,7 @@ const EditItemModal = ({item,onClose,onSave,onDelete,onAdd,categories,isAdmin}) 
         </div>
         <div style={{display:"flex",gap:10}}>
           <Btn v="ghost" onClick={onClose}>Cancel</Btn>
-          <Btn onClick={()=>{if(f.name&&f.qty){onSave({...item,...f,qty:+f.qty,minQty:isNaN(+f.minQty)?0:+f.minQty,shared:f.shared,consumable:f.consumable,displayId:f.displayId});onClose();}}} disabled={!f.name||!f.qty}><Ico n="check" s={14} col="#000"/>Save Changes</Btn>
+          <Btn onClick={()=>{if(f.name&&f.qty){onSave({...item,...f,qty:+f.qty,minQty:isNaN(+f.minQty)?0:+f.minQty,shared:f.shared,consumable:f.consumable,displayId:f.displayId});onClose();}}} disabled={!f.name||!f.qty}><Ico n="check" s={14} col="var(--on-accent)"/>Save Changes</Btn>
         </div>
       </div>
     </Modal>
@@ -945,7 +992,7 @@ const PendingItemModal = ({order,allItems,categories,onClose,onConfirm}) => {
   return(
     <Modal onClose={onClose} title="📦 Add Received Item to Inventory" mw={560}>
       <p style={{color:"var(--sub)",fontSize:13,marginBottom:10}}>Order received! Fill in the missing details before it goes into inventory.</p>
-      <div style={{background:"var(--amber-d)",border:"1px solid #f5a62330",borderRadius:8,padding:"9px 12px",marginBottom:14,fontSize:12,color:"var(--amber)"}}>
+      <div style={{background:"var(--amber-d)",border:"1px solid color-mix(in srgb, var(--amber) 30%, transparent)",borderRadius:8,padding:"9px 12px",marginBottom:14,fontSize:12,color:"var(--amber)"}}>
         <strong>Order qty:</strong> {order.qty} {order.unit} — adjust Qty &amp; Unit below to reflect what's actually going into inventory.
         <span style={{color:"var(--sub)",fontStyle:"italic"}}> e.g. ordered 1 box → inventory qty 100, unit pcs</span>
       </div>
@@ -966,7 +1013,7 @@ const PendingItemModal = ({order,allItems,categories,onClose,onConfirm}) => {
       </div>
       <div style={{borderTop:"1px solid var(--border)",marginTop:16,paddingTop:16,display:"flex",gap:10,justifyContent:"flex-end"}}>
         <Btn v="ghost" onClick={onClose}>Skip (add later)</Btn>
-        <Btn onClick={()=>{if(f.name){onConfirm({...f,displayId});onClose();}}} disabled={!f.name}><Ico n="plus" s={14} col="#000"/>Add to Inventory</Btn>
+        <Btn onClick={()=>{if(f.name){onConfirm({...f,displayId});onClose();}}} disabled={!f.name}><Ico n="plus" s={14} col="var(--on-accent)"/>Add to Inventory</Btn>
       </div>
     </Modal>
   );
@@ -1077,7 +1124,7 @@ const OrderModal = ({onClose,onAddMany,userName="",userEmail="",categories}) => 
         </div>
         <div style={{display:"flex",gap:10}}>
           <Btn v="ghost" onClick={onClose}>Cancel</Btn>
-          <Btn onClick={submit} disabled={!canSubmit}><Ico n="cart" s={14} col="#000"/>Submit {validItems.length>1?`${validItems.length} Requests`:"Request"}</Btn>
+          <Btn onClick={submit} disabled={!canSubmit}><Ico n="cart" s={14} col="var(--on-accent)"/>Submit {validItems.length>1?`${validItems.length} Requests`:"Request"}</Btn>
         </div>
       </div>
     </Modal>
@@ -1151,7 +1198,7 @@ const GroupDetail = ({group,checkouts,onClose,onEdit,onQuickCheckout,onReturn,ed
             Next: {group._baseId}-{String(Math.max(0,...group._items.map(u=>{const m=String(u.displayId||"").match(/-(\d{3})$/);return m?parseInt(m[1]):0;}))+1).padStart(3,"0")}
           </span>
           <Inp placeholder="Serial / Product No. (optional)" value={newSerial} onChange={e=>setNewSerial(e.target.value)} style={{flex:1,padding:"6px 10px",fontSize:13}}/>
-          <Btn sm onClick={handleAddUnit}><Ico n="check" s={12} col="#000"/>Add</Btn>
+          <Btn sm onClick={handleAddUnit}><Ico n="check" s={12} col="var(--on-accent)"/>Add</Btn>
           <Btn v="ghost" sm onClick={()=>{setAddingUnit(false);setNewSerial("");}}>Cancel</Btn>
         </div>
       )}
@@ -1176,7 +1223,7 @@ const ItemDetail = ({item,checkouts,onClose,onReturn,onQuickCheckout,onEdit,cate
     <Modal onClose={onClose} title="" mw={640}>
       <div style={{display:"flex",gap:20,marginBottom:22,flexWrap:"wrap"}}>
         <div style={{position:"relative",flexShrink:0}}>
-          <img src={item.img||`https://placehold.co/200x148/141b24/3d5068?text=${encodeURIComponent(item.cat)}`} alt={item.name} style={{width:200,height:148,objectFit:"cover",borderRadius:12,border:"1px solid var(--border)",display:"block"}}/>
+          <ItemImage src={item.img} cat={item.cat} style={{width:200,height:148,borderRadius:12,border:"1px solid var(--border)"}}/>
         </div>
         <div style={{flex:1,minWidth:200}}>
           <h3 style={{margin:"0 0 8px",fontSize:19,fontFamily:"'Roboto',sans-serif",fontWeight:800}}>{item.name}</h3>
@@ -1194,7 +1241,7 @@ const ItemDetail = ({item,checkouts,onClose,onReturn,onQuickCheckout,onEdit,cate
             ))}
           </div>
           <div style={{display:"flex",gap:8}}>
-            {item.status!=="Maintenance"&&<Btn onClick={()=>{onClose();onQuickCheckout(item.name);}}><Ico n="tag" s={14} col="#000"/>Quick Check Out</Btn>}
+            {item.status!=="Maintenance"&&<Btn onClick={()=>{onClose();onQuickCheckout(item.name);}}><Ico n="tag" s={14} col="var(--on-accent)"/>Quick Check Out</Btn>}
             <Btn v="ghost" onClick={()=>{onClose();onEdit(item);}} disabled={editLocked} title={editLocked?"Editing is locked":"Edit item"} style={editLocked?{opacity:0.4,cursor:"not-allowed"}:{}}><Ico n={editLocked?"lock":"edit"} s={14}/>{editLocked?"Locked":"Edit"}</Btn>
           </div>
         </div>
@@ -1204,7 +1251,7 @@ const ItemDetail = ({item,checkouts,onClose,onReturn,onQuickCheckout,onEdit,cate
           <div style={{color:"var(--dim)",fontSize:10,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.1em",fontFamily:"'IBM Plex Mono',monospace",marginBottom:8}}>Currently Using</div>
           <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
             {toArr(item.usedBy).map(u=>(
-              <div key={u} style={{display:"flex",alignItems:"center",gap:8,background:"var(--blue-d)",border:"1px solid #4da6ff22",borderRadius:8,padding:"6px 12px"}}>
+              <div key={u} style={{display:"flex",alignItems:"center",gap:8,background:"var(--blue-d)",border:"1px solid color-mix(in srgb, var(--blue) 22%, transparent)",borderRadius:8,padding:"6px 12px"}}>
                 <MemberAvatar name={u} sz={24}/><span style={{fontSize:13,color:"var(--blue)"}}>{u}</span>
               </div>
             ))}
@@ -1217,7 +1264,7 @@ const ItemDetail = ({item,checkouts,onClose,onReturn,onQuickCheckout,onEdit,cate
           {hist.map(c=>{
             const od=isOverdue(c);
             return(
-              <div key={c.id} style={{display:"flex",alignItems:"center",gap:10,background:od?"var(--red-d)":"var(--bg2)",border:`1px solid ${od?"#ff4d6a30":"var(--border)"}`,borderRadius:8,padding:"8px 12px",marginBottom:6,flexWrap:"wrap"}}>
+              <div key={c.id} style={{display:"flex",alignItems:"center",gap:10,background:od?"var(--red-d)":"var(--bg2)",border:`1px solid ${od?"color-mix(in srgb, var(--red) 30%, transparent)":"var(--border)"}`,borderRadius:8,padding:"8px 12px",marginBottom:6,flexWrap:"wrap"}}>
                 <MemberAvatar name={c.user} sz={26}/>
                 <span style={{color:"var(--text)",fontSize:13,flex:1}}>{c.user}</span>
                 <span style={{color:od?"var(--red)":"var(--dim)",fontSize:10,fontFamily:"'IBM Plex Mono',monospace"}}>{c.out} → {c.ret||"—"}{od&&" OVERDUE"}</span>
@@ -1236,7 +1283,7 @@ const ItemDetail = ({item,checkouts,onClose,onReturn,onQuickCheckout,onEdit,cate
 
 // ─── STAT CARD ───────────────────────────────────────────────────────────────
 const Stat=({label,val,icon,ac,sub,warn})=>(
-  <div style={{background:"var(--bg1)",border:`1px solid ${warn?"#ff4d6a30":"var(--border)"}`,borderLeft:`3px solid ${ac}`,borderRadius:14,padding:"17px 20px",flex:1,minWidth:130}}>
+  <div style={{background:"var(--bg1)",border:`1px solid ${warn?"color-mix(in srgb, var(--red) 30%, transparent)":"var(--border)"}`,borderLeft:`3px solid ${ac}`,borderRadius:14,padding:"17px 20px",flex:1,minWidth:130}}>
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
       <div>
         <div style={{color:"var(--dim)",fontSize:10,fontWeight:700,letterSpacing:"0.12em",textTransform:"uppercase",fontFamily:"'IBM Plex Mono',monospace",marginBottom:5}}>{label}</div>
@@ -1269,7 +1316,7 @@ const Pagination = ({total, page, setPage}) => {
         {pages.map((p,i)=>p==="..." ? (
           <span key={`d${i}`} style={{color:"var(--dim)",padding:"0 4px"}}>...</span>
         ) : (
-          <button key={p} onClick={()=>setPage(p)} style={{background:p===page?"var(--cyan)":"var(--bg3)",color:p===page?"#000":"var(--sub)",border:`1px solid ${p===page?"var(--cyan)":"var(--border)"}`,borderRadius:6,padding:"5px 10px",cursor:"pointer",fontSize:12,fontWeight:p===page?700:400,minWidth:32}}>{p+1}</button>
+          <button key={p} onClick={()=>setPage(p)} style={{background:p===page?"var(--cyan)":"var(--bg3)",color:p===page?"var(--on-accent)":"var(--sub)",border:`1px solid ${p===page?"var(--cyan)":"var(--border)"}`,borderRadius:6,padding:"5px 10px",cursor:"pointer",fontSize:12,fontWeight:p===page?700:400,minWidth:32}}>{p+1}</button>
         ))}
         <button onClick={()=>setPage(Math.min(totalPages-1,page+1))} disabled={page===totalPages-1} style={{background:"var(--bg3)",border:"1px solid var(--border)",color:page===totalPages-1?"var(--dim)":"var(--text)",borderRadius:6,padding:"5px 10px",cursor:page===totalPages-1?"default":"pointer",fontSize:13}}>
           <Ico n="chevR" s={14}/>
@@ -1280,7 +1327,10 @@ const Pagination = ({total, page, setPage}) => {
 };
 
 // ─── CALENDAR ────────────────────────────────────────────────────────────────
-const CAL_EC={pkg:{bg:"var(--green-d)",col:"var(--green)"},out:{bg:"var(--blue-d)",col:"var(--blue)"},ret:{bg:"var(--amber-d)",col:"var(--amber)"},odd:{bg:"var(--red-d)",col:"var(--red)"},act:{bg:"var(--blue-d)",col:"#6ab8ff"}};
+// Delivery is Spirit Blue rather than green: beside the red of "overdue", green
+// measured ΔE 5.1 under deuteranopia — below the floor. See the palette note in
+// <style>. These four were validated as a set, so don't re-point one in isolation.
+const CAL_EC={pkg:{bg:"var(--spirit-d)",col:"var(--spirit)"},out:{bg:"var(--blue-d)",col:"var(--blue)"},ret:{bg:"var(--amber-d)",col:"var(--amber)"},odd:{bg:"var(--red-d)",col:"var(--red)"},act:{bg:"var(--blue-d)",col:"var(--blue)"}};
 const CAL_LBL={pkg:"Delivery",out:"Checked Out",ret:"Return Due",odd:"OVERDUE",act:"In Use"};
 // Mini chip for month grid cells and all-day strip — fixed width, clips text
 const CalChip=({e,full=false})=>{
@@ -1400,7 +1450,7 @@ const CalView=({checkouts,deliveries})=>{
   const evH=e=>Math.max((e.eh-e.sh)*ROW_H+((e.em-e.sm)/60)*ROW_H,24);
   const first=new Date(yr,mo,1).getDay(),total=new Date(yr,mo+1,0).getDate();
   const NB={background:"var(--bg3)",border:"1px solid var(--border)",color:"var(--text)",borderRadius:8,padding:"5px 12px",cursor:"pointer",fontSize:14,fontWeight:600};
-  const MB=act=>({background:act?"var(--cyan-d)":"var(--bg3)",color:act?"var(--cyan)":"var(--dim)",border:`1px solid ${act?"#00d4c830":"var(--border)"}`,borderRadius:7,padding:"5px 12px",cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"'IBM Plex Mono',monospace"});
+  const MB=act=>({background:act?"var(--cyan-d)":"var(--bg3)",color:act?"var(--cyan)":"var(--dim)",border:`1px solid ${act?"var(--cyan-m)":"var(--border)"}`,borderRadius:7,padding:"5px 12px",cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"'IBM Plex Mono',monospace"});
   const DAYS_S=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
   const GW=48;
   const totalH=HOURS.length*ROW_H;
@@ -1479,7 +1529,7 @@ const CalView=({checkouts,deliveries})=>{
             {wkDays.map((day,i)=>{const ds=wkStrs[i],isT=ds===todayStr,ovfCnt=wkBlocks[i].ovf.length;return(
               <div key={i} style={{flex:1,textAlign:"center",padding:"8px 4px",borderLeft:i>0?"1px solid var(--border)":"none",position:"relative"}}>
                 <div style={{fontSize:9,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.08em",color:"var(--dim)",fontFamily:"'IBM Plex Mono',monospace"}}>{DAYS_S[day.getDay()]}</div>
-                <div style={{fontFamily:"'Roboto',sans-serif",fontWeight:900,fontSize:20,width:30,height:30,borderRadius:"50%",background:isT?"var(--cyan)":"transparent",color:isT?"#000":"var(--text)",display:"flex",alignItems:"center",justifyContent:"center",margin:"3px auto 0"}}>{day.getDate()}</div>
+                <div style={{fontFamily:"'Roboto',sans-serif",fontWeight:900,fontSize:20,width:30,height:30,borderRadius:"50%",background:isT?"var(--cyan)":"transparent",color:isT?"var(--on-accent)":"var(--text)",display:"flex",alignItems:"center",justifyContent:"center",margin:"3px auto 0"}}>{day.getDate()}</div>
                 {ovfCnt>0&&(
                   <div ref={wkOvfDay===ds?wkOvfRef:null} style={{display:"inline-block",position:"relative"}}>
                     <button onClick={()=>setWkOvfDay(p=>p===ds?null:ds)} style={{marginTop:3,background:"var(--bg3)",border:"1px solid var(--border)",color:"var(--dim)",borderRadius:10,padding:"1px 6px",cursor:"pointer",fontSize:9,fontWeight:700,fontFamily:"'IBM Plex Mono',monospace"}}>+{ovfCnt} more</button>
@@ -1552,10 +1602,13 @@ const CalView=({checkouts,deliveries})=>{
 
       {/* Legend */}
       <div style={{display:"flex",gap:16,marginTop:14,flexWrap:"wrap"}}>
-        {[["var(--green)","Delivery"],["var(--blue)","Checkout / In Use"],["var(--amber)","Return Due"],["var(--red)","Overdue"]].map(([col,lbl])=>(
+        {[["var(--spirit)","Delivery"],["var(--blue)","Checkout / In Use"],["var(--amber)","Return Due"],["var(--red)","Overdue"]].map(([col,lbl])=>(
           <div key={lbl} style={{display:"flex",alignItems:"center",gap:5,fontSize:12}}>
-            <span style={{width:10,height:10,borderRadius:3,background:col,display:"inline-block"}}/>
-            <span style={{color:col}}>{lbl}</span>
+            {/* The swatch carries the identity; the label stays in text ink.
+                Colouring the label too made the darker hues hard to read and
+                left identity resting on colour alone. */}
+            <span style={{width:10,height:10,borderRadius:3,background:col,display:"inline-block",flexShrink:0}}/>
+            <span style={{color:"var(--sub)"}}>{lbl}</span>
           </div>
         ))}
       </div>
@@ -1596,8 +1649,10 @@ const LoginPage = ({onSignIn}) => {
   return(
     <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"var(--bg0)"}}>
       <div style={{textAlign:"center",animation:"fadeUp .5s ease",maxWidth:420,padding:"0 24px"}}>
-        <div style={{width:72,height:72,borderRadius:18,background:"linear-gradient(135deg,#00d4c8,#004d4a)",display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 0 40px rgba(0,212,200,.25)",margin:"0 auto 24px"}}>
-          <Ico n="layers" s={32} col="var(--bg0)"/>
+        <div style={{width:72,height:72,borderRadius:18,background:"linear-gradient(135deg,#004eb3,#002d72)",display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 10px 30px rgba(0,45,114,.22)",margin:"0 auto 24px"}}>
+          {/* The logo gradient is fixed Heritage Blue in both modes, so the mark
+              stays white rather than following a surface token. */}
+          <Ico n="layers" s={32} col="#ffffff"/>
         </div>
         <h1 style={{fontFamily:"'Roboto',sans-serif",fontWeight:900,fontSize:32,margin:"0 0 6px",letterSpacing:"-0.03em"}}>LabTrack</h1>
         <p style={{color:"var(--sub)",fontSize:15,margin:"0 0 8px",lineHeight:1.5}}>{LAB.lab_name} Inventory</p>
@@ -1606,7 +1661,10 @@ const LoginPage = ({onSignIn}) => {
           <div style={{display:"flex",justifyContent:"center",marginBottom:16}}>
             <button onClick={signIn} disabled={!msalReady||busy}
               style={{display:"flex",alignItems:"center",justifyContent:"center",gap:10,width:300,padding:"11px 20px",borderRadius:999,
-                      background:msalReady&&!busy?"#1b1b1b":"var(--bg2)",color:"#fff",border:"1px solid var(--border-hi)",
+                      // Microsoft's light-background button spec: white fill,
+                      // #8C8C8C border, #5E5E5E label — their dark variant read as
+                      // a hole punched in the page once the app went light.
+                      background:msalReady&&!busy?"#ffffff":"var(--bg2)",color:"#5e5e5e",border:"1px solid #8c8c8c",
                       fontFamily:"'Outfit',sans-serif",fontSize:15,fontWeight:600,
                       cursor:msalReady&&!busy?"pointer":"not-allowed",opacity:msalReady&&!busy?1:0.55,transition:"all .15s"}}>
               <svg width="17" height="17" viewBox="0 0 21 21" style={{flexShrink:0}}>
@@ -1618,7 +1676,7 @@ const LoginPage = ({onSignIn}) => {
           </div>
           {!msalReady && !error && <p style={{color:"var(--dim)",fontSize:12}}>Loading sign-in...</p>}
           <p style={{color:"var(--dim)",fontSize:12}}>Sign in with your {LAB.institution} account ({LAB.signin_hint})</p>
-          {error && <p style={{color:"var(--red)",fontSize:13,marginTop:12,background:"var(--red-d)",padding:"8px 14px",borderRadius:8,border:"1px solid #ff4d6a30"}}>{error}</p>}
+          {error && <p style={{color:"var(--red)",fontSize:13,marginTop:12,background:"var(--red-d)",padding:"8px 14px",borderRadius:8,border:"1px solid color-mix(in srgb, var(--red) 30%, transparent)"}}>{error}</p>}
 
           {/* Offline sandbox. Never touches the backend — every API call is
               short-circuited on token === "local", and the server rejects that
@@ -1671,7 +1729,7 @@ const EditOrderModal = ({order,onClose,onSave,isAdmin,categories}) => {
       <div style={{borderTop:"1px solid var(--border)",paddingTop:14,marginTop:4,display:"flex",gap:10,justifyContent:"flex-end"}}>
         <Btn v="ghost" onClick={onClose}>Cancel</Btn>
         <Btn onClick={()=>{onSave({...f,qty:+f.qty});onClose();}} disabled={!(f.store||"").trim()||(!(f.item||"").trim())||(!(f.link||"").trim())}>
-          <Ico n="check" s={14} col="#000"/>Save Changes
+          <Ico n="check" s={14} col="var(--on-accent)"/>Save Changes
         </Btn>
       </div>
     </Modal>
@@ -1775,7 +1833,7 @@ function LabInventory(){
   const tableScrollRef = useRef(null);
   const scrollCooldown = useRef(false);
   const [sortBy, setSortBy] = useState("name-az");
-  const [darkMode, setDarkMode] = useState(true);
+  const [darkMode, setDarkMode] = useState(false);   // light is the default; JHU palette is built for it
   const [previewMode, setPreviewMode] = useState(false);
   const [editLocked, setEditLocked] = useState(true);
   const tid = useRef(0);
@@ -1822,20 +1880,25 @@ function LabInventory(){
         tokenRef.current = devUser.token;
       }
       localStorage.removeItem("labtrack_categories"); // no longer cached; server is source of truth
-      const dark = localStorage.getItem("labtrack_dark");
-      if (dark !== null) {
-        const isDark = dark !== "false";
+      // Key renamed from labtrack_dark deliberately. The old effect wrote "true"
+      // on first render, so every browser that ever opened the dark-default build
+      // has a stored preference it never actually chose — reading it would pin
+      // those users to dark forever. The old key is left to rot.
+      localStorage.removeItem("labtrack_dark");
+      const theme = localStorage.getItem("labtrack_theme");
+      if (theme === "dark" || theme === "light") {
+        const isDark = theme === "dark";
         setDarkMode(isDark);
-        document.documentElement.classList.toggle("light", !isDark);
+        document.documentElement.classList.toggle("dark", isDark);
       }
     } catch {}
     setLoading(false);
   },[]);
 
-  // Apply dark/light mode
+  // Apply light/dark mode
   useEffect(()=>{
-    document.documentElement.classList.toggle("light", !darkMode);
-    localStorage.setItem("labtrack_dark", String(darkMode));
+    document.documentElement.classList.toggle("dark", darkMode);
+    localStorage.setItem("labtrack_theme", darkMode ? "dark" : "light");
   },[darkMode]);
 
   // Fetch data from backend when signed in
@@ -2345,8 +2408,8 @@ function LabInventory(){
       {/* HEADER */}
       <header style={{background:"var(--bg1)",borderBottom:"1px solid var(--border)",padding:"12px 24px",display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:12,position:"sticky",top:0,zIndex:200}}>
         <div style={{display:"flex",alignItems:"center",gap:13}}>
-          <div style={{width:38,height:38,borderRadius:10,background:"linear-gradient(135deg,#00d4c8,#004d4a)",display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 0 18px rgba(0,212,200,.3)",flexShrink:0}}>
-            <Ico n="layers" s={18} col="var(--bg0)"/>
+          <div style={{width:38,height:38,borderRadius:10,background:"linear-gradient(135deg,#004eb3,#002d72)",display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 4px 14px rgba(0,45,114,.22)",flexShrink:0}}>
+            <Ico n="layers" s={18} col="#ffffff"/>
           </div>
           <div>
             <div style={{fontFamily:"'Roboto',sans-serif",fontWeight:900,fontSize:16,letterSpacing:"-0.02em"}}>LabTrack</div>
@@ -2355,12 +2418,12 @@ function LabInventory(){
         </div>
         <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
           {overdues.length>0&&(
-            <div className="overdue-pulse" style={{display:"flex",alignItems:"center",gap:6,background:"var(--red-d)",border:"1px solid #ff4d6a44",borderRadius:20,padding:"5px 12px",fontSize:12,color:"var(--red)"}}>
+            <div className="overdue-pulse" style={{display:"flex",alignItems:"center",gap:6,background:"var(--red-d)",border:"1px solid color-mix(in srgb, var(--red) 38%, transparent)",borderRadius:20,padding:"5px 12px",fontSize:12,color:"var(--red)"}}>
               <Ico n="clock" s={13} col="var(--red)"/>{overdues.length} overdue
             </div>
           )}
           {lowStock.length>0&&(
-            <div style={{display:"flex",alignItems:"center",gap:6,background:"var(--amber-d)",border:"1px solid #f5a62344",borderRadius:20,padding:"5px 12px",fontSize:12,color:"var(--amber)"}}>
+            <div style={{display:"flex",alignItems:"center",gap:6,background:"var(--amber-d)",border:"1px solid color-mix(in srgb, var(--amber) 38%, transparent)",borderRadius:20,padding:"5px 12px",fontSize:12,color:"var(--amber)"}}>
               <Ico n="alert" s={13} col="var(--amber)"/>{lowStock.length} low stock
             </div>
           )}
@@ -2382,7 +2445,7 @@ function LabInventory(){
             }
             setEditLocked(l=>!l);
           }} title={editLocked?"Unlock editing":"Lock editing to prevent accidental changes"}
-            style={{background:editLocked?"var(--red-d)":"var(--bg2)",border:`1px solid ${editLocked?"#ff4d6a50":"var(--border)"}`,borderRadius:8,padding:"7px 9px",cursor:"pointer",display:"flex",alignItems:"center",color:editLocked?"var(--red)":"var(--sub)",transition:"all .15s"}}
+            style={{background:editLocked?"var(--red-d)":"var(--bg2)",border:`1px solid ${editLocked?"color-mix(in srgb, var(--red) 45%, transparent)":"var(--border)"}`,borderRadius:8,padding:"7px 9px",cursor:"pointer",display:"flex",alignItems:"center",color:editLocked?"var(--red)":"var(--sub)",transition:"all .15s"}}
             className="ibtn">
             <Ico n={editLocked?"lock":"unlock"} s={14}/>
           </button>
@@ -2397,7 +2460,7 @@ function LabInventory(){
           {/* Admin: Send Digest Now */}
           {userRole==="admin"&&APP_CONFIG.apps_script_url&&(
             <button onClick={handleSendDigest} title="Send Slack digest now (admin)"
-              style={{background:"var(--purple-d)",border:"1px solid #b47dff33",borderRadius:8,padding:"6px 11px",cursor:"pointer",display:"flex",alignItems:"center",gap:5,color:"var(--purple)",fontSize:12,fontWeight:600,fontFamily:"'Outfit',sans-serif"}}>
+              style={{background:"var(--purple-d)",border:"1px solid color-mix(in srgb, var(--purple) 32%, transparent)",borderRadius:8,padding:"6px 11px",cursor:"pointer",display:"flex",alignItems:"center",gap:5,color:"var(--purple)",fontSize:12,fontWeight:600,fontFamily:"'Outfit',sans-serif"}}>
               <Ico n="bell2" s={13} col="var(--purple)"/>Digest
             </button>
           )}
@@ -2417,7 +2480,7 @@ function LabInventory(){
               <img src={user.picture} alt="" style={{width:28,height:28,borderRadius:"50%",border:"2px solid var(--border-hi)"}} onError={e=>{e.target.style.display='none';}}/>
             ) : (<MemberAvatar name={user.name} sz={28}/>)}
             <span style={{color:"var(--sub)",fontSize:12,fontWeight:500,maxWidth:120,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{user.name}</span>
-            {effectiveRole==="admin"&&<span style={{background:"var(--amber-d)",color:"var(--amber)",border:"1px solid #f5a62340",borderRadius:6,padding:"1px 6px",fontSize:9,fontWeight:700,fontFamily:"'IBM Plex Mono',monospace",letterSpacing:"0.05em"}}>ADMIN</span>}
+            {effectiveRole==="admin"&&<span style={{background:"var(--amber-d)",color:"var(--amber)",border:"1px solid color-mix(in srgb, var(--amber) 38%, transparent)",borderRadius:6,padding:"1px 6px",fontSize:9,fontWeight:700,fontFamily:"'IBM Plex Mono',monospace",letterSpacing:"0.05em"}}>ADMIN</span>}
             <button onClick={handleSignOut} title="Sign out" style={{background:"none",border:"none",color:"var(--dim)",cursor:"pointer",padding:"2px",display:"flex",alignItems:"center"}}><Ico n="logout" s={14}/></button>
           </div>
         </div>
@@ -2428,7 +2491,7 @@ function LabInventory(){
         {TABS.map(t=>(
           <button key={t.id} onClick={()=>setTab(t.id)} style={{background:"transparent",border:"none",borderBottom:`2px solid ${tab===t.id?"var(--cyan)":"transparent"}`,color:tab===t.id?"var(--cyan)":"var(--dim)",padding:"13px 16px",cursor:"pointer",fontSize:13,fontWeight:600,display:"flex",alignItems:"center",gap:7,fontFamily:"'Outfit',sans-serif",transition:"color .15s,border-color .15s"}}>
             <Ico n={t.n} s={14} col={tab===t.id?"var(--cyan)":"var(--dim)"}/>{t.l}
-            {t.count>0&&<span style={{background:t.id==="usage"&&overdues.length>0?"var(--red)":tab===t.id?"var(--cyan)":"var(--bg4)",color:t.id==="usage"&&overdues.length>0?"#000":tab===t.id?"#000":"var(--sub)",borderRadius:10,padding:"1px 6px",fontSize:10,fontWeight:800,fontFamily:"'IBM Plex Mono',monospace"}}>{t.count}</span>}
+            {t.count>0&&<span style={{background:t.id==="usage"&&overdues.length>0?"var(--red)":tab===t.id?"var(--cyan)":"var(--bg4)",color:t.id==="usage"&&overdues.length>0?"var(--on-accent)":tab===t.id?"var(--on-accent)":"var(--sub)",borderRadius:10,padding:"1px 6px",fontSize:10,fontWeight:800,fontFamily:"'IBM Plex Mono',monospace"}}>{t.count}</span>}
           </button>
         ))}
       </nav>
@@ -2455,22 +2518,22 @@ function LabInventory(){
       )}
       {/* Admin preview mode banner */}
       {previewMode&&(
-        <div style={{background:"var(--blue-d)",borderBottom:"1px solid #4da6ff30",padding:"8px 24px",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+        <div style={{background:"var(--blue-d)",borderBottom:"1px solid color-mix(in srgb, var(--blue) 30%, transparent)",padding:"8px 24px",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
           <div style={{display:"flex",alignItems:"center",gap:8}}>
             <Ico n="eye" s={14} col="var(--blue)"/>
             <span style={{color:"var(--blue)",fontSize:12,fontWeight:600}}>Admin Preview — you are viewing the site as a regular user</span>
           </div>
-          <button onClick={()=>setPreviewMode(false)} style={{background:"none",border:"1px solid #4da6ff40",color:"var(--blue)",borderRadius:6,padding:"3px 10px",fontSize:11,cursor:"pointer",fontWeight:600}}>Exit Preview</button>
+          <button onClick={()=>setPreviewMode(false)} style={{background:"none",border:"1px solid color-mix(in srgb, var(--blue) 38%, transparent)",color:"var(--blue)",borderRadius:6,padding:"3px 10px",fontSize:11,cursor:"pointer",fontWeight:600}}>Exit Preview</button>
         </div>
       )}
       {/* Edit lock banner */}
       {editLocked&&(
-        <div style={{background:"var(--red-d)",borderBottom:"1px solid #ff4d6a30",padding:"7px 24px",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+        <div style={{background:"var(--red-d)",borderBottom:"1px solid color-mix(in srgb, var(--red) 30%, transparent)",padding:"7px 24px",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
           <div style={{display:"flex",alignItems:"center",gap:8}}>
             <Ico n="lock" s={13} col="var(--red)"/>
             <span style={{color:"var(--red)",fontSize:12,fontWeight:600}}>Editing locked — inventory is in read-only mode</span>
           </div>
-          <button onClick={()=>{if(userRole!=="admin")postAction("logEditUnlock",{user:user?.name||"",email:user?.email||""});setEditLocked(false);}} style={{background:"none",border:"1px solid #ff4d6a40",color:"var(--red)",borderRadius:6,padding:"3px 10px",fontSize:11,cursor:"pointer",fontWeight:600}}>Unlock</button>
+          <button onClick={()=>{if(userRole!=="admin")postAction("logEditUnlock",{user:user?.name||"",email:user?.email||""});setEditLocked(false);}} style={{background:"none",border:"1px solid color-mix(in srgb, var(--red) 38%, transparent)",color:"var(--red)",borderRadius:6,padding:"3px 10px",fontSize:11,cursor:"pointer",fontWeight:600}}>Unlock</button>
         </div>
       )}
 
@@ -2487,16 +2550,22 @@ function LabInventory(){
 
         {/* Stats */}
         <div style={{display:"flex",gap:12,marginBottom:overdues.length||lowStock.length?16:24,flexWrap:"wrap"}}>
+          {/* Four plain counts share one accent; only Overdue changes colour, and
+              only because its value means something. Giving each tile its own hue
+              spent the colour channel on nothing, and it could not be made safe:
+              in a blue-dominant palette the fifth and sixth hues collapse against
+              the blues (normal-vision ΔE 10.8–13.8, floor 15). One red among four
+              blues is also simply easier to spot, which is the point of the row. */}
           <Stat label="Total Items" val={items.length} icon="box" ac="var(--cyan)" sub="in inventory"/>
-          <Stat label="Categories" val={[...new Set(items.map(i=>i.cat))].length} icon="layers" ac="var(--purple)" sub="active types"/>
-          <Stat label="Orders" val={activeOrders.length} icon="cart" ac="var(--amber)" sub="in pipeline"/>
-          <Stat label="Checked Out" val={activeOut.length} icon="users" ac="var(--blue)" sub="active"/>
+          <Stat label="Categories" val={[...new Set(items.map(i=>i.cat))].length} icon="layers" ac="var(--cyan)" sub="active types"/>
+          <Stat label="Orders" val={activeOrders.length} icon="cart" ac="var(--cyan)" sub="in pipeline"/>
+          <Stat label="Checked Out" val={activeOut.length} icon="users" ac="var(--cyan)" sub="active"/>
           <Stat label="Overdue" val={overdues.length} icon="clock" ac={overdues.length?"var(--red)":"var(--green)"} sub="past return date" warn={overdues.length>0}/>
         </div>
 
         {/* Alert banners */}
         {overdues.length>0&&(
-          <div style={{background:"var(--red-d)",border:"1px solid #ff4d6a30",borderRadius:10,padding:"10px 16px",marginBottom:12,display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+          <div style={{background:"var(--red-d)",border:"1px solid color-mix(in srgb, var(--red) 30%, transparent)",borderRadius:10,padding:"10px 16px",marginBottom:12,display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
             <Ico n="clock" s={15} col="var(--red)"/>
             <span style={{color:"var(--red)",fontSize:13,fontWeight:600}}>Overdue returns:</span>
             <span style={{color:"var(--sub)",fontSize:13}}>{overdues.map(c=>`${c.item} (${c.user})`).join(" · ")}</span>
@@ -2504,12 +2573,12 @@ function LabInventory(){
           </div>
         )}
         {lowStock.length>0&&(
-          <div style={{background:"var(--amber-d)",border:"1px solid #f5a62330",borderRadius:10,padding:"10px 16px",marginBottom:24,display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+          <div style={{background:"var(--amber-d)",border:"1px solid color-mix(in srgb, var(--amber) 30%, transparent)",borderRadius:10,padding:"10px 16px",marginBottom:24,display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
             <Ico n="alert" s={15} col="var(--amber)"/>
             <span style={{color:"var(--amber)",fontSize:13,fontWeight:600}}>Low stock:</span>
             <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
               {lowStock.map(i=>(
-                <button key={i.id} onClick={()=>{setDetail(i);setTab("inventory");}} style={{background:"var(--amber-d)",color:"var(--amber)",border:"1px solid #f5a62340",borderRadius:12,padding:"2px 10px",fontSize:12,cursor:"pointer",fontWeight:600}}>
+                <button key={i.id} onClick={()=>{setDetail(i);setTab("inventory");}} style={{background:"var(--amber-d)",color:"var(--amber)",border:"1px solid color-mix(in srgb, var(--amber) 38%, transparent)",borderRadius:12,padding:"2px 10px",fontSize:12,cursor:"pointer",fontWeight:600}}>
                   {i.name} ({i.qty} {i.unit})
                 </button>
               ))}
@@ -2562,7 +2631,7 @@ function LabInventory(){
               </div>
 
               <Btn v="ghost" onClick={()=>{setPreItem("");setModal("checkout");}}><Ico n="tag" s={14}/>Check Out</Btn>
-              <Btn onClick={()=>{if(editLocked){addToast("error","Editing is locked — click 🔒 in the header to unlock");return;}setModal("addItem");}}><Ico n="plus" s={14} col="#000"/>Add Item</Btn>
+              <Btn onClick={()=>{if(editLocked){addToast("error","Editing is locked — click 🔒 in the header to unlock");return;}setModal("addItem");}}><Ico n="plus" s={14} col="var(--on-accent)"/>Add Item</Btn>
             </div>
 
             {search&&<div style={{color:"var(--dim)",fontSize:12,marginBottom:12}}>{filtered.length} result{filtered.length!==1?"s":""} for "{search}"</div>}
@@ -2573,7 +2642,7 @@ function LabInventory(){
                 <div style={{marginTop:16,fontSize:16,color:"var(--sub)"}}>{items.length===0?"No items in inventory yet":"No items found"}</div>
                 <div style={{fontSize:13,marginTop:4}}>{items.length===0?"Add your first item to get started":"Try a different search or category"}</div>
                 {items.length===0 ? (
-                  <Btn style={{marginTop:16}} onClick={()=>setModal("addItem")}><Ico n="plus" s={14} col="#000"/>Add First Item</Btn>
+                  <Btn style={{marginTop:16}} onClick={()=>setModal("addItem")}><Ico n="plus" s={14} col="var(--on-accent)"/>Add First Item</Btn>
                 ) : (
                   <button onClick={()=>{setSearch("");setCatF("All");}} style={{marginTop:16,background:"none",border:"1px solid var(--border)",color:"var(--cyan)",borderRadius:8,padding:"7px 16px",cursor:"pointer",fontSize:13}}>Clear filters</button>
                 )}
@@ -2589,10 +2658,10 @@ function LabInventory(){
                     return(
                       <div key={item._baseId} className="card-item" onClick={()=>setGroupDetail(item)} style={{background:"var(--bg1)",border:"2px solid var(--border)",borderRadius:14,overflow:"hidden",animation:`fadeUp .3s ease ${Math.min(idx,.8)*0.04}s both`,cursor:"pointer"}}>
                         <div style={{position:"relative"}}>
-                          <img src={item.img||`https://placehold.co/280x112/141b24/3d5068?text=${encodeURIComponent(item.cat)}`} alt={item.name} style={{width:"100%",height:112,objectFit:"cover",display:"block"}}/>
+                          <ItemImage src={item.img} cat={item.cat} style={{width:"100%",height:112}}/>
                           <div style={{position:"absolute",bottom:0,left:0,right:0,height:44,background:"linear-gradient(transparent,var(--bg1))"}}/>
                           <div style={{position:"absolute",top:10,right:10}}><Badge status={item.status}/></div>
-                          <div style={{position:"absolute",top:10,left:10,background:"rgba(7,9,15,.78)",borderRadius:7,padding:"3px 8px"}}>
+                          <div style={{position:"absolute",top:10,left:10,background:"color-mix(in srgb, var(--bg1) 82%, transparent)",border:"1px solid var(--border)",borderRadius:7,padding:"3px 8px"}}>
                             <span style={{color:ac,fontSize:9,fontWeight:700,fontFamily:"'IBM Plex Mono',monospace",letterSpacing:"0.08em"}}>{(item.cat||"").toUpperCase()}</span>
                           </div>
                         </div>
@@ -2621,10 +2690,10 @@ function LabInventory(){
                   return(
                     <div key={item.id} className="card-item" onClick={()=>setDetail(item)} style={{background:"var(--bg1)",border:"1px solid var(--border)",borderRadius:14,overflow:"hidden",animation:`fadeUp .3s ease ${Math.min(idx,.8)*0.04}s both`}}>
                       <div style={{position:"relative"}}>
-                        <img src={item.img||`https://placehold.co/280x112/141b24/3d5068?text=${encodeURIComponent(item.cat)}`} alt={item.name} style={{width:"100%",height:112,objectFit:"cover",display:"block"}}/>
+                        <ItemImage src={item.img} cat={item.cat} style={{width:"100%",height:112}}/>
                         <div style={{position:"absolute",bottom:0,left:0,right:0,height:44,background:"linear-gradient(transparent,var(--bg1))"}}/>
                         <div style={{position:"absolute",top:10,right:10}}><Badge status={isLow?"Low Stock":item.status}/></div>
-                        <div style={{position:"absolute",top:10,left:10,background:"rgba(7,9,15,.78)",borderRadius:7,padding:"3px 8px"}}>
+                        <div style={{position:"absolute",top:10,left:10,background:"color-mix(in srgb, var(--bg1) 82%, transparent)",border:"1px solid var(--border)",borderRadius:7,padding:"3px 8px"}}>
                           <span style={{color:ac,fontSize:9,fontWeight:700,fontFamily:"'IBM Plex Mono',monospace",letterSpacing:"0.08em"}}>{(item.cat||"").toUpperCase()}</span>
                         </div>
                       </div>
@@ -2642,7 +2711,7 @@ function LabInventory(){
                             <span style={{color:"var(--dim)",fontSize:11}}>{item.unit}</span>
                           </div>
                           {item.consumable?(
-                            <button onClick={e=>{e.stopPropagation();if(editLocked){addToast("error","Editing is locked — click 🔒 in the header to unlock");return;}const n=parseInt(window.prompt(`How many ${item.unit} used? (max ${item.qty})`,"1"));if(!isNaN(n)&&n>0)handleUseConsumable(item.id,Math.min(n,item.qty));}} style={{background:editLocked?"var(--bg3)":"var(--amber-d)",color:editLocked?"var(--dim)":"var(--amber)",border:"1px solid #f5a62330",borderRadius:6,padding:"3px 10px",fontSize:11,fontWeight:700,cursor:editLocked?"not-allowed":"pointer"}}>Use</button>
+                            <button onClick={e=>{e.stopPropagation();if(editLocked){addToast("error","Editing is locked — click 🔒 in the header to unlock");return;}const n=parseInt(window.prompt(`How many ${item.unit} used? (max ${item.qty})`,"1"));if(!isNaN(n)&&n>0)handleUseConsumable(item.id,Math.min(n,item.qty));}} style={{background:editLocked?"var(--bg3)":"var(--amber-d)",color:editLocked?"var(--dim)":"var(--amber)",border:"1px solid color-mix(in srgb, var(--amber) 30%, transparent)",borderRadius:6,padding:"3px 10px",fontSize:11,fontWeight:700,cursor:editLocked?"not-allowed":"pointer"}}>Use</button>
                           ):toArr(item.usedBy).length>0?(
                             <div style={{display:"flex"}}>{toArr(item.usedBy).slice(0,3).map((u,i)=><div key={u} style={{marginLeft:i>0?-8:0,zIndex:3-i}}><MemberAvatar name={u} sz={24}/></div>)}</div>
                           ):null}
@@ -2733,7 +2802,7 @@ function LabInventory(){
                     const text=generateEmailText(activeOrders.filter(o=>selectedOrders.has(String(o.id))));
                     const w=window.open('','_blank','width=720,height=520,resizable=yes,scrollbars=yes');
                     if(w){
-                      w.document.write('<html><head><title>Purchase Request</title></head><body style="margin:0;padding:24px;font-family:monospace;background:#111;color:#eee"><h3 style="font-family:sans-serif;color:#00d4c8;margin:0 0 16px">&#x1F6D2; Purchase Request &#x2014; select all and copy (Ctrl+A &#x2192; Ctrl+C)</h3><pre id="t" style="white-space:pre-wrap;font-size:13px;line-height:2;background:#1a1a1a;padding:20px;border-radius:8px"></pre></body></html>');
+                      w.document.write('<html><head><title>Purchase Request</title></head><body style="margin:0;padding:24px;font-family:monospace;background:#f4f7fb;color:#1a2030"><h3 style="font-family:sans-serif;color:#002d72;margin:0 0 16px">&#x1F6D2; Purchase Request &#x2014; select all and copy (Ctrl+A &#x2192; Ctrl+C)</h3><pre id="t" style="white-space:pre-wrap;font-size:13px;line-height:2;background:#ffffff;border:1px solid #cdd8ea;padding:20px;border-radius:8px"></pre></body></html>');
                       w.document.close();
                       w.document.getElementById('t').textContent=text;
                     }
@@ -2754,7 +2823,7 @@ function LabInventory(){
                   </Btn>}
                 </>)}
                 <Btn v="ghost" onClick={()=>setModal("delivery")}><Ico n="truck" s={14}/>Log Delivery</Btn>
-                <Btn onClick={()=>{if(editLocked){addToast("error","Editing is locked — click 🔒 in the header to unlock");return;}setModal("order");}}><Ico n="cart" s={14} col="#000"/>New Request</Btn>
+                <Btn onClick={()=>{if(editLocked){addToast("error","Editing is locked — click 🔒 in the header to unlock");return;}setModal("order");}}><Ico n="cart" s={14} col="var(--on-accent)"/>New Request</Btn>
               </div>
             </div>
 
@@ -2781,7 +2850,7 @@ function LabInventory(){
                   <Ico n="cart" s={40} col="var(--bg4)"/>
                   <div style={{marginTop:12,fontSize:14,color:"var(--sub)"}}>No active orders</div>
                   <div style={{fontSize:12,marginTop:4}}>Request supplies or equipment your lab needs</div>
-                  <Btn style={{marginTop:12}} onClick={()=>{if(editLocked){addToast("error","Editing is locked — click 🔒 in the header to unlock");return;}setModal("order");}}><Ico n="plus" s={14} col="#000"/>Submit first request</Btn>
+                  <Btn style={{marginTop:12}} onClick={()=>{if(editLocked){addToast("error","Editing is locked — click 🔒 in the header to unlock");return;}setModal("order");}}><Ico n="plus" s={14} col="var(--on-accent)"/>Submit first request</Btn>
                 </div>
               ):filteredActiveOrders.length===0?(
                 <div style={{textAlign:"center",padding:"24px",color:"var(--dim)",background:"var(--bg1)",border:"1px solid var(--border)",borderRadius:14}}>No orders match the filter</div>
@@ -2927,7 +2996,7 @@ function LabInventory(){
                     <Ico n="undo" s={14} col="var(--green)"/>Return {selected.size} selected
                   </Btn>
                 )}
-                <Btn onClick={()=>{setPreItem("");setModal("checkout");}}><Ico n="plus" s={14} col="#000"/>New Checkout</Btn>
+                <Btn onClick={()=>{setPreItem("");setModal("checkout");}}><Ico n="plus" s={14} col="var(--on-accent)"/>New Checkout</Btn>
               </div>
             </div>
 
@@ -2944,7 +3013,7 @@ function LabInventory(){
                 const outs=checkouts.filter(c=>c.user===m&&c.status==="Active");
                 const od=outs.filter(c=>isOverdue(c)).length;
                 return(
-                  <div key={m} style={{background:"var(--bg1)",border:`1px solid ${od?"#ff4d6a30":"var(--border)"}`,borderRadius:14,padding:"16px 18px",animation:`fadeUp .3s ease ${idx*.05}s both`}}>
+                  <div key={m} style={{background:"var(--bg1)",border:`1px solid ${od?"color-mix(in srgb, var(--red) 30%, transparent)":"var(--border)"}`,borderRadius:14,padding:"16px 18px",animation:`fadeUp .3s ease ${idx*.05}s both`}}>
                     <div style={{display:"flex",alignItems:"center",gap:11,marginBottom:12}}>
                       <MemberAvatar name={m} sz={40}/>
                       <div style={{flex:1,minWidth:0}}>
@@ -2957,7 +3026,7 @@ function LabInventory(){
                     {outs.map(c=>{
                       const od2=isOverdue(c);
                       return(
-                        <div key={c.id} style={{background:od2?"var(--red-d)":"var(--bg2)",border:`1px solid ${od2?"#ff4d6a30":"var(--border)"}`,borderRadius:8,padding:"8px 11px",marginBottom:6,display:"flex",justifyContent:"space-between",alignItems:"center",gap:8}}>
+                        <div key={c.id} style={{background:od2?"var(--red-d)":"var(--bg2)",border:`1px solid ${od2?"color-mix(in srgb, var(--red) 30%, transparent)":"var(--border)"}`,borderRadius:8,padding:"8px 11px",marginBottom:6,display:"flex",justifyContent:"space-between",alignItems:"center",gap:8}}>
                           <div style={{minWidth:0}}>
                             <div style={{color:"var(--text)",fontSize:13,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{c.item}</div>
                             <div style={{color:od2?"var(--red)":"var(--dim)",fontSize:10,fontFamily:"'IBM Plex Mono',monospace",marginTop:2}}>{od2?"OVERDUE":"Return"} {c.ret||"—"}</div>
