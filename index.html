@@ -2128,6 +2128,7 @@ function LabInventory(){
         const u = JSON.parse(saved);
         setUser(u);
         tokenRef.current = u.token || null;
+        if (u.token === "local") setUserRole("admin");   // see handleSignIn
         // The stored token is almost always expired by now; MSAL holds the
         // refresh token. If its cache was cleared, drop back to the login page.
         if (u.token && !isBypassToken(u.token)) {
@@ -2300,6 +2301,11 @@ function LabInventory(){
   const handleSignIn = (u) => {
     tokenRef.current = u.token;
     setUser(u); setSessionExpired(false); setDataLoaded(false);
+    // The role normally arrives from doGet, and the preview has no server to ask,
+    // so it stayed "member" — leaving no way to delete anything you added by
+    // mistake in your own sandbox. There is nothing to protect here: the data is
+    // this browser's, and the backend rejects the "local" token outright.
+    if (u.token === "local") setUserRole("admin");
     localStorage.setItem("labtrack_user", JSON.stringify(u));
   };
 
