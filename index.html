@@ -17,7 +17,7 @@
 // its own backend, and registering its origin as a redirect URI — nothing else
 // in this file is lab-specific.
 window.LAB_CONFIG = {
-  app_title:   "LabTrack for Alliance AI Lab@JHU",   // browser tab, login page, header
+  app_title:   "LabTrack for Alliance AI Lab @ JHU",   // browser tab, login page, header
   lab_name:    "Alliance AI Lab",
   institution: "Johns Hopkins University",
   signin_hint: "@jh.edu",          // shown on the login page; UPN domain, not the mail alias
@@ -1670,7 +1670,9 @@ const LoginPage = ({onSignIn}) => {
 
   return(
     <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"var(--bg0)"}}>
-      <div style={{textAlign:"center",animation:"fadeUp .5s ease",maxWidth:420,padding:"0 24px"}}>
+      {/* Wide enough for the title to sit on one line — wrapping it split
+          "Alliance AI Lab" across lines, which reads badly for a proper noun. */}
+      <div style={{textAlign:"center",animation:"fadeUp .5s ease",maxWidth:560,padding:"0 24px"}}>
         {/* The mark's own navy needs a light backdrop, so the tile stays white in
             both modes rather than following a surface token. */}
         <div style={{width:78,height:78,borderRadius:18,background:"#ffffff",border:"1px solid var(--border)",display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 10px 30px rgba(0,45,114,.14)",margin:"0 auto 24px",overflow:"hidden"}}>
@@ -1678,9 +1680,8 @@ const LoginPage = ({onSignIn}) => {
         </div>
         {/* The title already names the lab and the university, so the two
             subtitle lines that used to sit here would only repeat it. */}
-        {/* balance keeps a two-line title from breaking mid-name — without it
-            this split "Alliance AI" from "Lab@JHU". */}
-        <h1 style={{fontFamily:"'Roboto',sans-serif",fontWeight:900,fontSize:27,margin:"0 0 30px",letterSpacing:"-0.025em",lineHeight:1.25,textWrap:"balance"}}>{LAB.app_title}</h1>
+        {/* balance is the fallback for a longer title than this one. */}
+        <h1 style={{fontFamily:"'Roboto',sans-serif",fontWeight:900,fontSize:25,margin:"0 0 30px",letterSpacing:"-0.025em",lineHeight:1.25,textWrap:"balance"}}>{LAB.app_title}</h1>
         <div>
           <div style={{display:"flex",justifyContent:"center",marginBottom:16}}>
             <button onClick={signIn} disabled={!msalReady||busy}
