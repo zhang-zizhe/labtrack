@@ -164,18 +164,32 @@ Two ways to use the app while admin consent is pending. They are different tools
 
 | | Preview | Dev key |
 |---|---|---|
-| Button/switch | "Preview as member" / "Preview as admin" on the login page | `LAB_CONFIG.dev_key` + `DEV_NO_AUTH_KEY` |
+| Button/switch | Member One / Member Two / Admin on the login page | `LAB_CONFIG.dev_key` + `DEV_NO_AUTH_KEY` |
 | Backend | none — data lives in `localStorage` | the real Sheet |
 | Risk | none | **removes authentication from the deployment** |
 | Use for | reviewing the interface, demos | testing sync, RBAC, Slack, the digest |
 
-**Preview** needs no setup, and comes in both roles — the two differ in what the interface offers at all (deleting, categories, order status), so both are worth looking at. Nothing reaches the backend: every API call is
-short-circuited client-side, and `verifyToken` rejects the token value `"local"`
-as its first statement, so it cannot touch real data even in principle.
+**Preview** needs no setup and offers three doors, defined in `PREVIEW_USERS`.
+They are three *people*, not two roles. The roles differ in what the interface
+offers at all (deleting, categories, order status). The two members differ in what
+is **theirs** — and half of what the app decides is exactly that, so one member
+login could only ever show one side of it:
+
+| | Member One | Member Two | Admin |
+|---|---|---|---|
+| Overdue banner | "You have 1 overdue item" | none — it isn't theirs | "1 item overdue in the lab" |
+| Low-stock banner & chip | hidden | hidden | shown |
+| Pending requests on the calendar | only their own | only their own | everyone's |
+| Edit / Withdraw on a request | only their own | only their own | anyone's |
+
+Nothing reaches the backend: every API call is short-circuited client-side, and
+`verifyToken` rejects the token value `"local"` as its first statement, so it
+cannot touch real data even in principle.
 
 **Preview starts with a sample lab, not an empty grid.** `demoData()` in
 `index.html` seeds seven items, three checkouts, two competing requests, an
-overdue hold, a delivery and an order — enough that every state worth looking at
+overdue hold, a delivery and an order, cast across the three preview identities
+so that who-owns-what is visible — enough that every state worth looking at
 (shared item with a daily window, split units, a low-stock consumable, an
 untracked supply, an approval queue, the overdue banner) is on screen without
 anyone hand-building an inventory first. Dates are relative to today, so it never
@@ -292,7 +306,8 @@ All deletions are logged in the DeleteLog tab with timestamp, details, and who d
 - **Inventory**: Add/edit items with serial numbers, label IDs (`PREFIX-NNN`, counted per category; split units add `-NN`), image upload (camera/file/URL), customizable categories (admin only); mark items as Shared (multi-user checkout) or Consumable (qty deduction without checkout). Consumables get no label ID — nothing is stickered — and a supply can be added with no quantity at all, which swaps its Use button for Notify: one click tells whoever restocks that it is running low
 - **Order Requests**: Submit orders (store, item, link, qty, price, etc.); only the requester or an admin can edit; admins can change status (Pending/Approved/Ordered/Received/Rejected); "Mark Received" opens a staging form to set location/label/serial before adding to inventory; generate copy-pasteable email text with per-item totals and grand total
 - **Usage Tracking**: Check out/return items with overdue alerts and bulk return; only the checkout creator, listed group members, or admins can return an item; consumables use a "Use" button instead of checkout
-- **Overdue banner**: anything past its return date raises a red banner at the top of every tab on sign-in — yours if you are a member, the lab's if you are an admin. Dismissing it lasts until the next reload; the header chip stays either way
+- **Overdue banner**: anything past its return date raises a red banner at the top of every tab on sign-in. A member sees only their own, and the wording says so ("You have 1 overdue item"); an admin sees the lab's ("1 item overdue in the lab"). Dismissing it lasts until the next reload; the header chip stays either way
+- **Low stock is an admin signal**: the running list — banner and header chip — shows only to admins, because restocking is their job and a banner you cannot act on is noise. Members still get the Low Stock badge on the card, and the Notify button on untracked supplies, which is how they say something is running out
 - **Group Checkout**: When checking out, optionally list teammates' emails as group members — they can then return the item too
 - **Booking rules**: shared items are booked by the hour and long holds need an admin — see below
 - **Calendar**: Month and week views. A booking draws as a **span across every day it covers**, not two marks at its ends, coloured by what it is — blue in use, amber awaiting approval, red overdue, grey returned. A daily window (`13:00–16:00`) renders as a block at those hours on **every** day of the hold; an all-day multi-day hold goes in the week view's all-day strip instead, the way a calendar normally splits them. Active holds are visible to everyone; **pending requests only to the person who asked and to admins**, since an undecided request is nobody else's business yet

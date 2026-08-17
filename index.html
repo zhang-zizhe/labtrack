@@ -196,6 +196,16 @@ const APP_CONFIG = {
 // Dev mode bypasses sign-in entirely — see the note in LAB_CONFIG.
 const DEV_MODE = !!LAB.dev_key;
 // Tokens that MSAL knows nothing about, so it must not be asked to renew them.
+// Three preview identities. Two members rather than one, because half of what the
+// app does is decide whose thing something is — your request, your overdue item —
+// and a single member login can only ever show you one side of that.
+const PREVIEW_USERS = [
+  { role:"member", name:"Member One", email:"member1@preview" },
+  { role:"member", name:"Member Two", email:"member2@preview" },
+  { role:"admin",  name:"Admin",      email:"admin@preview"   },
+];
+const [M1,M2,ADM] = PREVIEW_USERS;
+
 // ─── PREVIEW DEMO DATA ────────────────────────────────────────────────────────
 // Preview mode starts empty, which means anyone poking at the UI has to hand-build
 // an inventory before they can see a checkout, a queue or an overdue row at all.
@@ -209,35 +219,36 @@ const demoData = () => {
     img:"",desc:"",status:"Available",usedBy:[],serial:"",displayId:label,shared,consumable:false,...x});
   const co=(id,itemId,item,user,out,ret,status,email,f,t)=>({id,itemId,item,user,out,ret,status,
     checkedOutByEmail:email,groupEmails:"",qty:1,fromTime:f||"",toTime:t||""});
-  const ME="local@preview", THEM="teammate@jh.edu";
+
   return {
     items:[
-      it("d-s1","Tektronix Oscilloscope","Compute & Electronics",true,"CE-001",{usedBy:["Ann Lee"]}),
-      it("d-p1","Franka Panda Arm","Robots & Motors",false,"RM-001",{status:"In Use",usedBy:["Bob Chen"]}),
-      it("d-p2","UR5e Arm","Robots & Motors",false,"RM-002",{status:"In Use",usedBy:["Zizhe Zhang"]}),
+      it("d-s1","Tektronix Oscilloscope","Compute & Electronics",true,"CE-001",{usedBy:[M2.name]}),
+      it("d-p1","Franka Panda Arm","Robots & Motors",false,"RM-001",{status:"In Use",usedBy:[M2.name]}),
+      it("d-p2","UR5e Arm","Robots & Motors",false,"RM-002",{status:"In Use",usedBy:[M1.name]}),
       it("d-v1","RealSense D435","Sensors & Vision",false,"SV-001-01",{serial:"SN-9001"}),
       it("d-v2","RealSense D435","Sensors & Vision",false,"SV-001-02",{serial:"SN-9002"}),
       it("d-c1","Zip Ties","Consumables & Supplies",false,"",{qty:"",consumable:true}),
       it("d-c2","Nitrile Gloves","Consumables & Supplies",false,"",{qty:2,minQty:5,consumable:true,unit:"boxes"}),
     ],
     deliveries:[{id:"d-d1",item:"Jetson Orin Nano",qty:2,unit:"units",from:"Arrow",
-                 receivedBy:"Zizhe Zhang",date:D(2),tracking:"1Z999AA10123456784",status:"Logged"}],
+                 receivedBy:ADM.name,date:D(2),tracking:"1Z999AA10123456784",status:"Logged"}],
     checkouts:[
       // a shared item booked for the same hours each day
-      co("d-a1","d-s1","Tektronix Oscilloscope","Ann Lee",D(-1,"09:00"),D(4,"12:00"),"Active",THEM,"09:00","12:00"),
+      co("d-a1","d-s1","Tektronix Oscilloscope",M2.name,D(-1,"09:00"),D(4,"12:00"),"Active",M2.email,"09:00","12:00"),
       // a plain multi-day hold
-      co("d-a2","d-p1","Franka Panda Arm","Bob Chen",D(0,"10:00"),D(3,"17:00"),"Active",THEM),
-      // yours, and late — this is what puts the red banner at the top of the page
-      co("d-od","d-p2","UR5e Arm","Zizhe Zhang",D(-9,"09:00"),D(-2,"17:00"),"Active",ME),
-      // two people queuing for the same afternoon slot; one of them is you
-      co("d-r1","d-s1","Tektronix Oscilloscope","Zizhe Zhang",D(6,"09:00"),D(25,"09:00"),"Pending Approval",ME,"13:00","16:00"),
-      co("d-r2","d-s1","Tektronix Oscilloscope","Cara Diaz",D(8,"09:00"),D(27,"09:00"),"Pending Approval",THEM,"13:00","16:00"),
+      co("d-a2","d-p1","Franka Panda Arm",M2.name,D(0,"10:00"),D(3,"17:00"),"Active",M2.email),
+      // Member One's, and late. Sign in as them and the red banner says "you";
+      // sign in as anyone else and it is the lab's problem, not theirs.
+      co("d-od","d-p2","UR5e Arm",M1.name,D(-9,"09:00"),D(-2,"17:00"),"Active",M1.email),
+      // one member on each side of a contested afternoon slot
+      co("d-r1","d-s1","Tektronix Oscilloscope",M1.name,D(6,"09:00"),D(25,"09:00"),"Pending Approval",M1.email,"13:00","16:00"),
+      co("d-r2","d-s1","Tektronix Oscilloscope",M2.name,D(8,"09:00"),D(27,"09:00"),"Pending Approval",M2.email,"13:00","16:00"),
       // history, so the calendar has something grey in it
-      co("d-h1","d-v1","RealSense D435","Ann Lee",D(-20,"09:00"),D(-18,"17:00"),"Returned",THEM),
+      co("d-h1","d-v1","RealSense D435",M1.name,D(-20,"09:00"),D(-18,"17:00"),"Returned",M1.email),
     ],
     orders:[{id:"d-o1",store:"Amazon",item:"M3 socket screws (100pk)",link:"https://a.co/d/xyz",qty:2,
-             unit:"box",price:"$14.99",cat:"Tools & Hardware",requestedBy:"Zizhe Zhang",reason:"restock",
-             urgency:"High",date:D(-1),status:"Pending",requestedByEmail:ME}],
+             unit:"box",price:"$14.99",cat:"Tools & Hardware",requestedBy:M2.name,reason:"restock",
+             urgency:"High",date:D(-1),status:"Pending",requestedByEmail:M2.email}],
   };
 };
 
@@ -2293,21 +2304,24 @@ const LoginPage = ({onSignIn}) => {
           <div style={{display:"flex",alignItems:"center",gap:10,margin:"26px 0 14px",color:"var(--dim)",fontSize:11}}>
             <div style={{flex:1,height:1,background:"var(--border)"}}/>OR<div style={{flex:1,height:1,background:"var(--border)"}}/>
           </div>
-          {/* Two entries, because the roles differ in what the interface even
-              offers — deleting, categories, order status. One button meant
-              picking a side and then wondering where the other half went. */}
-          <div style={{display:"flex",gap:8,width:300,margin:"0 auto"}}>
-            {[["member","Preview as member"],["admin","Preview as admin"]].map(([role,label])=>(
-              <button key={role} onClick={()=>onSignIn({token:"local",role,
-                  name:role==="admin"?"Admin Preview":"Member Preview",email:"local@preview"})}
-                style={{flex:1,padding:"9px 12px",borderRadius:999,background:"transparent",color:"var(--sub)",
+          {/* Three entries, and they are three different *people*, not just two
+              roles. The roles differ in what the interface offers at all
+              (deleting, categories, order status); the two members differ in what
+              is theirs — whose request, whose overdue item — which is the half a
+              single member login could never show. The sample data is written
+              around these three names. */}
+          <div style={{display:"flex",gap:8,width:340,margin:"0 auto"}}>
+            {PREVIEW_USERS.map(u=>(
+              <button key={u.email} onClick={()=>onSignIn({token:"local",role:u.role,name:u.name,email:u.email})}
+                style={{flex:1,padding:"9px 6px",borderRadius:999,background:"transparent",color:"var(--sub)",
                         border:"1px solid var(--border)",fontFamily:"'Outfit',sans-serif",fontSize:12.5,fontWeight:500,cursor:"pointer"}}>
-                {label}
+                {u.name}
               </button>
             ))}
           </div>
           <p style={{color:"var(--dim)",fontSize:11,marginTop:8,lineHeight:1.5}}>
-            Explore the interface with sample data stored only in this browser. Nothing is saved to the lab.
+            Explore the interface with sample data stored only in this browser. Nothing is saved to the lab.<br/>
+            The two members hold different items, so "yours" and "someone else's" look different.
           </p>
         </div>
       </div>
@@ -3165,7 +3179,10 @@ function LabInventory(){
               <Ico n="clock" s={13} col="var(--red)"/>{overdues.length} overdue
             </div>
           )}
-          {lowStock.length>0&&(
+          {/* Same reasoning as the banner: purchasing is an admin's job. The
+              overdue chip beside it stays for everyone — a member may well be the
+              one holding the late item, and either way it is the lab's problem. */}
+          {lowStock.length>0&&effectiveRole==="admin"&&(
             <div style={{display:"flex",alignItems:"center",gap:6,background:"var(--amber-d)",border:"1px solid color-mix(in srgb, var(--amber) 38%, transparent)",borderRadius:20,padding:"5px 12px",fontSize:12,color:"var(--amber)"}}>
               <Ico n="alert" s={13} col="var(--amber)"/>{lowStock.length} low stock
             </div>
@@ -3337,7 +3354,11 @@ function LabInventory(){
         {/* Alert banners */}
         {/* Overdues used to get a strip here too. The page-top banner says the same
             thing on every tab, and the header chip stays after it is dismissed. */}
-        {lowStock.length>0&&(
+        {/* Restocking is an admin's job, so the running list is an admin's banner.
+            A member still sees the Low Stock badge on the card itself, and the
+            Notify button on untracked supplies — which is their way of saying
+            something is running out. A banner they cannot act on is just noise. */}
+        {lowStock.length>0&&effectiveRole==="admin"&&(
           <div style={{background:"var(--amber-d)",border:"1px solid color-mix(in srgb, var(--amber) 30%, transparent)",borderRadius:10,padding:"10px 16px",marginBottom:24,display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
             <Ico n="alert" s={15} col="var(--amber)"/>
             <span style={{color:"var(--amber)",fontSize:13,fontWeight:600}}>Low stock:</span>
