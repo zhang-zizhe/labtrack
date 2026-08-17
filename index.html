@@ -635,28 +635,67 @@ const CopyIdBadge = ({id}) => {
 };
 
 // ─── LABEL MODAL ──────────────────────────────────────────────────────────────
+// Every unit gets its own sticker, so every unit gets its own line. Showing one
+// ID and a "01 → 03" range underneath meant the copy button handed over a single
+// label for three physical things — you had to type the other two by hand.
 const LabelModal = ({item,onClose,onAddAnother}) => {
-  const [copied,setCopied]=useState(false);
-  const copy=async()=>{try{await navigator.clipboard.writeText(item.displayId);}catch(e){}setCopied(true);setTimeout(()=>setCopied(false),2500);};
+  const ids = item.ids && item.ids.length ? item.ids : (item.displayId ? [item.displayId] : []);
+  const many = ids.length > 1;
+  const [copied,setCopied]=useState("");   // "" | "all" | one id
+  const copyText=async(text,tag)=>{
+    try{await navigator.clipboard.writeText(text);}catch(e){}
+    setCopied(tag); setTimeout(()=>setCopied(c=>c===tag?"":c),2500);
+  };
+  const mono={fontFamily:"'IBM Plex Mono',monospace"};
   return(
-    <Modal onClose={onClose} title={false} mw={380}>
+    <Modal onClose={onClose} title={false} mw={many?440:380}>
       <div style={{textAlign:"center",padding:"24px 8px 8px"}}>
         <div style={{width:52,height:52,borderRadius:"50%",background:"var(--green-d)",border:"2px solid var(--green)",display:"flex",alignItems:"center",justifyContent:"center",margin:"0 auto 16px"}}>
           <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--green)" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>
         </div>
-        <div style={{fontSize:11,fontWeight:800,letterSpacing:"0.12em",color:"var(--green)",textTransform:"uppercase",marginBottom:8}}>Item Added</div>
-        <div style={{fontSize:17,fontWeight:700,color:"var(--text)",marginBottom:24,lineHeight:1.3}}>{item.name}</div>
-        <div onClick={copy} style={{background:"var(--bg2)",border:`2px solid ${copied?"var(--green)":"var(--cyan)"}`,borderRadius:14,padding:"24px 16px",cursor:"pointer",marginBottom:24,transition:"border-color .2s",userSelect:"none"}}>
-          <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:36,fontWeight:900,letterSpacing:"0.06em",color:copied?"var(--green)":"var(--cyan)",lineHeight:1}}>{item.displayId}</div>
-          {item.count>1&&<div style={{marginTop:10,fontSize:12,color:"var(--dim)",fontFamily:"'IBM Plex Mono',monospace"}}>{subIdOf(item.baseId,1)} → {subIdOf(item.baseId,item.count)}</div>}
-          <div style={{marginTop:10,fontSize:12,color:copied?"var(--green)":"var(--dim)",fontWeight:copied?700:400}}>{copied?"✓ Copied to clipboard!":"tap to copy"}</div>
+        <div style={{fontSize:11,fontWeight:800,letterSpacing:"0.12em",color:"var(--green)",textTransform:"uppercase",marginBottom:8}}>
+          {many?`${ids.length} Units Added`:"Item Added"}
         </div>
+        <div style={{fontSize:17,fontWeight:700,color:"var(--text)",marginBottom:20,lineHeight:1.3}}>{item.name}</div>
+
+        {many?(
+          <>
+            <div style={{background:"var(--bg2)",border:"1px solid var(--border)",borderRadius:14,padding:8,marginBottom:12,maxHeight:260,overflowY:"auto"}}>
+              {ids.map(id=>{
+                const on=copied===id;
+                return(
+                  <div key={id} onClick={()=>copyText(id,id)} className="row-hover"
+                    style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,
+                            padding:"10px 13px",borderRadius:9,cursor:"pointer",userSelect:"none",
+                            border:`1px solid ${on?"var(--green)":"transparent"}`,transition:"border-color .15s"}}>
+                    <span style={{...mono,fontSize:19,fontWeight:800,letterSpacing:"0.04em",color:on?"var(--green)":"var(--cyan)"}}>{id}</span>
+                    <span style={{fontSize:11,color:on?"var(--green)":"var(--dim)",fontWeight:on?700:400,whiteSpace:"nowrap"}}>
+                      {on?"✓ copied":"tap to copy"}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+            <div style={{marginBottom:20}}>
+              <Btn v={copied==="all"?"success":"ghost"} onClick={()=>copyText(ids.join("\n"),"all")}>
+                <Ico n="copy" s={13} col={copied==="all"?"var(--green)":"currentColor"}/>
+                {copied==="all"?`✓ All ${ids.length} copied`:`Copy all ${ids.length}`}
+              </Btn>
+            </div>
+          </>
+        ):(
+          <div onClick={()=>copyText(ids[0],ids[0])} style={{background:"var(--bg2)",border:`2px solid ${copied?"var(--green)":"var(--cyan)"}`,borderRadius:14,padding:"24px 16px",cursor:"pointer",marginBottom:24,transition:"border-color .2s",userSelect:"none"}}>
+            <div style={{...mono,fontSize:36,fontWeight:900,letterSpacing:"0.06em",color:copied?"var(--green)":"var(--cyan)",lineHeight:1}}>{ids[0]}</div>
+            <div style={{marginTop:10,fontSize:12,color:copied?"var(--green)":"var(--dim)",fontWeight:copied?700:400}}>{copied?"✓ Copied to clipboard!":"tap to copy"}</div>
+          </div>
+        )}
+
         <div style={{background:"var(--bg3)",border:"1px solid var(--border)",borderRadius:8,padding:"9px 14px",marginBottom:20,fontSize:12,color:"var(--sub)",lineHeight:1.5}}>
-          ✏️ Write or tape this ID on the physical item before pressing Done.
+          ✏️ Write or tape {many?"each ID on its own unit":"this ID on the physical item"} before pressing Done.
         </div>
-        <div style={{display:"flex",gap:10,justifyContent:"center"}}>
+        <div style={{display:"flex",gap:10,justifyContent:"center",flexWrap:"wrap"}}>
           <Btn v="ghost" onClick={onAddAnother}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{marginRight:4}}><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>Add Another</Btn>
-          <Btn onClick={onClose}>Done — item is labeled</Btn>
+          <Btn onClick={onClose}>Done — {many?"units are":"item is"} labeled</Btn>
         </div>
       </div>
     </Modal>
@@ -1192,12 +1231,16 @@ const AddItemModal = ({onClose,onAdd,categories,allItems,onShowLabel}) => {
           serial:String(units[u]?.serial||"").trim(),
           loc:u===0?base.loc:(String(units[u]?.loc||"").trim()||base.loc),   // unit 1 is the form above
           displayId:subIdOf(displayId,u+1)})));
-        const firstId=results[0]; // server-confirmed ID of first unit
-        if(firstId&&onShowLabel) onShowLabel({name:base.name,displayId:firstId,baseId:getBaseId(firstId),count:results.filter(Boolean).length});
+        // Every unit gets its own sticker, so the label screen needs every ID —
+        // and the server-confirmed ones, not a range recomputed from the first.
+        // A unit that failed to save has no ID and must not appear as a sticker
+        // to write, which is why this filters rather than counting.
+        const ids=results.filter(Boolean);
+        if(ids.length&&onShowLabel) onShowLabel({name:base.name,ids});
       } else {
         const finalId=await onAdd({...base,id:uid(),qty:f.untracked?"":n,displayId:f.consumable?"":displayId});
         // A consumable has no sticker to print, so skip the label screen.
-        if(finalId&&onShowLabel&&!f.consumable) onShowLabel({name:base.name,displayId:finalId,count:1});
+        if(finalId&&onShowLabel&&!f.consumable) onShowLabel({name:base.name,ids:[finalId]});
       }
     } finally {
       setSubmitting(false);
