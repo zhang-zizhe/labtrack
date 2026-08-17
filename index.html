@@ -864,6 +864,33 @@ const DeliveryModal = ({onClose,onAdd,userName=""}) => {
   );
 };
 
+// ─── PER-UNIT FIELDS FOR A SPLIT ─────────────────────────────────────────────
+// Unit 1 is the form above, not a separate thing — so its location is shown but
+// not editable. Two inputs for one value is how they end up disagreeing, and it
+// left the top Location field looking like it applied to nothing in particular.
+// The rest inherit it unless overridden, which is what makes identical units
+// free to skip.
+const SplitUnitFields = ({n, baseId, units, setUnits, baseLoc}) => {
+  const patch=(i,k)=>e=>{const a=[...units];a[i]={...(a[i]||{}),[k]:e.target.value};setUnits(a);};
+  return(
+    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(230px,1fr))",gap:8}}>
+      {Array.from({length:n},(_,i)=>(
+        <div key={i} style={{background:"var(--bg1)",border:"1px solid var(--border)",borderRadius:8,padding:"8px 10px"}}>
+          <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:11,fontWeight:700,color:"var(--cyan)",letterSpacing:"0.05em",marginBottom:6}}>{subIdOf(baseId,i+1)}</div>
+          <Fld label="Serial/Product No.">
+            <Inp placeholder="e.g. SN-001" value={units[i]?.serial||""} onChange={patch(i,"serial")}/>
+          </Fld>
+          <Fld label="Location" hint={i===0?"set in the form above":undefined}>
+            {i===0
+              ? <Inp value={baseLoc||"—"} disabled style={{color:"var(--dim)",cursor:"not-allowed"}}/>
+              : <Inp placeholder={baseLoc||"same as above"} value={units[i]?.loc||""} onChange={patch(i,"loc")}/>}
+          </Fld>
+        </div>
+      ))}
+    </div>
+  );
+};
+
 // ─── USE A CONSUMABLE ────────────────────────────────────────────────────────
 // Replaces a window.prompt(). A native dialog can't be styled or validated, gives
 // no sense of what's left, and blocks the page while it is open.
@@ -954,7 +981,7 @@ const AddItemModal = ({onClose,onAdd,categories,allItems,onShowLabel}) => {
         // extra forms cheap to skip when the units really are identical.
         const results=await Promise.all(Array.from({length:n},(_,u)=>onAdd({...base,id:uid(),qty:1,
           serial:String(units[u]?.serial||"").trim(),
-          loc:String(units[u]?.loc||"").trim()||base.loc,
+          loc:u===0?base.loc:(String(units[u]?.loc||"").trim()||base.loc),   // unit 1 is the form above
           displayId:subIdOf(displayId,u+1)})));
         const firstId=results[0]; // server-confirmed ID of first unit
         if(firstId&&onShowLabel) onShowLabel({name:base.name,displayId:firstId,baseId:getBaseId(firstId),count:results.filter(Boolean).length});
@@ -1041,19 +1068,7 @@ const AddItemModal = ({onClose,onAdd,categories,allItems,onShowLabel}) => {
                   {n>3?` … ${subIdOf(displayId,n)}`:""}<br/>
                   Leave a field blank to use the value from the form above.
                 </div>
-                <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(230px,1fr))",gap:8}}>
-                  {Array.from({length:n},(_,i)=>(
-                    <div key={i} style={{background:"var(--bg1)",border:"1px solid var(--border)",borderRadius:8,padding:"8px 10px"}}>
-                      <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:11,fontWeight:700,color:"var(--cyan)",letterSpacing:"0.05em",marginBottom:6}}>{subIdOf(displayId,i+1)}</div>
-                      <Fld label="Serial/Product No.">
-                        <Inp placeholder="e.g. SN-001" value={units[i]?.serial||""} onChange={e=>{const a=[...units];a[i]={...(a[i]||{}),serial:e.target.value};setUnits(a);}}/>
-                      </Fld>
-                      <Fld label="Location">
-                        <Inp placeholder={f.loc||"same as above"} value={units[i]?.loc||""} onChange={e=>{const a=[...units];a[i]={...(a[i]||{}),loc:e.target.value};setUnits(a);}}/>
-                      </Fld>
-                    </div>
-                  ))}
-                </div>
+                <SplitUnitFields n={n} baseId={displayId} units={units} setUnits={setUnits} baseLoc={f.loc}/>
               </div>
             )}
           </div>
@@ -1078,16 +1093,27 @@ const EditItemModal = ({item,onClose,onSave,onDelete,onAdd,categories,isAdmin}) 
   const chk=k=>e=>{setF(p=>({...p,[k]:e.target.checked}));setChanged(true);};
   const onCatChange=e=>{setChanged(true);const nc=e.target.value;setF(p=>{const np=catPrefix(nc);const d=parseDisplayId(p.displayId);return{...p,cat:nc,displayId:d?(d.sub!==null?subIdOf(mainId(np,d.num),d.sub):mainId(np,d.num)):p.displayId};});};
   const [confirmDel,setConfirmDel]=useState(false);
-  const [splitConfirm,setSplitConfirm]=useState(false);
+  // Same opt-out shape as Add: raising the quantity of something trackable means
+  // that many tracked units, here as much as there.
+  const [splitOff,setSplitOff]=useState(false);
+  const [units,setUnits]=useState([]);
   const CHKBOX=(label,key)=><label style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer",fontSize:13,color:"var(--sub)"}}><input type="checkbox" checked={f[key]} onChange={chk(key)} style={{accentColor:"var(--cyan)",width:14,height:14}}/>{label}</label>;
   const n=+f.qty||0;
-  const canSplit=n>1&&!isConsumableCat(f.cat);
+  const canSplit=n>1&&!isConsumableCat(f.cat)&&!isSubItem(f.displayId);
+  const splitUnits=canSplit&&!splitOff;
   const baseId=getBaseId(f.displayId);
+  useEffect(()=>{
+    if(splitUnits&&n>0) setUnits(u=>Array.from({length:n},(_,i)=>u[i]||{serial:"",loc:""}));
+  },[n,splitUnits]);
+
   const handleSplit=()=>{
     const base={...item,...f,minQty:isNaN(+f.minQty)?0:+f.minQty,
       shared:isConsumableCat(f.cat)?false:!!f.shared, consumable:isConsumableCat(f.cat)?!!f.consumable:false};
-    onSave({...base,qty:1,displayId:subIdOf(baseId,1)});
-    for(let u=2;u<=n;u++) onAdd({...base,id:uid(),qty:1,status:"Available",usedBy:[],displayId:subIdOf(baseId,u)});
+    onSave({...base,qty:1,displayId:subIdOf(baseId,1),serial:String(units[0]?.serial||f.serial||"").trim()});
+    for(let u=2;u<=n;u++) onAdd({...base,id:uid(),qty:1,status:"Available",usedBy:[],
+      serial:String(units[u-1]?.serial||"").trim(),
+      loc:String(units[u-1]?.loc||"").trim()||base.loc,
+      displayId:subIdOf(baseId,u)});
     onClose();
   };
   return(
@@ -1110,19 +1136,17 @@ const EditItemModal = ({item,onClose,onSave,onDelete,onAdd,categories,isAdmin}) 
         <div style={{gridColumn:"1/-1",display:"flex",gap:20,flexWrap:"wrap",padding:"4px 0"}}>{isConsumableCat(f.cat)?(<>{CHKBOX("Consumable — deduct qty, no checkout needed","consumable")}<label style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer",fontSize:13,color:"var(--sub)"}}><input type="checkbox" checked={!!f.untracked} onChange={e=>{const on=e.target.checked;setF(p=>({...p,untracked:on,consumable:on?true:p.consumable,qty:on?"":p.qty}));}} style={{accentColor:"var(--cyan)",width:14,height:14}}/>Quantity not tracked — just notify when it runs low</label></>):CHKBOX("Shared — multiple users simultaneously","shared")}</div>
         {canSplit&&(
           <div style={{gridColumn:"1/-1",background:"var(--cyan-d)",border:"1px solid var(--cyan-m)",borderRadius:8,padding:"10px 14px"}}>
-            {!splitConfirm?(
-              <button onClick={()=>setSplitConfirm(true)} style={{background:"none",border:"none",color:"var(--cyan)",fontSize:13,cursor:"pointer",padding:0,textAlign:"left"}}>
-                <Ico n="layers" s={12} col="var(--cyan)"/> Split into {n} individual units ({subIdOf(baseId,1)} … {subIdOf(baseId,n)})
-              </button>
-            ):(
-              <div>
-                <div style={{fontSize:12,color:"var(--sub)",marginBottom:8}}>
-                  Creates {n} items: <span style={{fontFamily:"'IBM Plex Mono',monospace"}}>{subIdOf(baseId,1)}</span> → <span style={{fontFamily:"'IBM Plex Mono',monospace"}}>{subIdOf(baseId,n)}</span>. This item becomes <span style={{fontFamily:"'IBM Plex Mono',monospace"}}>{subIdOf(baseId,1)}</span> with qty 1.
+            <label style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer",fontSize:13,color:"var(--cyan)"}}>
+              <input type="checkbox" checked={splitUnits} onChange={e=>setSplitOff(!e.target.checked)} style={{accentColor:"var(--cyan)",width:14,height:14}}/>
+              <strong>Track each unit individually</strong><span style={{color:"var(--sub)",fontWeight:400}}> — {n} separate labels, statuses and checkout histories</span>
+            </label>
+            {splitUnits&&(
+              <div style={{marginTop:10}}>
+                <div style={{fontSize:11,color:"var(--sub)",fontFamily:"'IBM Plex Mono',monospace",marginBottom:8,lineHeight:1.6}}>
+                  This item becomes {subIdOf(baseId,1)}; {n-1} more {n-1===1?"is":"are"} created, through {subIdOf(baseId,n)}.<br/>
+                  Leave a field blank to use the value from the form above.
                 </div>
-                <div style={{display:"flex",gap:8}}>
-                  <Btn sm onClick={handleSplit}><Ico n="check" s={12} col="var(--on-accent)"/>Confirm Split</Btn>
-                  <Btn v="ghost" sm onClick={()=>setSplitConfirm(false)}>Cancel</Btn>
-                </div>
+                <SplitUnitFields n={n} baseId={baseId} units={units} setUnits={setUnits} baseLoc={f.loc}/>
               </div>
             )}
           </div>
@@ -1152,13 +1176,13 @@ const EditItemModal = ({item,onClose,onSave,onDelete,onAdd,categories,isAdmin}) 
               untouched form can no longer re-assert a stale lifecycle value.
               handleUpdateItem and the backend both merge by key, so omitted
               fields keep whatever the current value is. */}
-          <Btn onClick={()=>{if(f.name&&f.qty){
+          <Btn onClick={()=>{if(!f.name)return; if(splitUnits){handleSplit();return;} if(f.qty||f.untracked){
             const patch={id:item.id,name:f.name,cat:f.cat,unit:f.unit,loc:f.loc,desc:f.desc,img:f.img,serial:f.serial,
                          qty:f.untracked?"":+f.qty,minQty:isNaN(+f.minQty)?0:+f.minQty,displayId:f.consumable?"":f.displayId,
                          shared:isConsumableCat(f.cat)?false:!!f.shared, consumable:isConsumableCat(f.cat)?!!f.consumable:false};
             if(f.status!==item.status) patch.status=f.status;
             onSave(patch);onClose();
-          }}} disabled={!f.name||(!f.untracked&&!f.qty)}><Ico n="check" s={14} col="var(--on-accent)"/>Save Changes</Btn>
+          }}} disabled={!f.name||(!f.untracked&&!f.qty)}><Ico n={splitUnits?"layers":"check"} s={14} col="var(--on-accent)"/>{splitUnits?`Split into ${n} units`:"Save Changes"}</Btn>
         </div>
       </div>
     </Modal>
