@@ -498,6 +498,29 @@ python3 -m http.server 8000     # then open http://localhost:8000/index.html
 
 `http://localhost:8000/` is already a registered redirect URI.
 
+### Session logs
+
+Design decisions that never made it into a commit message — why SharePoint over
+Excel, why Power Automate is out, what the JHU tenant does and does not allow —
+live in the chat logs at the repo root:
+
+| | |
+|---|---|
+| `chat-log-2026-08-15-entra-auth-migration.txt` | replacing Google Sign-In with Entra; Graph permission GUIDs in §16 |
+| `chat-log-2026-08-17-booking-rules-and-calendar.md` | booking rules, the approval queue, the calendar rewrite, the backend-migration analysis |
+
+The `.md` one is generated from the Claude Code session transcript:
+
+```bash
+node transcript-to-md.js ~/.claude/projects/-Users-zizhe-labtrack/<session-id>.jsonl out.md
+#   --thinking      keep the reasoning blocks
+#   --full-output   stop clipping tool results
+```
+
+Tool output is clipped and screenshots dropped by default — the raw transcript is
+22 MB and mostly base64. **Git history is the authoritative record of what
+changed**; these are only the record of *why*.
+
 ### Tests
 
 ```bash
