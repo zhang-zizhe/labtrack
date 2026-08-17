@@ -357,6 +357,27 @@ const Badge = ({status}) => {
   const c = STATUS_C[status]||STATUS_C["Available"];
   return <span style={{background:c.bg,color:c.t,border:`1px solid ${c.b}`,padding:"2px 9px",borderRadius:20,fontSize:10,fontWeight:700,letterSpacing:"0.08em",textTransform:"uppercase",fontFamily:"'IBM Plex Mono',monospace",whiteSpace:"nowrap"}}>{status}</span>;
 };
+
+// The card's two corner tags. They carry different meanings but there is no
+// reason for them to be different shapes — a pill on the right and a rounded
+// rectangle on the left, at different sizes, read as two unrelated things
+// stuck on the same image. One chip, stacked and left-aligned, reads as a pair.
+// Badge keeps its pill for the tables and dialogs, where it appears alone.
+const CardTag = ({text, color, bg, border}) => (
+  <span style={{background:bg,border:`1px solid ${border}`,borderRadius:7,
+                padding:"3px calc(8px - 0.08em) 3px 8px",maxWidth:"100%",
+                color,fontSize:9,fontWeight:700,fontFamily:"'IBM Plex Mono',monospace",letterSpacing:"0.08em",
+                textTransform:"uppercase",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{text}</span>
+);
+const CardTags = ({cat, catColor, status}) => {
+  const sc = STATUS_C[status]||STATUS_C["Available"];
+  return (
+    <div style={{position:"absolute",top:10,left:10,right:10,display:"flex",flexDirection:"column",alignItems:"flex-start",gap:5}}>
+      <CardTag text={cat||""} color={catColor} bg="color-mix(in srgb, var(--bg1) 82%, transparent)" border="var(--border)"/>
+      <CardTag text={status} color={sc.t} bg={sc.bg} border={sc.b}/>
+    </div>
+  );
+};
 const MemberAvatar = ({name,sz=32}) => {
   if (!name || typeof name !== "string") return null;
   const hue = name.split("").reduce((a,c)=>a+c.charCodeAt(0),0)%360;
@@ -370,9 +391,11 @@ const MemberAvatar = ({name,sz=32}) => {
 const ItemImage = ({src, cat, style}) => (
   src
     ? <img src={src} alt={cat||""} style={{objectFit:"cover",display:"block",...style}}/>
-    : <div style={{display:"flex",alignItems:"center",justifyContent:"center",background:"var(--bg2)",
+    // Bottom-right: the corner tags own the top-left of this area, and now that
+    // they stack two deep a centred label sat right underneath them.
+    : <div style={{display:"flex",alignItems:"flex-end",justifyContent:"flex-end",background:"var(--bg2)",
                    color:"var(--dim)",fontSize:10,fontWeight:700,fontFamily:"'IBM Plex Mono',monospace",
-                   letterSpacing:"0.08em",textTransform:"uppercase",textAlign:"center",padding:"0 12px",
+                   letterSpacing:"0.08em",textTransform:"uppercase",padding:"0 11px 9px 0",
                    overflow:"hidden",...style}}>No photo</div>
 );
 const Inp = ({style,...p}) => (
@@ -2792,18 +2815,7 @@ function LabInventory(){
                         <div style={{position:"relative"}}>
                           <ItemImage src={item.img} cat={item.cat} style={{width:"100%",height:112}}/>
                           <div style={{position:"absolute",bottom:0,left:0,right:0,height:44,background:"linear-gradient(transparent,var(--bg1))"}}/>
-                          {/* One flex row rather than two independently-anchored corners: a long
-                              status ("PARTIALLY IN USE") used to grow leftward straight over the
-                              category tag. The category truncates instead, and the trailing
-                              letter-space is subtracted from the right padding so the chip is not
-                              visibly heavier on that side. */}
-                          <div style={{position:"absolute",top:10,left:10,right:10,display:"flex",alignItems:"flex-start",justifyContent:"space-between",gap:8}}>
-                            <span style={{background:"color-mix(in srgb, var(--bg1) 82%, transparent)",border:"1px solid var(--border)",borderRadius:7,
-                                          padding:"3px calc(8px - 0.08em) 3px 8px",minWidth:0,
-                                          color:ac,fontSize:9,fontWeight:700,fontFamily:"'IBM Plex Mono',monospace",letterSpacing:"0.08em",
-                                          overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{(item.cat||"").toUpperCase()}</span>
-                            <span style={{flexShrink:0}}><Badge status={item.status}/></span>
-                          </div>
+                          <CardTags cat={item.cat} catColor={ac} status={item.status}/>
                         </div>
                         <div style={{padding:"11px 14px 13px"}}>
                           <div style={{fontWeight:700,fontSize:14,color:"var(--text)",marginBottom:2,fontFamily:"'Roboto',sans-serif",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{item.name}</div>
@@ -2832,18 +2844,7 @@ function LabInventory(){
                       <div style={{position:"relative"}}>
                         <ItemImage src={item.img} cat={item.cat} style={{width:"100%",height:112}}/>
                         <div style={{position:"absolute",bottom:0,left:0,right:0,height:44,background:"linear-gradient(transparent,var(--bg1))"}}/>
-                        {/* One flex row rather than two independently-anchored corners: a long
-                            status ("PARTIALLY IN USE") used to grow leftward straight over the
-                            category tag. The category truncates instead, and the trailing
-                            letter-space is subtracted from the right padding so the chip is not
-                            visibly heavier on that side. */}
-                        <div style={{position:"absolute",top:10,left:10,right:10,display:"flex",alignItems:"flex-start",justifyContent:"space-between",gap:8}}>
-                          <span style={{background:"color-mix(in srgb, var(--bg1) 82%, transparent)",border:"1px solid var(--border)",borderRadius:7,
-                                        padding:"3px calc(8px - 0.08em) 3px 8px",minWidth:0,
-                                        color:ac,fontSize:9,fontWeight:700,fontFamily:"'IBM Plex Mono',monospace",letterSpacing:"0.08em",
-                                        overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{(item.cat||"").toUpperCase()}</span>
-                          <span style={{flexShrink:0}}><Badge status={isLow?"Low Stock":item.status}/></span>
-                        </div>
+                        <CardTags cat={item.cat} catColor={ac} status={isLow?"Low Stock":item.status}/>
                       </div>
                       <div style={{padding:"11px 14px 13px"}}>
                         <div style={{fontWeight:700,fontSize:14,color:"var(--text)",marginBottom:2,fontFamily:"'Roboto',sans-serif",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{item.name}</div>
