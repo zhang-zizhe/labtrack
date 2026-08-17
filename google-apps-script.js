@@ -5,13 +5,15 @@
  *   Extensions → Apps Script → paste this code → Deploy → Web App
  *   Execute as: Me | Who has access: Anyone
  *
- * Google Sheet must have these tabs (column order matters for write operations):
+ * Google Sheet must have these tabs — run setupNewLab() once and it creates them,
+ * and adds any column a pre-existing sheet is missing:
  *   Items      — id | name | cat | qty | unit | loc | minQty | img | desc | status | usedBy | serial | displayId | shared | consumable
  *   Deliveries — id | item | qty | unit | from | receivedBy | date | tracking | status
- *   Checkouts  — id | itemId | item | user | out | ret | status | checkedOutByEmail | groupEmails
+ *   Checkouts  — id | itemId | item | user | out | ret | status | checkedOutByEmail | groupEmails | qty
  *   Orders     — id | store | item | link | qty | unit | price | cat | requestedBy | reason | urgency | date | status | requestedByEmail
  *   Settings   — key | value
  *   DeleteLog  — date | type | name | details | deletedBy
+ *   AuditLog   — date | user | email | action | details    (auto-created)
  *   SlackQueue — time | emoji | title | details | fields  (auto-created; used by digest mode)
  *
  * TRIGGERS to set up (Extensions → Apps Script → Triggers):
@@ -221,7 +223,9 @@ function sendDailyDigest() {
   // ── Low stock ──
   if (lowStock.length > 0) {
     var lsText = lowStock.slice(0,6).map(function(i){
-      return "• *" + i.name + "* — " + i.qty + "/" + i.minQty + " " + i.unit + " (reorder needed)";
+      var out = Number(i.qty) <= 0;
+      return "• *" + i.name + "* — " + i.qty + "/" + i.minQty + " " + i.unit
+           + (out ? " (OUT OF STOCK)" : " (reorder needed)");
     }).join("\n");
     if (lowStock.length > 6) lsText += "\n_…and " + (lowStock.length-6) + " more_";
     blocks.push({ type: "section", text: { type: "mrkdwn", text: "📦 *Low Stock (" + lowStock.length + ")*\n" + lsText } });

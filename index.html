@@ -240,7 +240,19 @@ const isConsumableCat = c => String(c||"") === CONSUMABLE_CAT;
 const isUntracked = it => it && (it.qty === "" || it.qty === null || it.qty === undefined);
 // "" <= 3 is true in JavaScript, so an untracked item would read as low stock
 // forever. There is no number to compare, so it is never low — you report it by hand.
-const isLowStock = i => i && !isUntracked(i) && Number(i.minQty)>0 && Number(i.qty)<=Number(i.minQty);
+// Zero is its own state: "low" says top this up soon, "out" says there is none,
+// and reporting the second as the first is how you get someone walking to an
+// empty shelf. Low stock therefore stops at one.
+const isOutOfStock = i => i && !isUntracked(i) && Number(i.qty)<=0;
+const isLowStock = i => i && !isUntracked(i) && Number(i.qty)>0 && Number(i.minQty)>0 && Number(i.qty)<=Number(i.minQty);
+// The badge a quantity implies, if any — otherwise the item's own status.
+const stockStatus = i => isOutOfStock(i) ? "Out of Stock" : isLowStock(i) ? "Low Stock" : null;
+
+// Whether an item can be checked out at all. The picker filtered on this, but
+// Quick Check Out went straight to the modal with a pre-filled item and skipped
+// it — which is how a single non-shared arm ended up with two active checkouts.
+const canCheckOut = i => !!i && !i.consumable && i.status!=="Maintenance" && i.status!=="Broken"
+  && !(i.status==="In Use" && !i.shared);
 const ITEMS_PER_PAGE = 24;
 
 // Category tint. The category name is always rendered as text beside it, so this
@@ -263,7 +275,10 @@ const STATUS_C = {
   "In Use":     {bg:"var(--blue-d)",  t:"var(--blue)",   b:mix("--blue",35)},
   "Maintenance":{bg:"var(--amber-d)", t:"var(--amber)",  b:mix("--amber",35)},
   "Broken":     {bg:"var(--red-d)",   t:"var(--red)",    b:mix("--red",35)},
-  "Low Stock":  {bg:"var(--red-d)",   t:"var(--red)",    b:mix("--red",35)},
+  // Amber for "top this up soon", red for "there is none" — one is a reminder,
+  // the other is a wasted trip to the shelf, and they shouldn't look the same.
+  "Low Stock":    {bg:"var(--amber-d)", t:"var(--amber)", b:mix("--amber",35)},
+  "Out of Stock": {bg:"var(--red-d)",   t:"var(--red)",   b:mix("--red",35)},
   "Logged":     {bg:"var(--green-d)", t:"var(--green)",  b:mix("--green",35)},
   "Active":     {bg:"var(--blue-d)",  t:"var(--blue)",   b:mix("--blue",35)},
   "Returned":   {bg:"var(--bg4)",     t:"var(--sub)",    b:"var(--border)"},
@@ -665,7 +680,7 @@ const ItemPicker = ({items, value, onChange, categories, exclude}) => {
   const selected = items.find(i=>String(i.id)===String(value));
   // Exclude: consumables (use "Use" button), broken/maintenance, and "In Use" non-shared items
   const taken = new Set((exclude||[]).filter(Boolean).map(String));
-  const avail = items.filter(i=>!i.consumable && i.status!=="Maintenance" && i.status!=="Broken" && !(i.status==="In Use"&&!i.shared) && !taken.has(String(i.id)));
+  const avail = items.filter(i=>canCheckOut(i) && !taken.has(String(i.id)));
   const filtered = avail.filter(i=>{
     const match = i.name.toLowerCase().includes(q.toLowerCase()) || i.loc?.toLowerCase().includes(q.toLowerCase()) || i.desc?.toLowerCase().includes(q.toLowerCase());
     return match && (cat==="All" || i.cat===cat);
@@ -686,7 +701,7 @@ const ItemPicker = ({items, value, onChange, categories, exclude}) => {
             <span style={{width:8,height:8,borderRadius:"50%",background:ac,flexShrink:0}}/>
             <span style={{fontWeight:600}}>{selected.name}</span>
             <span style={{color:"var(--dim)",fontSize:12,fontFamily:"'IBM Plex Mono',monospace"}}>{selected.loc}</span>
-            <Badge status={isLowStock(selected)?"Low Stock":selected.status}/>
+            <Badge status={stockStatus(selected)||selected.status}/>
           </div>
         ):<span>Search or select an item...</span>}
         <span style={{color:"var(--dim)",fontSize:10,flexShrink:0}}>{open?"▲":"▼"}</span>
@@ -727,7 +742,7 @@ const ItemPicker = ({items, value, onChange, categories, exclude}) => {
                     <div style={{fontSize:14,fontWeight:800,fontFamily:"'Roboto',sans-serif",color:low?"var(--red)":itemAc}}>{item.qty}</div>
                     <div style={{fontSize:10,color:"var(--dim)"}}>{item.unit}</div>
                   </div>
-                  {(low||item.status==="In Use")&&<Badge status={low?"Low Stock":item.status}/>}
+                  {(low||item.status==="In Use")&&<Badge status={stockStatus(item)||item.status}/>}
                   {/* Fixed-size box, always rendered — the tick used to appear out of
                       nowhere at the end of the row and shove the qty column sideways. */}
                   <span style={{width:18,height:18,borderRadius:5,flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",
@@ -760,7 +775,7 @@ const CheckoutModal = ({items,onClose,onAdd,preItem="",userName="",userEmail="",
   // Slots carry the unit's id. preItem is an id too — a name cannot identify one
   // of several split units, which is how checking out one ended up moving them all.
   const [slots,setSlots]=useState(()=>{
-    const pre=items.find(i=>String(i.id)===String(preItem));
+    const pre=items.find(i=>String(i.id)===String(preItem)&&canCheckOut(i));
     return [{itemId:pre?pre.id:"",item:pre?pre.name:"",qty:1}];
   });
   const addSlot=()=>setSlots(p=>[...p,{itemId:"",item:"",qty:1}]);
@@ -1080,7 +1095,7 @@ const EditItemModal = ({item,onClose,onSave,onDelete,onAdd,categories,isAdmin}) 
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
         <div style={{gridColumn:"1/-1"}}><Fld label="Item Name"><Inp value={f.name} onChange={s("name")}/></Fld></div>
         <Fld label="Category"><Sel value={f.cat} onChange={onCatChange}>{categories.map(c=><option key={c}>{c}</option>)}</Sel></Fld>
-        <Fld label="Status"><Sel value={f.status} onChange={s("status")}>{["Available","In Use","Maintenance","Broken","Low Stock"].map(st=><option key={st}>{st}</option>)}</Sel></Fld>
+        <Fld label="Status"><Sel value={f.status} onChange={s("status")}>{["Available","In Use","Maintenance","Broken"].map(st=><option key={st}>{st}</option>)}</Sel></Fld>
         <Fld label="Quantity">
           {f.untracked
             ? <Inp value="Not tracked" disabled style={{color:"var(--dim)",cursor:"not-allowed"}}/>
@@ -1391,7 +1406,7 @@ const ItemDetail = ({item,checkouts,onClose,onReturn,onQuickCheckout,onUse,onNot
   const [confirmId,setConfirmId]=useState(null);
   const hist=checkouts.filter(c=>c.item===item.name);
   const ac=getCatAccent(item.cat,categories);
-  const isLow=isLowStock(item);
+  const isLow=isLowStock(item)||isOutOfStock(item);
   return(
     <>
     <Modal onClose={onClose} title="" mw={640}>
@@ -1422,7 +1437,7 @@ const ItemDetail = ({item,checkouts,onClose,onReturn,onQuickCheckout,onUse,onNot
               ? (isUntracked(item)
                   ? <Btn onClick={()=>{onClose();onNotify(item);}}><Ico n="alert" s={14} col="var(--on-accent)"/>Report Running Low</Btn>
                   : <Btn onClick={()=>{onClose();onUse(item);}}><Ico n="check" s={14} col="var(--on-accent)"/>Use</Btn>)
-              : item.status!=="Maintenance"&&<Btn onClick={()=>{onClose();onQuickCheckout(item.id);}}><Ico n="tag" s={14} col="var(--on-accent)"/>Quick Check Out</Btn>}
+              : canCheckOut(item)&&<Btn onClick={()=>{onClose();onQuickCheckout(item.id);}}><Ico n="tag" s={14} col="var(--on-accent)"/>Quick Check Out</Btn>}
             <Btn v="ghost" onClick={()=>{onClose();onEdit(item);}} disabled={editLocked} title={editLocked?"Editing is locked":"Edit item"} style={editLocked?{opacity:0.4,cursor:"not-allowed"}:{}}><Ico n={editLocked?"lock":"edit"} s={14}/>{editLocked?"Locked":"Edit"}</Btn>
           </div>
         </div>
@@ -2374,7 +2389,7 @@ function LabInventory(){
     // itemId comes from the picker now. It used to be left unset, so the column
     // sat empty and every lookup fell back to the item's name.
     const checkout={...c, checkedOutByEmail: user?.email||""};
-    setItems(prev=>prev.map(i=>isCheckoutTarget(i,checkout)?{...i,status:i.shared?"Available":"In Use",usedBy:[...toArr(i.usedBy),checkout.user]}:i));
+    setItems(prev=>prev.map(i=>isCheckoutTarget(i,checkout)?{...i,status:i.shared?"Available":"In Use",usedBy:toArr(i.usedBy).includes(checkout.user)?toArr(i.usedBy):[...toArr(i.usedBy),checkout.user]}:i));
     setCheckouts(p=>[checkout,...p]);
     addToast("success",`${checkout.item} → ${checkout.user}`);
     postAction("addCheckout", {checkout});
@@ -2916,13 +2931,13 @@ function LabInventory(){
                       </div>
                     );
                   }
-                  const isLow=isLowStock(item);
+                  const isLow=isLowStock(item)||isOutOfStock(item);
                   return(
                     <div key={item.id} className="card-item" onClick={()=>setDetail(item)} style={{background:"var(--bg1)",border:"1px solid var(--border)",borderRadius:14,overflow:"hidden",animation:`fadeUp .3s ease ${Math.min(idx,.8)*0.04}s both`}}>
                       <div style={{position:"relative"}}>
                         <ItemImage src={item.img} cat={item.cat} style={{width:"100%",height:112}}/>
                         <div style={{position:"absolute",bottom:0,left:0,right:0,height:44,background:"linear-gradient(transparent,var(--bg1))"}}/>
-                        <CardTags cat={item.cat} catColor={ac} status={isLow?"Low Stock":item.status}/>
+                        <CardTags cat={item.cat} catColor={ac} status={stockStatus(item)||item.status}/>
                       </div>
                       <div style={{padding:"11px 14px 13px"}}>
                         <div style={{fontWeight:700,fontSize:14,color:"var(--text)",marginBottom:2,fontFamily:"'Roboto',sans-serif",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{item.name}</div>
@@ -2986,10 +3001,10 @@ function LabInventory(){
                           <tr key={item.id} className="row-hover" onClick={()=>setDetail(item)} style={{borderBottom:i<paginatedItems.length-1?"1px solid var(--border)":"none",cursor:"pointer",transition:"background .15s"}}>
                             <td style={{padding:"10px 16px",color:"var(--text)",fontWeight:600}}>{item.name}</td>
                             <td style={{padding:"10px 16px"}}><span style={{color:getCatAccent(item.cat,categories),fontSize:12}}>{item.cat}</span></td>
-                            <td style={{padding:"10px 16px",fontFamily:"'IBM Plex Mono',monospace",color:isLowStock(item)?"var(--red)":"var(--text)",fontWeight:600}}>{item.qty} <span style={{color:"var(--dim)",fontWeight:400}}>{item.unit}</span></td>
+                            <td style={{padding:"10px 16px",fontFamily:"'IBM Plex Mono',monospace",color:isOutOfStock(item)?"var(--red)":isLowStock(item)?"var(--amber)":"var(--text)",fontWeight:600}}>{item.qty} <span style={{color:"var(--dim)",fontWeight:400}}>{item.unit}</span></td>
                             <td style={{padding:"10px 16px",color:"var(--sub)",fontSize:12}}>{item.loc||"—"}</td>
                             <td style={{padding:"10px 16px",color:"var(--dim)",fontSize:11,fontFamily:"'IBM Plex Mono',monospace"}}>{item.serial||"—"}</td>
-                            <td style={{padding:"10px 16px"}}><Badge status={isLowStock(item)?"Low Stock":item.status}/></td>
+                            <td style={{padding:"10px 16px"}}><Badge status={stockStatus(item)||item.status}/></td>
                             <td style={{padding:"10px 16px"}}>{toArr(item.usedBy).length>0?<div style={{display:"flex",gap:4}}>{toArr(item.usedBy).slice(0,3).map(u=><MemberAvatar key={u} name={u} sz={24}/>)}</div>:<span style={{color:"var(--dim)"}}>—</span>}</td>
                           </tr>
                         );
