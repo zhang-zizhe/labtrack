@@ -264,7 +264,7 @@ Use the `@jh.edu` UPN, not the `@jhu.edu` mail alias:
 
 **All users can**: add/edit items, check out items, log deliveries, submit order requests
 
-**Requester only** (or admin): edit their own order request
+**Requester** (or admin): edit their own order request — but only while it is still `Pending`. Once an admin approves it, editing the quantity or price would quietly change what was approved, so it becomes admin-only. Enforced in Apps Script, not just hidden in the UI
 
 **Checkout owner + group members** (or admin): return a checked-out item. Group members are listed at checkout time as comma-separated emails.
 

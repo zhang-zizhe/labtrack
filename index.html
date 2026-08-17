@@ -3170,6 +3170,10 @@ function LabInventory(){
                     const sc=statusColors[o.status]||statusColors.Pending;
                     const nextStatus={Pending:"Approved",Approved:"Ordered",Ordered:"Received"};
                     const ns=nextStatus[o.status];
+                    // The label is the action, not the state it lands in. Approving is
+                    // a decision taken now; the other two record something that already
+                    // happened, which is why only the first reads as a bare verb.
+                    const nsLabel={Approved:"Approve",Ordered:"Ordered →",Received:"Mark Received"}[ns];
                     const isSel=selectedOrders.has(String(o.id));
                     const handleOrderClick=(e)=>{
                       const id=String(o.id);
@@ -3209,13 +3213,13 @@ function LabInventory(){
                             {safeUrl(o.link)&&<a href={safeUrl(o.link)} target="_blank" rel="noopener noreferrer" onClick={e=>e.stopPropagation()} style={{color:"var(--cyan)",fontSize:12,display:"inline-flex",alignItems:"center",gap:4}}><Ico n="link" s={11} col="var(--cyan)"/>Purchase link</a>}
                           </div>
                           <div style={{display:"flex",gap:6,flexShrink:0,flexWrap:"wrap"}} onClick={e=>e.stopPropagation()}>
-                            {(effectiveRole==="admin"||user?.email===o.requestedByEmail)&&<Btn sm v="ghost" onClick={()=>{if(editLocked){addToast("error","Editing is locked — click 🔒 in the header to unlock");return;}setEditOrder(o);}} style={editLocked?{opacity:0.45,cursor:"not-allowed"}:{}}><Ico n={editLocked?"lock":"edit"} s={12}/>{editLocked?"":"Edit"}</Btn>}
+                            {(effectiveRole==="admin"||(user?.email===o.requestedByEmail&&o.status==="Pending"))&&<Btn sm v="ghost" onClick={()=>{if(editLocked){addToast("error","Editing is locked — click 🔒 in the header to unlock");return;}setEditOrder(o);}} style={editLocked?{opacity:0.45,cursor:"not-allowed"}:{}}><Ico n={editLocked?"lock":"edit"} s={12}/>{editLocked?"":"Edit"}</Btn>}
                             {effectiveRole==="admin"&&ns&&(
                               <Btn sm v={ns==="Received"?"success":"ghost"} onClick={()=>{
                                 if(ns==="Received"){ handleOrderReceived(o); }
                                 else { handleUpdateOrderStatus(o.id,ns); }
                               }}>
-                                {ns==="Received"?<><Ico n="check" s={12} col="var(--green)"/>Mark Received</>:<>{ns} →</>}
+                                {ns==="Received"?<><Ico n="check" s={12} col="var(--green)"/>{nsLabel}</>:<>{nsLabel}</>}
                               </Btn>
                             )}
                             {effectiveRole==="admin"&&o.status==="Pending"&&<Btn sm v="danger" onClick={()=>handleUpdateOrderStatus(o.id,"Rejected")}>Reject</Btn>}

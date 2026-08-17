@@ -1025,6 +1025,12 @@ function doPost(e) {
     if (!admin && reqEmail && userEmail !== reqEmail) {
       return jsonResponse({ error: "Forbidden", detail: "Only the person who submitted this order or an admin can edit it." });
     }
+    // Once an admin has approved it, the request is no longer the requester's to
+    // change — editing the quantity or the price afterwards would quietly alter
+    // what was approved. Admins can still fix it.
+    if (!admin && String(existing.status || "") !== "Pending") {
+      return jsonResponse({ error: "Forbidden", detail: "This order has already been " + String(existing.status).toLowerCase() + " — ask an admin to change it." });
+    }
     const fields = ["store","item","link","qty","unit","price","cat","requestedBy","reason","urgency","date","status"];
     const patch = {};
     fields.forEach(f => { if (o[f] !== undefined) patch[f] = o[f]; });

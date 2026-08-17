@@ -172,5 +172,37 @@ console.log("label IDs count per category and stay short");
   check("a split does not bump the main run", add("Gripper", "Robots & Motors", "RM-000") === "RM-004");
 }
 
+console.log("a requester may revise a request, but not after it is approved");
+{
+  const ss5 = fresh();
+  const c5 = load(ss5);
+  c5.setupNewLab();
+  const asRequester = () => { c5.verifyToken = () => ({ email: "member@jh.edu", name: "Member", oid: "m" }); };
+  const asAdmin     = () => { c5.verifyToken = () => ({ email: "zzhan409@jh.edu", name: "Z", oid: "a" }); };
+
+  const post = p => JSON.parse(c5.doPost({ postData: { contents: JSON.stringify(Object.assign({ token: "t" }, p)) } }).__text);
+
+  asRequester();
+  post({ action: "addOrder", order: { id: "o1", store: "Amazon", item: "M3 screws", link: "", qty: 2,
+         unit: "box", price: "$10", cat: "Tools & Hardware", requestedBy: "Member", reason: "restock",
+         urgency: "Normal", date: "2026-08-17", status: "Pending", requestedByEmail: "member@jh.edu" } });
+
+  check("requester can edit while pending",
+        post({ action: "updateOrder", order: { id: "o1", qty: 5 } }).ok === true);
+
+  asAdmin();
+  check("admin approves", post({ action: "updateOrderStatus", orderId: "o1", status: "Approved" }).ok === true);
+
+  asRequester();
+  const blocked = post({ action: "updateOrder", order: { id: "o1", qty: 99 } });
+  check("requester blocked once approved", blocked.error === "Forbidden");
+  check("the quantity really did not move",
+        c5.readTable("Orders").find(o => o.id === "o1").qty === 5);
+
+  asAdmin();
+  check("admin can still fix it",
+        post({ action: "updateOrder", order: { id: "o1", qty: 6 } }).ok === true);
+}
+
 console.log("\n" + pass + " passed, " + fail + " failed");
 process.exit(fail ? 1 : 0);
