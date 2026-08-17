@@ -162,12 +162,12 @@ Two ways to use the app while admin consent is pending. They are different tools
 
 | | Preview | Dev key |
 |---|---|---|
-| Button/switch | "Preview without signing in" on the login page | `LAB_CONFIG.dev_key` + `DEV_NO_AUTH_KEY` |
+| Button/switch | "Preview as member" / "Preview as admin" on the login page | `LAB_CONFIG.dev_key` + `DEV_NO_AUTH_KEY` |
 | Backend | none — data lives in `localStorage` | the real Sheet |
 | Risk | none | **removes authentication from the deployment** |
 | Use for | reviewing the interface, demos | testing sync, RBAC, Slack, the digest |
 
-**Preview** needs no setup. Nothing reaches the backend: every API call is
+**Preview** needs no setup, and comes in both roles — the two differ in what the interface offers at all (deleting, categories, order status), so both are worth looking at. Nothing reaches the backend: every API call is
 short-circuited client-side, and `verifyToken` rejects the token value `"local"`
 as its first statement, so it cannot touch real data even in principle.
 

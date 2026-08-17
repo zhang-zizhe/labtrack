@@ -1925,11 +1925,19 @@ const LoginPage = ({onSignIn}) => {
           <div style={{display:"flex",alignItems:"center",gap:10,margin:"26px 0 14px",color:"var(--dim)",fontSize:11}}>
             <div style={{flex:1,height:1,background:"var(--border)"}}/>OR<div style={{flex:1,height:1,background:"var(--border)"}}/>
           </div>
-          <button onClick={()=>onSignIn({token:"local",name:"Local Preview",email:"local@preview"})}
-            style={{width:300,padding:"9px 20px",borderRadius:999,background:"transparent",color:"var(--sub)",
-                    border:"1px solid var(--border)",fontFamily:"'Outfit',sans-serif",fontSize:13,fontWeight:500,cursor:"pointer"}}>
-            Preview without signing in
-          </button>
+          {/* Two entries, because the roles differ in what the interface even
+              offers — deleting, categories, order status. One button meant
+              picking a side and then wondering where the other half went. */}
+          <div style={{display:"flex",gap:8,width:300,margin:"0 auto"}}>
+            {[["member","Preview as member"],["admin","Preview as admin"]].map(([role,label])=>(
+              <button key={role} onClick={()=>onSignIn({token:"local",role,
+                  name:role==="admin"?"Admin Preview":"Member Preview",email:"local@preview"})}
+                style={{flex:1,padding:"9px 12px",borderRadius:999,background:"transparent",color:"var(--sub)",
+                        border:"1px solid var(--border)",fontFamily:"'Outfit',sans-serif",fontSize:12.5,fontWeight:500,cursor:"pointer"}}>
+                {label}
+              </button>
+            ))}
+          </div>
           <p style={{color:"var(--dim)",fontSize:11,marginTop:8,lineHeight:1.5}}>
             Explore the interface with sample data stored only in this browser. Nothing is saved to the lab.
           </p>
@@ -2128,7 +2136,7 @@ function LabInventory(){
         const u = JSON.parse(saved);
         setUser(u);
         tokenRef.current = u.token || null;
-        if (u.token === "local") setUserRole("admin");   // see handleSignIn
+        if (u.token === "local") setUserRole(u.role === "admin" ? "admin" : "member");
         // The stored token is almost always expired by now; MSAL holds the
         // refresh token. If its cache was cleared, drop back to the login page.
         if (u.token && !isBypassToken(u.token)) {
@@ -2305,7 +2313,7 @@ function LabInventory(){
     // so it stayed "member" — leaving no way to delete anything you added by
     // mistake in your own sandbox. There is nothing to protect here: the data is
     // this browser's, and the backend rejects the "local" token outright.
-    if (u.token === "local") setUserRole("admin");
+    if (u.token === "local") setUserRole(u.role === "admin" ? "admin" : "member");
     localStorage.setItem("labtrack_user", JSON.stringify(u));
   };
 
