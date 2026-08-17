@@ -129,7 +129,12 @@ function getOverdueCheckouts_() {
 }
 
 function getLowStockItems_() {
-  return readTable("Items").filter(function(i){ return i.qty!==undefined && i.minQty!==undefined && Number(i.minQty) > 0 && Number(i.qty) <= Number(i.minQty); });
+  // An empty qty means the item isn't counted, and Number("") is 0 — without the
+  // first test every untracked supply would show up in the digest as low stock.
+  return readTable("Items").filter(function(i){
+    return i.qty !== "" && i.qty !== undefined && i.qty !== null
+        && i.minQty !== undefined && Number(i.minQty) > 0 && Number(i.qty) <= Number(i.minQty);
+  });
 }
 
 // Sort orders so Urgent/High come first
@@ -882,7 +887,11 @@ function doPost(e) {
       // Always generate displayId server-side (inside the lock) to prevent collisions.
       const allItems = readTable("Items");
       const parsed = parseDisplayId_(it.displayId);
-      if (!parsed || parsed.sub === null) {
+      if (it.consumable) {
+        // Consumables don't get a label. You don't put a sticker on a tube of
+        // thread-lock, and a number nobody prints is a number nobody maintains.
+        it.displayId = "";
+      } else if (!parsed || parsed.sub === null) {
         // Plain item. The counter runs per prefix, so each category starts at 001 —
         // one shared counter only told you how many items existed in total, which
         // is not what a label on a shelf is for.
@@ -1071,6 +1080,20 @@ function doPost(e) {
       return jsonResponse({ error: "Forbidden", detail: "Only admins can change settings" });
     }
     writeSetting(body.key, body.value);
+    return jsonResponse({ ok: true });
+  }
+
+  // ── Notify: someone spotted a supply running low ───────────────────────────
+  // For items whose quantity isn't tracked there is nothing to deduct, so the
+  // only useful action is telling whoever restocks. Anyone may send it.
+  if (action === "notifyLowStock") {
+    const name = String(body.item || "").trim();
+    if (!name) return jsonResponse({ error: "No item given" });
+    sendSlack("🔔", "Running Low: " + name, body.note ? String(body.note) : null, [
+      "*Location*\n" + (body.loc || "—"),
+      "*Reported by*\n" + userName,
+    ], "high");
+    logAudit(userName, userEmail, "NotifyLowStock", name + (body.note ? " | " + body.note : ""));
     return jsonResponse({ ok: true });
   }
 
