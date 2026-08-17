@@ -311,18 +311,38 @@ when their date ranges overlap **and** their daily windows do. A blank window is
 all day and clashes with anything inside the range. Touching endpoints don't clash,
 so handing something over at 12:00 is fine. Only `Active` blocks — see rule 4.
 
-**3. Anything held more than a week needs an admin.** Over
-`MAX_DAYS_WITHOUT_APPROVAL` (7) days, shared or not, the checkout is written with
-status `Pending Approval` and the item is **not** marked In Use. Slack gets a
-high-priority ping. Admins see a *Waiting for approval* panel at the top of the
-Usage tab with Approve / Reject, which posts `decideCheckout`; members see
-"Waiting on an admin".
+**3. A booking waits for an admin for either of two reasons.** `waitReason_()`
+is the single place that decides, and returns `"long"`, `"queue"` or `""`:
+
+- `"long"` — the hold is over `MAX_DAYS_WITHOUT_APPROVAL` (7) days, shared or not.
+- `"queue"` — it is short enough on its own, but it **overlaps a request that is
+  already waiting**. Without this a three-day booking would take the slot a
+  three-week request has been queuing for, and win purely by being short enough to
+  skip the queue. Whoever asked first gets their claim looked at.
+
+Either way the row is written with status `Pending Approval` and the item is **not**
+marked In Use. Slack gets a high-priority ping naming the reason. Admins see a
+*Waiting for approval* panel at the top of the Usage tab with Approve / Reject,
+which posts `decideCheckout`; members see "Waiting on an admin".
+
+> Only genuine overlap queues. A pending request for October does not make a
+> booking in December wait, and on a shared item a 09:00–12:00 request does not
+> make a 14:00–16:00 booking wait.
+
+> **The queue is transitive, and that is worth knowing.** Once a short booking
+> joins the queue it holds the slot open for the *next* one too, so a single
+> long-range request can put every overlapping booking behind an admin until it is
+> decided. In a lab this size that is a feature — it forces the decision — but a
+> request stretching over months would effectively freeze that item. The remedy is
+> for an admin to reject it, which is one click.
 
 **4. A pending request reserves nothing, so several people may ask for the same
 slot.** This is the point of it being pending: `Pending Approval` rows are reported
-as *competing*, never used to refuse. The requester sees who else is in the queue
-before submitting; the admin sees the whole queue for one item grouped together and
-picks. `Returned` and `Rejected` rows are inert.
+as *competing*, never used to refuse — they change whether a booking needs approval
+(rule 3) but never whether it is allowed. The requester sees who else is in the
+queue before submitting; the admin sees the whole queue for one item grouped
+together and picks. `Returned` and `Rejected` rows are inert, so rejecting empties
+the queue and the next booking is ordinary again.
 
 > Competing is detected for **sole-use items too**, and matters most there. A
 > pending request marks nothing In Use, so the availability filter that normally
@@ -355,13 +375,16 @@ makes it a different request.
 - The patch is **whitelisted server-side**. Accepting `body.checkout` wholesale
   would let a member send `status: "Active"` and approve themselves.
 - Only rows still in `Pending Approval` can be edited. Once decided, it's fixed.
-- Editing re-runs the rules. Shorten it under the seven-day limit and the reason it
-  needed an admin is gone, so it becomes a plain `Active` checkout on save and the
-  item is handed over — the button changes to *Save & Check Out* to say so.
+- Editing re-runs the rules through the same `waitReason_()`. Shorten it under the
+  seven-day limit **and** off everyone else's slot, and the reason it needed an
+  admin is gone, so it becomes a plain `Active` checkout on save and the item is
+  handed over — the button changes to *Save & Check Out* to say so. Still
+  overlapping someone who is waiting keeps it in the queue, and the notice says
+  which of the two reasons applies.
 - Moving it onto an `Active` booking is refused, exactly like making one there.
 
 All four rules and both admin paths are covered by `node test-sheet-setup.js`
-(90 assertions).
+(101 assertions).
 
 ---
 
@@ -428,7 +451,7 @@ python3 -m http.server 8000     # then open http://localhost:8000/index.html
 
 ```bash
 node --check google-apps-script.js       # backend syntax
-node test-sheet-setup.js                 # 90 assertions: setup, labels, per-unit
+node test-sheet-setup.js                 # 101 assertions: setup, labels, per-unit
                                          # targeting, order edit window, booking rules
 node test-storage-layer.js > after.json  # behaviour snapshot — see below
 ```

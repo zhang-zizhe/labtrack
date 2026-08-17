@@ -91,6 +91,24 @@ function needsApproval_(c) {
   return bookingDays_(c.out, c.ret) > MAX_DAYS_WITHOUT_APPROVAL;
 }
 
+/**
+ * Why a booking has to wait for an admin, or "" if it can go straight through.
+ *
+ * Two reasons. Being long is the obvious one. The other is that somebody is
+ * already queuing for the same slot: without this, a three-day booking would
+ * simply take what a three-week request has been waiting on, and win purely by
+ * being short enough to skip the queue. Whoever asked first deserves to have
+ * their claim looked at, so the newcomer joins the queue instead of jumping it.
+ *
+ * Only genuinely overlapping requests count — a pending request for October does
+ * not make a booking in December wait.
+ */
+function waitReason_(c, ignoreId) {
+  if (needsApproval_(c)) return "long";
+  if (competing_(c, ignoreId).length) return "queue";
+  return "";
+}
+
 // "HH:MM" → minutes past midnight. Blank means all day, which the callers treat
 // as the full 0–1440 range rather than as a missing value.
 function minutes_(hhmm) {
@@ -1082,22 +1100,26 @@ function doPost(e) {
     const clash = bookingConflict_(c, null);
     if (clash) return jsonResponse({ error: "Clash", detail: clash });
 
-    // Long holds wait for an admin. The item stays available until then — nothing
-    // is reserved by asking, or a rejected request would quietly take it away.
-    const pending = needsApproval_(c);
-    if (pending) c.status = CHECKOUT_PENDING;
+    // Other people already queuing for the same slot. Reported, never used to
+    // refuse — the admin is the one who picks between them.
+    const rivals = competing_(c, c.id);
+    // Long holds wait for an admin, and so does anything that would step over
+    // someone already waiting. The item stays available until then — nothing is
+    // reserved by asking, or a rejected request would quietly take it away.
+    const reason = waitReason_(c, c.id);
+    if (reason) c.status = CHECKOUT_PENDING;
     appendRow("Checkouts", c);
 
-    if (pending) {
-      // Other people waiting on the same slot. Reported, never used to refuse —
-      // the admin is the one who picks.
-      const rivals = competing_(c, c.id);
-      sendSlack("⏳", "Approval Needed: " + c.item, "Longer than " + MAX_DAYS_WITHOUT_APPROVAL + " days" +
+    if (reason) {
+      const why = reason === "long"
+        ? "Longer than " + MAX_DAYS_WITHOUT_APPROVAL + " days"
+        : "Someone is already waiting for this slot";
+      sendSlack("⏳", "Approval Needed: " + c.item, why +
         (rivals.length ? " — " + rivals.length + " other request" + (rivals.length>1?"s":"") + " for the same slot" : ""),
         ["*Person*\n" + c.user, "*From*\n" + (c.out||"—"), "*Until*\n" + (c.ret||"—")], "high");
       logAudit(userName, userEmail, "CheckoutPending", c.item + " → " + c.user + " | until:" + (c.ret||"—") +
-        (rivals.length ? " | competing:" + rivals.length : ""));
-      return jsonResponse({ ok: true, pending: true, competing: rivals });
+        " | why:" + reason + (rivals.length ? " | competing:" + rivals.length : ""));
+      return jsonResponse({ ok: true, pending: true, reason: reason, competing: rivals });
     }
 
     updateItemStatus(c.itemId, c.item, "In Use", c.user, "add");
@@ -1161,9 +1183,11 @@ function doPost(e) {
     const blocked = bookingConflict_(merged, co.id);
     if (blocked) return jsonResponse({ error: "Clash", detail: blocked });
 
-    // Editing re-runs the same rules. Shorten it under the limit and the reason it
-    // needed an admin is gone, so it just becomes a checkout.
-    const stillPending = needsApproval_(merged);
+    // Editing re-runs the same rules. Shorten it under the limit AND off everyone
+    // else's slot, and the reason it needed an admin is gone, so it just becomes
+    // a checkout. Still overlapping someone who is waiting keeps it in the queue.
+    const reason = waitReason_(merged, co.id);
+    const stillPending = !!reason;
     patch.status = stillPending ? CHECKOUT_PENDING : "Active";
     updateRow("Checkouts", co.id, patch);
 
@@ -1174,7 +1198,7 @@ function doPost(e) {
     }
     logAudit(userName, userEmail, "CheckoutEdited", co.item + " → " + co.user +
       " | " + (merged.out||"—") + " to " + (merged.ret||"—") + " | " + patch.status);
-    return jsonResponse({ ok: true, pending: stillPending, competing: stillPending ? competing_(merged, co.id) : [] });
+    return jsonResponse({ ok: true, pending: stillPending, reason: reason, competing: stillPending ? competing_(merged, co.id) : [] });
   }
 
   // ── Return Item ───────────────────────────────────────────────────────────

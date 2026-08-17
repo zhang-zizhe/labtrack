@@ -301,6 +301,12 @@ const sameBooked = (a,b) => (a.itemId&&b.itemId) ? String(a.itemId)===String(b.i
 // Competing requests exist for sole-use items too, and matter most there: nothing
 // is marked In Use, so the availability filter cannot see the queue at all.
 const rivalsFor = (c, all) => all.filter(x=>String(x.id)!==String(c.id)&&isPending(x)&&sameBooked(x,c)&&bookingsClash(x,c));
+// Why a booking has to wait, or "" if it can go straight through. Being long is
+// the obvious reason. The other is that somebody is already queuing for the same
+// slot: without this a three-day booking would take what a three-week request has
+// been waiting on, and win purely by being short enough to skip the queue.
+// Mirrors waitReason_() in google-apps-script.js — keep the two in step.
+const waitReason = (c, all) => needsApproval(c) ? "long" : (rivalsFor(c,all).length ? "queue" : "");
 const blockerFor = (c, all) => all.find(x=>String(x.id)!==String(c.id)&&blocksSlot(x)&&sameBooked(x,c)&&bookingsClash(x,c));
 // Borders are mixed from the same token as the text, so they follow the theme
 // instead of being frozen hex+alpha from the old palette.
@@ -886,8 +892,10 @@ const CheckoutModal = ({items,onClose,onAdd,preItem="",userName="",userEmail="",
     const mine={itemId:sl.itemId,item:sl.item,out,ret,...(items.find(i=>String(i.id)===String(sl.itemId))?.shared?win:{fromTime:"",toTime:""})};
     return checkouts.filter(c=>isPending(c)&&sameBooked(c,mine)&&bookingsClash(c,mine)).map(c=>({item:sl.item,hit:c}));
   });
-  // Rule 3 — over a week is an admin's call, whatever the item.
+  // Rule 3 — over a week is an admin's call, whatever the item; and so is anything
+  // that would step over someone already waiting.
   const longHold=!!ret&&bookingDays(out,ret)>MAX_DAYS_WITHOUT_APPROVAL;
+  const willWait=longHold||rivals.length>0;
   const canSubmit=coUser.trim()&&valid.length>0&&retDate.trim()&&!hasOutOfStock&&!clashes.length&&!badWindow;
   const submit=()=>{
     if(!canSubmit)return;
@@ -895,7 +903,7 @@ const CheckoutModal = ({items,onClose,onAdd,preItem="",userName="",userEmail="",
     valid.forEach((sl,i)=>{
       const sel=items.find(it=>String(it.id)===String(sl.itemId));
       onAdd({id:ts+i,itemId:sl.itemId,item:sl.item,user:coUser.trim(),out,ret,qty:Math.min(sl.qty,sel?.qty||1),notes,groupEmails:groupEmails.trim(),
-             status:longHold?CO_PENDING:"Active",...(sel?.shared?win:{fromTime:"",toTime:""})});
+             status:willWait?CO_PENDING:"Active",...(sel?.shared?win:{fromTime:"",toTime:""})});
     });
     onClose();
   };
@@ -974,7 +982,9 @@ const CheckoutModal = ({items,onClose,onAdd,preItem="",userName="",userEmail="",
               </div>
             ))}
             <div style={{color:"var(--dim)",fontSize:12,marginTop:7}}>
-              Nothing is reserved until an admin approves it, so you can still ask. They will see the requests side by side and pick.
+              {longHold
+                ? "An admin will see the requests side by side and pick between them."
+                : "Because somebody is already waiting, this goes in as a request too rather than taking the slot from under them. An admin picks between them."}
             </div>
           </div>
         )}
@@ -985,7 +995,7 @@ const CheckoutModal = ({items,onClose,onAdd,preItem="",userName="",userEmail="",
         )}
         <div style={{borderTop:"1px solid var(--border)",paddingTop:14,display:"flex",gap:10,justifyContent:"flex-end"}}>
           <Btn v="ghost" onClick={onClose}>Cancel</Btn>
-          <Btn onClick={submit} disabled={!canSubmit}><Ico n="check" s={14} col="var(--on-accent)"/>{longHold?"Request Approval":"Confirm Checkout"}{valid.length>1?` (${valid.length} items)`:""}</Btn>
+          <Btn onClick={submit} disabled={!canSubmit}><Ico n="check" s={14} col="var(--on-accent)"/>{willWait?"Request Approval":"Confirm Checkout"}{valid.length>1?` (${valid.length} items)`:""}</Btn>
         </div>
       </div>
     </Modal>
@@ -1017,7 +1027,8 @@ const EditRequestModal = ({co,items,checkouts,onClose,onSave}) => {
   const blocker=blockerFor(draft,checkouts);
   const rivals=rivalsFor(draft,checkouts);
   const days=ret?bookingDays(out,ret):0;
-  const stillPending=days>MAX_DAYS_WITHOUT_APPROVAL;
+  const reason=ret?waitReason(draft,checkouts):"long";
+  const stillPending=!!reason;
   const canSave=retDate.trim()&&!blocker&&!badWindow;
   const timeInputStyle={background:"var(--bg1)",border:"1px solid var(--border)",borderRadius:8,padding:"9px 10px",color:"var(--text)",fontSize:14,outline:"none",width:"100%",fontFamily:"'Roboto',sans-serif",boxSizing:"border-box"};
   return(
@@ -1070,11 +1081,13 @@ const EditRequestModal = ({co,items,checkouts,onClose,onSave}) => {
           </div>
         )}
         <div style={{background:stillPending?"var(--amber-d)":"var(--green-d)",border:`1px solid ${mix(stillPending?"--amber":"--green",30)}`,borderRadius:10,padding:"11px 14px",fontSize:13,lineHeight:1.5}}>
-          {ret
-            ? stillPending
+          {!ret
+            ? "Set a return date."
+            : reason==="long"
               ? `${Math.ceil(days)} days — still over ${MAX_DAYS_WITHOUT_APPROVAL}, so it stays a request.`
-              : `${Math.max(1,Math.ceil(days))} day${Math.ceil(days)>1?"s":""} — under ${MAX_DAYS_WITHOUT_APPROVAL}, so saving this checks the item out straight away. No approval needed.`
-            : "Set a return date."}
+              : reason==="queue"
+                ? `${Math.max(1,Math.ceil(days))} day${Math.ceil(days)>1?"s":""} — short enough on its own, but ${rivals.length===1?"someone else is":`${rivals.length} others are`} already waiting for this slot, so it stays a request.`
+                : `${Math.max(1,Math.ceil(days))} day${Math.ceil(days)>1?"s":""} — under ${MAX_DAYS_WITHOUT_APPROVAL} and clear of everyone else, so saving this checks the item out straight away. No approval needed.`}
         </div>
         <div style={{borderTop:"1px solid var(--border)",paddingTop:14,display:"flex",gap:10,justifyContent:"flex-end"}}>
           <Btn v="ghost" onClick={onClose}>Cancel</Btn>
@@ -2721,7 +2734,7 @@ function LabInventory(){
     // Editing re-runs the rules: shorten it under the limit and the reason it
     // needed an admin is gone, so it becomes a plain checkout.
     const merged={...co,...patch};
-    const nowActive=!needsApproval(merged);
+    const nowActive=!waitReason(merged,checkouts);
     const next={...merged,status:nowActive?"Active":CO_PENDING};
     setCheckouts(p=>p.map(c=>c.id===coId?next:c));
     if(nowActive) markInUse(next);
@@ -3655,7 +3668,7 @@ function LabInventory(){
                 <div style={{padding:"13px 18px",borderBottom:"1px solid var(--border)",display:"flex",alignItems:"center",gap:9,flexWrap:"wrap"}}>
                   <Ico n="clock" s={15} col="var(--amber)"/>
                   <span style={{fontWeight:700,fontFamily:"'Roboto',sans-serif",fontSize:15}}>Waiting for approval</span>
-                  <span style={{color:"var(--dim)",fontSize:12}}>Held longer than {MAX_DAYS_WITHOUT_APPROVAL} days · nothing is reserved until approved, so more than one person may ask</span>
+                  <span style={{color:"var(--dim)",fontSize:12}}>Longer than {MAX_DAYS_WITHOUT_APPROVAL} days, or queued behind someone who is · nothing is reserved until approved</span>
                 </div>
                 {Object.entries(pendingByItem).map(([k,reqs],gi)=>{
                   const contested=reqs.length>1&&reqs.some(a=>reqs.some(b=>a.id!==b.id&&bookingsClash(a,b)));

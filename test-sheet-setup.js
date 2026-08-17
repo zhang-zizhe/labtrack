@@ -304,6 +304,36 @@ console.log("shared items book by the hour; long holds wait for an admin");
   const solo3 = book("s22","Rex","2027-08-01 09:00","2027-08-20 09:00","","","Franka Arm","p1");
   check("a request in a different month competes with nobody", solo3.competing.length === 0);
 
+  // A short booking must not be able to walk past someone who is already queuing.
+  const q1 = book("q1","Sam","2027-09-01 09:00","2027-09-25 09:00","","","Franka Arm","p1");
+  check("a long request goes in the queue", q1.pending === true && q1.reason === "long");
+  const q2 = book("q2","Tess","2027-09-10 09:00","2027-09-12 09:00","","","Franka Arm","p1");
+  check("a 2-day booking over that slot waits too", q2.pending === true);
+  check("and says why", q2.reason === "queue");
+  check("naming who it is up against", q2.competing.length === 1 && q2.competing[0].user === "Sam");
+  check("the item is still on the shelf",
+        c6.readTable("Items").find(i=>i.id==="p1").usedBy.indexOf("Tess") < 0);
+  const q3 = book("q3","Uma","2027-11-01 09:00","2027-11-03 09:00","","","Franka Arm","p1");
+  check("a short booking clear of the queue goes straight through", q3.ok === true && !q3.pending);
+
+  // The queue is transitive: q2 joined it, so it now holds the slot open too.
+  post({ action:"decideCheckout", checkoutId:"q1", approve:false });
+  const q4 = book("q4","Vic","2027-09-10 09:00","2027-09-12 09:00","","","Franka Arm","p1");
+  check("clearing one of two still leaves a queue", q4.pending === true);
+  // Empty it completely and bookings are ordinary again.
+  post({ action:"decideCheckout", checkoutId:"q2", approve:false });
+  post({ action:"decideCheckout", checkoutId:"q4", approve:false });
+  const q4b = book("q4b","Vic","2027-09-10 09:00","2027-09-12 09:00","","","Franka Arm","p1");
+  check("an empty queue means a short booking is ordinary again", q4b.ok === true && !q4b.pending);
+
+  // Shared items: only an overlapping window queues, not merely the same days.
+  const q5 = book("q5","Wes","2027-10-01 09:00","2027-10-25 09:00","09:00","12:00");
+  check("a long shared request queues", q5.pending === true);
+  const q6 = book("q6","Xin","2027-10-05 09:00","2027-10-06 09:00","09:00","12:00");
+  check("a short booking in the same window waits", q6.pending === true && q6.reason === "queue");
+  const q7 = book("q7","Yan","2027-10-05 09:00","2027-10-06 09:00","14:00","16:00");
+  check("a short booking in a different window does not", q7.ok === true && !q7.pending);
+
   // ── editing a request that is still waiting ──
   const long4 = book("k14","Ned","2027-01-01 09:00","2027-01-20 09:00","09:00","12:00");
   check("a fresh request is pending", long4.pending === true);
