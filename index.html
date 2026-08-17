@@ -2643,7 +2643,17 @@ function LabInventory(){
       }
     });
     Object.values(groups).forEach(g=>{
+      // By label number, not by whatever order the rows happen to sit in. A unit
+      // added later lands at the end of the item list, so -03 could be listed
+      // before -01 — and once one is deleted and re-added the sequence is
+      // arbitrary. Numeric compare, so -10 sorts after -09 rather than beside -01.
+      g._items.sort((a,b)=>(parseDisplayId(a.displayId)?.sub??0)-(parseDisplayId(b.displayId)?.sub??0));
       g.qty = g._items.length;
+      // The card has room for one location, and g.loc was whichever unit happened
+      // to be first in the item list. Show the lowest-numbered unit's, and say how
+      // many others differ rather than quietly picking one.
+      const locs = [...new Set(g._items.map(i=>String(i.loc||"").trim()).filter(Boolean))];
+      g.loc = locs.length>1 ? `${g._items[0].loc} +${locs.length-1} more` : (locs[0]||"");
       const inUseCount = g._items.filter(i=>toArr(i.usedBy).length>0).length;
       g.usedBy = [...new Set(g._items.flatMap(i=>toArr(i.usedBy)))];
       g.status = inUseCount===0?"Available":inUseCount===g._items.length?"In Use":"Partially In Use";
