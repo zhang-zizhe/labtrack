@@ -226,6 +226,7 @@ console.log("shared items book by the hour; long holds wait for an admin");
     item("s1","Oscilloscope",   true,  "CE-001"),   // hourly booking
     item("s2","Spare Scope",    true,  "CE-002"),   // shared queue-jumping
     item("s3","Bench Scope",    true,  "CE-003"),   // editing a request
+    item("s4","Loan Scope",     true,  "CE-004"),   // withdrawing a request
     item("p1","Franka Arm",     false, "RM-001"),   // approval of a sole-use hold
     item("p2","Spare Arm",      false, "RM-002"),   // sole-use competition
     item("p3","Queue Rig",      false, "RM-003"),   // sole-use queue-jumping
@@ -403,6 +404,22 @@ console.log("shared items book by the hour; long holds wait for an admin");
   check("and the item is handed over", used("s3").indexOf("Ned") >= 0);
   check("a decided request can no longer be edited",
         post({ action:"updateCheckout", checkoutId:"k14", checkout:{ ret:"2026-09-08 09:00" } }).error === "Not pending");
+
+  // ── withdrawing your own request ──
+  const w1 = book("w1","Pia","2026-09-02 09:00","2026-09-21 09:00","09:00","10:00","Loan Scope","s4");
+  check("a request to withdraw goes in", w1.pending === true);
+  asMember();
+  check("a stranger cannot withdraw it",
+        post({ action:"cancelCheckout", checkoutId:"w1" }).error === "Forbidden");
+  asAdmin();
+  check("the owner or an admin can", post({ action:"cancelCheckout", checkoutId:"w1" }).ok === true);
+  check("and the row is gone, not just marked", row("w1") === undefined);
+  check("the withdrawal is logged",
+        c6.readTable("DeleteLog").some(r => r.type === "Request" && r.name === "Loan Scope"));
+  check("withdrawing an approved checkout is refused",
+        post({ action:"cancelCheckout", checkoutId:"k8" }).error === "Not pending");
+  check("withdrawing frees the queue",
+        !book("w2","Rue","2026-09-02 09:00","2026-09-03 09:00","09:00","10:00","Loan Scope","s4").pending);
 
   // Editing into an Active booking is refused just like making one there.
   const long5 = book("k15","Ola","2026-09-08 09:00","2026-09-27 09:00","09:00","12:00","Bench Scope","s3");

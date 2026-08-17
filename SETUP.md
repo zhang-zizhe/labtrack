@@ -173,6 +173,19 @@ Two ways to use the app while admin consent is pending. They are different tools
 short-circuited client-side, and `verifyToken` rejects the token value `"local"`
 as its first statement, so it cannot touch real data even in principle.
 
+**Preview starts with a sample lab, not an empty grid.** `demoData()` in
+`index.html` seeds seven items, three checkouts, two competing requests, an
+overdue hold, a delivery and an order — enough that every state worth looking at
+(shared item with a daily window, split units, a low-stock consumable, an
+untracked supply, an approval queue, the overdue banner) is on screen without
+anyone hand-building an inventory first. Dates are relative to today, so it never
+goes stale.
+
+It seeds only when the local store is empty **and** the token is `"local"`, so it
+can never appear in front of a real backend. Editing it is normal — changes persist
+to `localStorage` like any preview change. To get the sample lab back, clear
+`labtrack_data` (or the whole origin) and sign in again.
+
 **Dev key** — set the same random string in both files:
 
 ```js
@@ -279,9 +292,10 @@ All deletions are logged in the DeleteLog tab with timestamp, details, and who d
 - **Inventory**: Add/edit items with serial numbers, label IDs (`PREFIX-NNN`, counted per category; split units add `-NN`), image upload (camera/file/URL), customizable categories (admin only); mark items as Shared (multi-user checkout) or Consumable (qty deduction without checkout). Consumables get no label ID — nothing is stickered — and a supply can be added with no quantity at all, which swaps its Use button for Notify: one click tells whoever restocks that it is running low
 - **Order Requests**: Submit orders (store, item, link, qty, price, etc.); only the requester or an admin can edit; admins can change status (Pending/Approved/Ordered/Received/Rejected); "Mark Received" opens a staging form to set location/label/serial before adding to inventory; generate copy-pasteable email text with per-item totals and grand total
 - **Usage Tracking**: Check out/return items with overdue alerts and bulk return; only the checkout creator, listed group members, or admins can return an item; consumables use a "Use" button instead of checkout
+- **Overdue banner**: anything past its return date raises a red banner at the top of every tab on sign-in — yours if you are a member, the lab's if you are an admin. Dismissing it lasts until the next reload; the header chip stays either way
 - **Group Checkout**: When checking out, optionally list teammates' emails as group members — they can then return the item too
 - **Booking rules**: shared items are booked by the hour and long holds need an admin — see below
-- **Calendar**: Visual calendar of deliveries, checkouts, and return dates
+- **Calendar**: Month and week views. A booking draws as a **span across every day it covers**, not two marks at its ends, coloured by what it is — blue in use, amber awaiting approval, red overdue, grey returned. A daily window (`13:00–16:00`) renders as a block at those hours on **every** day of the hold; an all-day multi-day hold goes in the week view's all-day strip instead, the way a calendar normally splits them. Active holds are visible to everyone; **pending requests only to the person who asked and to admins**, since an undecided request is nobody else's business yet
 - **Live Sync**: Auto-polls every 30s so all users see changes without refreshing
 - **Pagination & Sort**: 24 items/page with sort by name, date, quantity; Order Requests tab has search/filter/pagination (15/page) with shift-click range select
 - **Slack**: Rich Block Kit notifications; daily 5pm ET digest with compact PI-friendly summary; `important` mode for urgent orders + overdues only
@@ -392,6 +406,10 @@ makes it a different request.
 - The patch is **whitelisted server-side**. Accepting `body.checkout` wholesale
   would let a member send `status: "Active"` and approve themselves.
 - Only rows still in `Pending Approval` can be edited. Once decided, it's fixed.
+- `cancelCheckout` lets the same people **withdraw** a request instead. Rejection is
+  an admin's decision and worth keeping as a record, so it leaves a `Rejected` row;
+  withdrawing is just undo, so the row is deleted (logged to `DeleteLog` and
+  `AuditLog` first). Withdrawing frees the slot for whoever was queued behind it.
 - Editing re-runs the rules through the same `waitReason_()`. Shorten it under the
   seven-day limit **and** off everyone else's slot, and the reason it needed an
   admin is gone, so it becomes a plain `Active` checkout on save and the item is
@@ -401,7 +419,7 @@ makes it a different request.
 - Moving it onto an `Active` booking is refused, exactly like making one there.
 
 All five rules and both admin paths are covered by `node test-sheet-setup.js`
-(112 assertions). That suite runs on a **frozen clock** — bookings are judged
+(119 assertions). That suite runs on a **frozen clock** — bookings are judged
 against "now", so a real one would quietly rot every fixture date.
 
 ---
@@ -469,7 +487,7 @@ python3 -m http.server 8000     # then open http://localhost:8000/index.html
 
 ```bash
 node --check google-apps-script.js       # backend syntax
-node test-sheet-setup.js                 # 112 assertions: setup, labels, per-unit
+node test-sheet-setup.js                 # 119 assertions: setup, labels, per-unit
                                          # targeting, order edit window, booking rules
 node test-storage-layer.js > after.json  # behaviour snapshot — see below
 ```

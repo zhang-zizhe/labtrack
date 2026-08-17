@@ -196,6 +196,51 @@ const APP_CONFIG = {
 // Dev mode bypasses sign-in entirely — see the note in LAB_CONFIG.
 const DEV_MODE = !!LAB.dev_key;
 // Tokens that MSAL knows nothing about, so it must not be asked to renew them.
+// ─── PREVIEW DEMO DATA ────────────────────────────────────────────────────────
+// Preview mode starts empty, which means anyone poking at the UI has to hand-build
+// an inventory before they can see a checkout, a queue or an overdue row at all.
+// This seeds one of each, dated relative to today so it never goes stale. It is
+// only ever used when the local store is empty AND the token is the preview one —
+// a real backend never reaches this path.
+const demoData = () => {
+  const D=(off,t)=>{const d=new Date();d.setDate(d.getDate()+off);
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`+(t?" "+t:"");};
+  const it=(id,name,cat,shared,label,x={})=>({id,name,cat,qty:1,unit:"units",loc:"Hackerman 306",minQty:0,
+    img:"",desc:"",status:"Available",usedBy:[],serial:"",displayId:label,shared,consumable:false,...x});
+  const co=(id,itemId,item,user,out,ret,status,email,f,t)=>({id,itemId,item,user,out,ret,status,
+    checkedOutByEmail:email,groupEmails:"",qty:1,fromTime:f||"",toTime:t||""});
+  const ME="local@preview", THEM="teammate@jh.edu";
+  return {
+    items:[
+      it("d-s1","Tektronix Oscilloscope","Compute & Electronics",true,"CE-001",{usedBy:["Ann Lee"]}),
+      it("d-p1","Franka Panda Arm","Robots & Motors",false,"RM-001",{status:"In Use",usedBy:["Bob Chen"]}),
+      it("d-p2","UR5e Arm","Robots & Motors",false,"RM-002",{status:"In Use",usedBy:["Zizhe Zhang"]}),
+      it("d-v1","RealSense D435","Sensors & Vision",false,"SV-001-01",{serial:"SN-9001"}),
+      it("d-v2","RealSense D435","Sensors & Vision",false,"SV-001-02",{serial:"SN-9002"}),
+      it("d-c1","Zip Ties","Consumables & Supplies",false,"",{qty:"",consumable:true}),
+      it("d-c2","Nitrile Gloves","Consumables & Supplies",false,"",{qty:2,minQty:5,consumable:true,unit:"boxes"}),
+    ],
+    deliveries:[{id:"d-d1",item:"Jetson Orin Nano",qty:2,unit:"units",from:"Arrow",
+                 receivedBy:"Zizhe Zhang",date:D(2),tracking:"1Z999AA10123456784",status:"Logged"}],
+    checkouts:[
+      // a shared item booked for the same hours each day
+      co("d-a1","d-s1","Tektronix Oscilloscope","Ann Lee",D(-1,"09:00"),D(4,"12:00"),"Active",THEM,"09:00","12:00"),
+      // a plain multi-day hold
+      co("d-a2","d-p1","Franka Panda Arm","Bob Chen",D(0,"10:00"),D(3,"17:00"),"Active",THEM),
+      // yours, and late — this is what puts the red banner at the top of the page
+      co("d-od","d-p2","UR5e Arm","Zizhe Zhang",D(-9,"09:00"),D(-2,"17:00"),"Active",ME),
+      // two people queuing for the same afternoon slot; one of them is you
+      co("d-r1","d-s1","Tektronix Oscilloscope","Zizhe Zhang",D(6,"09:00"),D(25,"09:00"),"Pending Approval",ME,"13:00","16:00"),
+      co("d-r2","d-s1","Tektronix Oscilloscope","Cara Diaz",D(8,"09:00"),D(27,"09:00"),"Pending Approval",THEM,"13:00","16:00"),
+      // history, so the calendar has something grey in it
+      co("d-h1","d-v1","RealSense D435","Ann Lee",D(-20,"09:00"),D(-18,"17:00"),"Returned",THEM),
+    ],
+    orders:[{id:"d-o1",store:"Amazon",item:"M3 socket screws (100pk)",link:"https://a.co/d/xyz",qty:2,
+             unit:"box",price:"$14.99",cat:"Tools & Hardware",requestedBy:"Zizhe Zhang",reason:"restock",
+             urgency:"High",date:D(-1),status:"Pending",requestedByEmail:ME}],
+  };
+};
+
 const isBypassToken = t => t === "local" || String(t||"").indexOf("dev:") === 0;
 
 // ─── MICROSOFT SIGN-IN HELPERS ───────────────────────────────────────────────
@@ -1851,8 +1896,33 @@ const Pagination = ({total, page, setPage}) => {
 // Delivery is Spirit Blue rather than green: beside the red of "overdue", green
 // measured ΔE 5.1 under deuteranopia — below the floor. See the palette note in
 // <style>. These four were validated as a set, so don't re-point one in isolation.
-const CAL_EC={pkg:{bg:"var(--spirit-d)",col:"var(--spirit)"},out:{bg:"var(--blue-d)",col:"var(--blue)"},ret:{bg:"var(--amber-d)",col:"var(--amber)"},odd:{bg:"var(--red-d)",col:"var(--red)"},act:{bg:"var(--blue-d)",col:"var(--blue)"}};
-const CAL_LBL={pkg:"Delivery",out:"Checked Out",ret:"Return Due",odd:"OVERDUE",act:"In Use"};
+// A booking is one thing that lasts a while, so it gets one colour for its whole
+// length rather than a different one at each end. Blue is in use, amber is
+// waiting on an admin, red is overdue, grey is finished and kept only as history.
+const CAL_EC={pkg:{bg:"var(--spirit-d)",col:"var(--spirit)"},act:{bg:"var(--blue-d)",col:"var(--blue)"},
+              pend:{bg:"var(--amber-d)",col:"var(--amber)"},odd:{bg:"var(--red-d)",col:"var(--red)"},
+              done:{bg:"var(--bg3)",col:"var(--sub)"}};
+const CAL_LBL={pkg:"Delivery",act:"In Use",pend:"Awaiting approval",odd:"OVERDUE",done:"Returned"};
+const calKind=c=>isOverdue(c)?"odd":c.status===CO_PENDING?"pend":c.status==="Active"?"act":"done";
+// Every date a booking covers, so a hold draws as a bar instead of two
+// disconnected marks at its ends. Guarded — a corrupt ret must not spin forever.
+const dsOf=d=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+const dayList=(a,b)=>{
+  if(!a)return[];
+  const[ay,am,ad]=a.split("-").map(Number); const d=new Date(ay,am-1,ad);
+  const e=b?(()=>{const[by,bm,bd]=b.split("-").map(Number);return new Date(by,bm-1,bd);})():new Date(ay,am-1,ad);
+  const out=[]; let guard=0;
+  while(d<=e&&guard++<400){out.push(dsOf(d));d.setDate(d.getDate()+1);}
+  return out;
+};
+// What to print on one day of a booking. A daily window says the same thing every
+// day; an all-day hold only has something to say at its ends.
+const spanTime=(c,first,last)=>
+  hasWindow(c) ? `${c.fromTime}\u2013${c.toTime}`
+  : first&&last ? [getTimePart(c.out),getTimePart(c.ret)].filter(Boolean).join("\u2013")
+  : first ? (getTimePart(c.out)?"from "+getTimePart(c.out):"")
+  : last  ? (getTimePart(c.ret)?"until "+getTimePart(c.ret):"")
+  : "";
 // Mini chip for month grid cells and all-day strip — fixed width, clips text
 const CalChip=({e,full=false})=>{
   const ec=CAL_EC[e.t];
@@ -1876,7 +1946,31 @@ const CalChip=({e,full=false})=>{
     </div>
   );
 };
-const CalView=({checkouts,deliveries})=>{
+const CalView=({checkouts,deliveries,user,effectiveRole})=>{
+  // An active hold is lab business — everyone needs to know the arm is out. A
+  // request nobody has decided yet is the asker's own affair until it becomes one,
+  // so it shows to them and to the admins who have to act on it.
+  const visibleCos=useMemo(()=>checkouts.filter(c=>
+    c.status===CO_PENDING
+      ? (effectiveRole==="admin"||(!!user?.email&&c.checkedOutByEmail===user.email))
+      : true
+  ),[checkouts,user,effectiveRole]);
+  // ds -> events, built once instead of re-filtering every booking per cell.
+  const byDay=useMemo(()=>{
+    const m={};
+    deliveries.forEach(x=>{ if(x.date) (m[x.date]=m[x.date]||[]).push({t:"pkg",l:x.item,time:"",user:"",allDay:true}); });
+    visibleCos.forEach(c=>{
+      const days=dayList(getDatePart(c.out),getDatePart(c.ret)||getDatePart(c.out));
+      days.forEach((ds,i)=>{
+        const first=i===0,last=i===days.length-1;
+        // A windowed booking has real hours every day; a multi-day all-day hold
+        // has none, so it belongs in the all-day strip like any calendar puts it.
+        const allDay=!hasWindow(c)&&days.length>1;
+        (m[ds]=m[ds]||[]).push({t:calKind(c),l:c.item,user:c.user,time:spanTime(c,first,last),first,last,allDay,co:c,id:c.id});
+      });
+    });
+    return m;
+  },[visibleCos,deliveries]);
   const now=new Date();
   const [yr,setYr]=useState(now.getFullYear());
   const [mo,setMo]=useState(now.getMonth());
@@ -1905,7 +1999,6 @@ const CalView=({checkouts,deliveries})=>{
   const ROW_H=56; // px per hour row
   const FHOUR=HOURS[0],LHOUR=HOURS[HOURS.length-1]+1; // 7, 22
   const todayStr=getToday();
-  const goToday=()=>{const n=new Date();setYr(n.getFullYear());setMo(n.getMonth());const ws=new Date(n);ws.setDate(ws.getDate()-ws.getDay());ws.setHours(0,0,0,0);setWkStart(ws);};
   const prev=()=>calMode==="month"?(mo===0?(setMo(11),setYr(y=>y-1)):setMo(m=>m-1)):setWkStart(d=>{const nd=new Date(d);nd.setDate(nd.getDate()-7);return nd;});
   const next=()=>calMode==="month"?(mo===11?(setMo(0),setYr(y=>y+1)):setMo(m=>m+1)):setWkStart(d=>{const nd=new Date(d);nd.setDate(nd.getDate()+7);return nd;});
   const openPicker=()=>{setPickerYr(calMode==="month"?yr:wkStart.getFullYear());setShowPicker(v=>!v);};
@@ -1918,41 +2011,35 @@ const CalView=({checkouts,deliveries})=>{
     if(selDay){const[sy,sm,sd]=selDay.split("-").map(Number);const d=new Date(sy,sm-1,sd);d.setDate(d.getDate()-d.getDay());d.setHours(0,0,0,0);setWkStart(d);}
     setCalMode("week");
   };
-  const evtsFor=ds=>{
-    const r=[];
-    deliveries.forEach(x=>x.date===ds&&r.push({t:"pkg",l:x.item,time:"",user:""}));
-    checkouts.forEach(x=>{
-      if(getDatePart(x.out)===ds)r.push({t:"out",l:x.item,time:getTimePart(x.out),user:x.user});
-      if(getDatePart(x.ret)===ds)r.push({t:isOverdue(x)?"odd":"ret",l:x.item,time:getTimePart(x.ret),user:x.user});
-    });
-    return r;
-  };
+  const evtsFor=ds=>byDay[ds]||[];
   const wkDays=Array.from({length:7},(_,i)=>{const d=new Date(wkStart);d.setDate(d.getDate()+i);return d;});
   const wkStrs=wkDays.map(d=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`);
   const wkLabel=()=>{const s=wkDays[0],e=wkDays[6];return s.getMonth()===e.getMonth()?`${MNS[s.getMonth()].slice(0,3)} ${s.getDate()}–${e.getDate()}, ${s.getFullYear()}`:`${MNS[s.getMonth()].slice(0,3)} ${s.getDate()} – ${MNS[e.getMonth()].slice(0,3)} ${e.getDate()}, ${e.getFullYear()}`;};
-  // All-day strip: deliveries + checkouts spanning the whole day (started before, not yet returned)
-  const delivByDay=wkStrs.map(ds=>deliveries.filter(x=>x.date===ds).map(x=>({t:"pkg",l:x.item,time:"",user:""})));
-  const spanByDay=wkStrs.map(ds=>checkouts.filter(x=>x.status==="Active"&&getDatePart(x.out)<ds&&getDatePart(x.ret)>=ds).map(x=>({t:"act",l:x.item,time:hasWindow(x)?x.fromTime:"",user:x.user})));
+  // All-day strip: deliveries and holds with no hours to place on the grid.
+  const allDayByDay=wkStrs.map(ds=>evtsFor(ds).filter(e=>e.allDay));
   // Duration blocks for week view: checkout→return block within a single day column
   const toH=t=>{if(!t)return null;const h=parseInt(t);return isNaN(h)?null:h;}; // parse hour from "HH:MM"
   const toM=t=>{if(!t)return 0;const m=parseInt((t.split(":")[1]||"0"));return isNaN(m)?0:m;};
+  const clampBlock=(fromT,toT)=>{
+    const fh=toH(String(fromT).split(":")[0]),fm=toM(fromT);
+    const th=toH(String(toT).split(":")[0]),tm=toM(toT);
+    if(fh===null||th===null)return null;
+    const sh=Math.max(fh,FHOUR),sm=fh<FHOUR?0:fm;
+    const eh=Math.min(th,LHOUR),em=th<LHOUR?tm:0;
+    if(sh>=LHOUR||eh<=FHOUR||(eh*60+em)<=(sh*60+sm))return null;
+    return {sh,sm,eh,em};
+  };
   const wkBlocks=wkStrs.map(ds=>{
     const evs=[];
-    checkouts.forEach(x=>{
-      const oDs=getDatePart(x.out),rDs=getDatePart(x.ret);
-      const oT=getTimePart(x.out)||"09:00",rT=getTimePart(x.ret)||"17:00";
-      const oH=toH(oT.split(":")[0])||9,oM=toM(oT);
-      const rH=toH(rT.split(":")[0])||17,rM=toM(rT);
-      if(oDs===ds){
-        // Checkout starts today: block from checkout time → return time (same day) or end of grid
-        const sh=Math.max(oH,FHOUR),sm=oH<FHOUR?0:oM;
-        const eh=rDs===ds?Math.min(rH,LHOUR):LHOUR,em=(rDs===ds&&rH<LHOUR)?rM:0;
-        if(sh<LHOUR)evs.push({t:"out",l:x.item,user:x.user,sh,sm,eh,em,continues:rDs!==ds,id:x.id+"o"});
-      } else if(rDs===ds){
-        // Return day: block from top of grid → return time
-        const eh=Math.min(rH,LHOUR),em=rH<LHOUR?rM:0;
-        if(eh>FHOUR)evs.push({t:isOverdue(x)?"odd":"ret",l:x.item,user:x.user,sh:FHOUR,sm:0,eh,em,continues:false,id:x.id+"r"});
-      }
+    evtsFor(ds).forEach(e=>{
+      if(e.allDay||e.t==="pkg")return;                 // handled by the strip
+      const c=e.co;
+      // A daily window repeats on every day of the hold — that is the whole point
+      // of choosing one, and it used to be invisible here.
+      const b=hasWindow(c)
+        ? clampBlock(c.fromTime,c.toTime)
+        : clampBlock(getTimePart(c.out)||"09:00",getTimePart(c.ret)||"17:00");
+      if(b)evs.push({t:e.t,l:e.l,user:e.user,...b,continues:!e.last,id:e.id+ds});
     });
     // Greedy lane assignment for overlapping events
     const MAX_LANES=3;
@@ -2004,7 +2091,6 @@ const CalView=({checkouts,deliveries})=>{
           <button onClick={next} style={NB}>→</button>
         </div>
         <div style={{display:"flex",gap:6}}>
-          <button onClick={goToday} style={MB(false)}>Today</button>
           <button onClick={()=>setCalMode("month")} style={MB(calMode==="month")}>Month</button>
           <button onClick={switchToWeek} style={MB(calMode==="week")}>Week</button>
         </div>
@@ -2066,13 +2152,12 @@ const CalView=({checkouts,deliveries})=>{
             );})}
           </div>
           {/* All-day strip */}
-          {(delivByDay.some(d=>d.length>0)||spanByDay.some(s=>s.length>0))&&(
+          {allDayByDay.some(d=>d.length>0)&&(
             <div style={{display:"flex",background:"var(--bg2)",borderBottom:"1px solid var(--border)"}}>
               <div style={{width:GW,flexShrink:0,fontSize:8,color:"var(--dim)",textAlign:"right",paddingRight:5,paddingTop:6,lineHeight:1.3,fontFamily:"'IBM Plex Mono',monospace",borderRight:"1px solid var(--border)"}}>ALL<br/>DAY</div>
               {wkStrs.map((ds,di)=>(
                 <div key={di} style={{flex:1,padding:"3px",borderLeft:"1px solid var(--border)",minHeight:22,overflow:"hidden"}}>
-                  {delivByDay[di].map((e,j)=><CalChip key={j} e={e}/>)}
-                  {spanByDay[di].map((e,j)=><CalChip key={"s"+j} e={e}/>)}
+                  {allDayByDay[di].map((e,j)=><CalChip key={j} e={e}/>)}
                 </div>
               ))}
             </div>
@@ -2123,7 +2208,7 @@ const CalView=({checkouts,deliveries})=>{
 
       {/* Legend */}
       <div style={{display:"flex",gap:16,marginTop:14,flexWrap:"wrap"}}>
-        {[["var(--spirit)","Delivery"],["var(--blue)","Checkout / In Use"],["var(--amber)","Return Due"],["var(--red)","Overdue"]].map(([col,lbl])=>(
+        {[["var(--spirit)","Delivery"],["var(--blue)","In Use"],["var(--amber)","Awaiting approval"],["var(--red)","Overdue"],["var(--sub)","Returned"]].map(([col,lbl])=>(
           <div key={lbl} style={{display:"flex",alignItems:"center",gap:5,fontSize:12}}>
             {/* The swatch carries the identity; the label stays in text ink.
                 Colouring the label too made the darker hues hard to read and
@@ -2373,6 +2458,7 @@ function LabInventory(){
   const [backingUp,setBackingUp]=useState(false);
   const [preItem,setPreItem] = useState("");
   const [editReq,setEditReq] = useState(null);   // the pending request being edited
+  const [overdueDismissed,setOverdueDismissed] = useState(false);  // resets on reload, so it nags again next sign-in
   const [useItem,setUseItem] = useState(null);        // consumable → Use dialog
   const [notifyItem,setNotifyItem] = useState(null);  // untracked supply → Notify dialog
   const [detail,setDetail] = useState(null);
@@ -2468,13 +2554,16 @@ function LabInventory(){
     if (!APP_CONFIG.apps_script_url || user.token === "local") {
       try {
         const saved = localStorage.getItem("labtrack_data");
-        if (saved) {
-          const d = JSON.parse(saved);
-          if (d.items) setItems(d.items);
-          if (d.deliveries) setDeliv(d.deliveries);
-          if (d.checkouts) setCheckouts(d.checkouts);
-          if (d.orders) setOrders(d.orders);
-        }
+        const d = saved ? JSON.parse(saved) : null;
+        // Nothing stored, or stored-but-empty: hand the previewer a lab to look at
+        // rather than an empty grid. Clearing everything gets it back.
+        const bare = !d || (!(d.items||[]).length && !(d.checkouts||[]).length &&
+                            !(d.orders||[]).length && !(d.deliveries||[]).length);
+        const src = (bare && user.token === "local") ? demoData() : (d || {});
+        setItems(src.items || []);
+        setDeliv(src.deliveries || []);
+        setCheckouts(src.checkouts || []);
+        setOrders(src.orders || []);
       } catch {}
       setDataLoaded(true);
       return;
@@ -2767,6 +2856,14 @@ function LabInventory(){
     }
   };
 
+  const handleCancelRequest=async(coId)=>{
+    const co=checkouts.find(c=>c.id===coId); if(!co)return;
+    setCheckouts(p=>p.filter(c=>c.id!==coId));
+    addToast("success",`Request for ${co.item} withdrawn`);
+    const res=await postAction("cancelCheckout",{checkoutId:coId});
+    if(res&&res.error){ setCheckouts(p=>[co,...p.filter(c=>c.id!==coId)]); addToast("error",res.detail||res.error); }
+  };
+
   const handleDecideCheckout=async(coId,approve)=>{
     const co=checkouts.find(c=>c.id===coId); if(!co)return;
     setCheckouts(p=>p.map(c=>c.id===coId?{...c,status:approve?"Active":"Rejected"}:c));
@@ -2802,6 +2899,12 @@ function LabInventory(){
 
   // effectiveRole: in admin preview mode, show UI as a regular member would see it
   const effectiveRole = previewMode ? "member" : userRole;
+  // Yours are what you can do something about — the checkout is in your name, or
+  // you were listed on it. An admin is on the hook for everyone else's too.
+  const onCheckout = c => !!user?.email && (c.checkedOutByEmail===user.email ||
+    String(c.groupEmails||"").split(",").map(e=>e.trim()).filter(Boolean).includes(user.email));
+  const overdueMine = overdues.filter(onCheckout);
+  const overdueBanner = effectiveRole==="admin" ? overdues : overdueMine;
 
   const canReturn=(c)=>{
     if(effectiveRole==="admin")return true;
@@ -3166,6 +3269,35 @@ function LabInventory(){
           <button onClick={()=>setPreviewMode(false)} style={{background:"none",border:"1px solid color-mix(in srgb, var(--blue) 38%, transparent)",color:"var(--blue)",borderRadius:6,padding:"3px 10px",fontSize:11,cursor:"pointer",fontWeight:600}}>Exit Preview</button>
         </div>
       )}
+      {/* Overdue banner — the one thing that should not wait for you to go looking
+          for it. Yours first because you are the one who can act on it; admins
+          also see the rest, because chasing them is their job. */}
+      {overdueBanner.length>0&&!overdueDismissed&&(
+        <div style={{background:"var(--red-d)",borderBottom:`1px solid ${mix("--red",30)}`,padding:"9px 24px",display:"flex",alignItems:"flex-start",justifyContent:"space-between",gap:12}}>
+          <div style={{display:"flex",alignItems:"flex-start",gap:9,minWidth:0}}>
+            <Ico n="alert" s={15} col="var(--red)"/>
+            <div style={{minWidth:0}}>
+              <div style={{color:"var(--red)",fontSize:12,fontWeight:700}}>
+                {overdueMine.length>0
+                  ? `You have ${overdueMine.length} overdue item${overdueMine.length>1?"s":""}`
+                  : `${overdueBanner.length} item${overdueBanner.length>1?"s":""} overdue in the lab`}
+              </div>
+              <div style={{display:"flex",gap:10,flexWrap:"wrap",marginTop:4}}>
+                {overdueBanner.slice(0,4).map(c=>(
+                  <span key={c.id} style={{color:"var(--sub)",fontSize:11,fontFamily:"'IBM Plex Mono',monospace"}}>
+                    {c.item} · {c.user} · due {c.ret}
+                  </span>
+                ))}
+                {overdueBanner.length>4&&<span style={{color:"var(--dim)",fontSize:11}}>+{overdueBanner.length-4} more</span>}
+              </div>
+            </div>
+          </div>
+          <div style={{display:"flex",gap:8,flexShrink:0}}>
+            <Btn sm v="ghost" onClick={()=>{setTab("usage");setOverdueDismissed(true);}}>Open Usage</Btn>
+            <button onClick={()=>setOverdueDismissed(true)} title="Dismiss until next sign-in" style={{background:"none",border:"none",color:"var(--dim)",cursor:"pointer",padding:4,display:"flex"}}><Ico n="x" s={14}/></button>
+          </div>
+        </div>
+      )}
       {/* Edit lock banner */}
       {editLocked&&(
         <div style={{background:"var(--red-d)",borderBottom:"1px solid color-mix(in srgb, var(--red) 30%, transparent)",padding:"7px 24px",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
@@ -3203,14 +3335,8 @@ function LabInventory(){
         </div>
 
         {/* Alert banners */}
-        {overdues.length>0&&(
-          <div style={{background:"var(--red-d)",border:"1px solid color-mix(in srgb, var(--red) 30%, transparent)",borderRadius:10,padding:"10px 16px",marginBottom:12,display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
-            <Ico n="clock" s={15} col="var(--red)"/>
-            <span style={{color:"var(--red)",fontSize:13,fontWeight:600}}>Overdue returns:</span>
-            <span style={{color:"var(--sub)",fontSize:13}}>{overdues.map(c=>`${c.item} (${c.user})`).join(" · ")}</span>
-            <Btn v="ghost" sm style={{marginLeft:"auto"}} onClick={()=>setTab("usage")}>View in Usage →</Btn>
-          </div>
-        )}
+        {/* Overdues used to get a strip here too. The page-top banner says the same
+            thing on every tab, and the header chip stays after it is dismissed. */}
         {lowStock.length>0&&(
           <div style={{background:"var(--amber-d)",border:"1px solid color-mix(in srgb, var(--amber) 30%, transparent)",borderRadius:10,padding:"10px 16px",marginBottom:24,display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
             <Ico n="alert" s={15} col="var(--amber)"/>
@@ -3723,6 +3849,9 @@ function LabInventory(){
                           {(effectiveRole==="admin"||mine)&&(
                             <Btn sm v="ghost" onClick={()=>setEditReq(c)}><Ico n="edit" s={12}/>Edit</Btn>
                           )}
+                          {mine&&(
+                            <Btn sm v="ghost" onClick={()=>setConfirm({msg:`Withdraw your request for "${c.item}"? It will be removed, not left on record.`,onConfirm:()=>handleCancelRequest(c.id)})}><Ico n="trash" s={12}/>Withdraw</Btn>
+                          )}
                           {effectiveRole==="admin"?(
                             <>
                               <Btn sm v="success" disabled={!!blocker} onClick={()=>setConfirm({msg:`Approve "${c.item}" for ${c.user}, ${Math.ceil(bookingDays(c.out,c.ret))} days?`+(contested?` The other ${reqs.length-1} request${reqs.length>2?"s":""} for this slot will no longer be approvable — reject ${reqs.length>2?"them":"it"} afterwards.`:""),onConfirm:()=>handleDecideCheckout(c.id,true)})}><Ico n="check" s={12} col="var(--green)"/>Approve</Btn>
@@ -3798,7 +3927,7 @@ function LabInventory(){
           <div style={{animation:"fadeUp .3s ease"}}>
             <h2 style={{margin:"0 0 20px",fontFamily:"'Roboto',sans-serif",fontSize:18,fontWeight:700}}>Activity Calendar</h2>
             <div style={{background:"var(--bg1)",border:"1px solid var(--border)",borderRadius:14,padding:24}}>
-              <CalView checkouts={checkouts} deliveries={deliveries}/>
+              <CalView checkouts={checkouts} deliveries={deliveries} user={user} effectiveRole={effectiveRole}/>
             </div>
           </div>
         )}

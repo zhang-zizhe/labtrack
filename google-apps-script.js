@@ -1227,6 +1227,29 @@ function doPost(e) {
     return jsonResponse({ ok: true, pending: stillPending, reason: reason, competing: stillPending ? competing_(merged, co.id) : [] });
   }
 
+  // ── Withdraw your own request ─────────────────────────────────────────────
+  // Rejection is an admin's decision and worth keeping as a record; withdrawing
+  // is just undo, so the row goes rather than sitting in the table as noise. Only
+  // possible while it is still waiting — once decided, it is history.
+  if (action === "cancelCheckout") {
+    const co = findRow("Checkouts", body.checkoutId);
+    if (!co) return jsonResponse({ error: "Checkout not found" });
+    if (co.status !== CHECKOUT_PENDING) {
+      return jsonResponse({ error: "Not pending", detail: "Only a request still waiting for approval can be withdrawn — this one is " + co.status });
+    }
+    const coEmail = String(co.checkedOutByEmail || "").trim().toLowerCase();
+    if (!admin && coEmail && userEmail !== coEmail) {
+      return jsonResponse({ error: "Forbidden", detail: "Only the person who asked for this, or an admin, can withdraw it" });
+    }
+    // Log before destroying, so a failure here can't lose the audit trail.
+    const details = co.user + " | " + (co.out||"—") + " to " + (co.ret||"—") +
+                    (co.fromTime ? " | " + co.fromTime + "\u2013" + co.toTime : "");
+    logDeletion("Request", co.item, details, userName);
+    logAudit(userName, userEmail, "CheckoutWithdrawn", co.item + " | " + details);
+    deleteRow("Checkouts", co.id);
+    return jsonResponse({ ok: true });
+  }
+
   // ── Return Item ───────────────────────────────────────────────────────────
   if (action === "returnItem") {
     const coId = body.checkoutId;
