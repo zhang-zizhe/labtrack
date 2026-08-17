@@ -3,7 +3,8 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-<title>LabTrack — Alliance AI Lab</title>
+<!-- Placeholder for first paint; the real title comes from LAB_CONFIG.app_title below. -->
+<title>LabTrack</title>
 <link rel="icon" id="favicon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔬</text></svg>"/>
 <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700;900&family=IBM+Plex+Mono:wght@400;500;600&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
 <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
@@ -16,6 +17,7 @@
 // its own backend, and registering its origin as a redirect URI — nothing else
 // in this file is lab-specific.
 window.LAB_CONFIG = {
+  app_title:   "LabTrack for Alliance AI Lab@JHU",   // browser tab, login page, header
   lab_name:    "Alliance AI Lab",
   institution: "Johns Hopkins University",
   signin_hint: "@jh.edu",          // shown on the login page; UPN domain, not the mail alias
@@ -51,11 +53,14 @@ window.ENTRA_CONFIG = {
   scopes: ["openid", "profile", "email"],
 };
 
-// Point the favicon at the lab mark. Done here rather than in the <link> so the
-// 40 KB data URI is stored once, in LAB_CONFIG, instead of twice.
-if (window.LAB_CONFIG && window.LAB_CONFIG.logo) {
-  var favicon = document.getElementById("favicon");
-  if (favicon) favicon.href = window.LAB_CONFIG.logo;
+// Title and favicon come from LAB_CONFIG so there is one place to edit per
+// deployment — and so the 40 KB logo data URI is stored once rather than twice.
+if (window.LAB_CONFIG) {
+  if (window.LAB_CONFIG.app_title) document.title = window.LAB_CONFIG.app_title;
+  if (window.LAB_CONFIG.logo) {
+    var favicon = document.getElementById("favicon");
+    if (favicon) favicon.href = window.LAB_CONFIG.logo;
+  }
 }
 </script>
 <script type="module">
@@ -1671,9 +1676,11 @@ const LoginPage = ({onSignIn}) => {
         <div style={{width:78,height:78,borderRadius:18,background:"#ffffff",border:"1px solid var(--border)",display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 10px 30px rgba(0,45,114,.14)",margin:"0 auto 24px",overflow:"hidden"}}>
           <img src={LAB.logo} alt={LAB.lab_name} style={{width:60,height:60,objectFit:"contain",display:"block"}}/>
         </div>
-        <h1 style={{fontFamily:"'Roboto',sans-serif",fontWeight:900,fontSize:32,margin:"0 0 6px",letterSpacing:"-0.03em"}}>LabTrack</h1>
-        <p style={{color:"var(--sub)",fontSize:15,margin:"0 0 8px",lineHeight:1.5}}>{LAB.lab_name} Inventory</p>
-        <p style={{color:"var(--dim)",fontSize:13,margin:"0 0 32px"}}>{LAB.institution}</p>
+        {/* The title already names the lab and the university, so the two
+            subtitle lines that used to sit here would only repeat it. */}
+        {/* balance keeps a two-line title from breaking mid-name — without it
+            this split "Alliance AI" from "Lab@JHU". */}
+        <h1 style={{fontFamily:"'Roboto',sans-serif",fontWeight:900,fontSize:27,margin:"0 0 30px",letterSpacing:"-0.025em",lineHeight:1.25,textWrap:"balance"}}>{LAB.app_title}</h1>
         <div>
           <div style={{display:"flex",justifyContent:"center",marginBottom:16}}>
             <button onClick={signIn} disabled={!msalReady||busy}
@@ -2429,7 +2436,7 @@ function LabInventory(){
             <img src={LAB.logo} alt={LAB.lab_name} style={{width:30,height:30,objectFit:"contain",display:"block"}}/>
           </div>
           <div>
-            <div style={{fontFamily:"'Roboto',sans-serif",fontWeight:900,fontSize:16,letterSpacing:"-0.02em"}}>LabTrack</div>
+            <div style={{fontFamily:"'Roboto',sans-serif",fontWeight:900,fontSize:16,letterSpacing:"-0.02em",whiteSpace:"nowrap"}}>{LAB.app_title}</div>
             <div style={{color:"var(--dim)",fontSize:10,fontFamily:"'IBM Plex Mono',monospace"}}>robotics · inventory · v4.0</div>
           </div>
         </div>

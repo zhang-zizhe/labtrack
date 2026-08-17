@@ -295,11 +295,13 @@ LabTrack up for another lab means editing this and nothing else in the file:
 
 ```js
 window.LAB_CONFIG = {
+  app_title:       "LabTrack for Alliance AI Lab@JHU",  // tab, login page, header
   lab_name:        "Alliance AI Lab",
   institution:     "Johns Hopkins University",
   signin_hint:     "@jh.edu",
   apps_script_url: "",   // this lab's own deployment; empty = localStorage only
   dev_key:         "",   // see "Running without sign-in"
+  logo:            "data:image/png;base64,…",           // inlined lab mark; also the favicon
 };
 
 window.ENTRA_CONFIG = {
