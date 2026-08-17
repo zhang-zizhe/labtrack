@@ -226,6 +226,13 @@ const userFromAuthResult = (r) => {
 };
 
 const DEFAULT_CATEGORIES = ["Robots & Motors","Sensors & Vision","Compute & Electronics","Wiring & Networking","Tools & Hardware","Consumables & Supplies","Safety & Facility","Other"];
+
+// The two flags are mutually exclusive in practice and each only makes sense on
+// one side of this line: you don't share a tube of thread-lock, and you don't
+// deduct a quantity of robot arm. So the form offers whichever one applies and
+// the save path forces the other off, rather than leaving both to be set by hand.
+const CONSUMABLE_CAT = "Consumables & Supplies";
+const isConsumableCat = c => String(c||"") === CONSUMABLE_CAT;
 const ITEMS_PER_PAGE = 24;
 
 // Category tint. The category name is always rendered as text beside it, so this
@@ -815,8 +822,9 @@ const DeliveryModal = ({onClose,onAdd,userName=""}) => {
 const AddItemModal = ({onClose,onAdd,categories,allItems,onShowLabel}) => {
   const [f,setF]=useState({name:"",cat:categories[0]||"Other",qty:"",unit:"units",loc:"",desc:"",minQty:"0",img:"",serial:"",shared:false,consumable:false});
   const [displayId,setDisplayId]=useState(()=>genDisplayId(categories[0]||"Other",allItems));
-  const [splitUnits,setSplitUnits]=useState(false);
-  const [serials,setSerials]=useState([]);
+  // Splitting is the default for anything trackable, so this is an opt-OUT.
+  const [splitOff,setSplitOff]=useState(false);
+  const [units,setUnits]=useState([]);   // per-unit {serial, loc}
   const [advanced,setAdvanced]=useState(false);
   const [submitting,setSubmitting]=useState(false);
   const [warnNoLoc,setWarnNoLoc]=useState(false);
@@ -825,10 +833,14 @@ const AddItemModal = ({onClose,onAdd,categories,allItems,onShowLabel}) => {
   const onCatChange=e=>{setF(p=>({...p,cat:e.target.value}));setDisplayId(genDisplayId(e.target.value,allItems));};
   const CHKBOX=(label,key)=><label style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer",fontSize:13,color:"var(--sub)"}}><input type="checkbox" checked={f[key]} onChange={chk(key)} style={{accentColor:"var(--cyan)",width:14,height:14}}/>{label}</label>;
   const n=+f.qty||0;
-  const canSplit=n>1&&!f.consumable;
+  // A consumable is a pile you draw from, so it stays one row — you don't put a
+  // sticker on each cable tie. Everything else is tracked per unit, which is what
+  // makes "one of the two is out" expressible at all, so qty>1 splits by default.
+  const canSplit=n>1&&!isConsumableCat(f.cat);
+  const splitUnits=canSplit&&!splitOff;
   // Keep serials array in sync with qty when split mode is on
   useEffect(()=>{
-    if(splitUnits&&n>0) setSerials(s=>Array.from({length:n},(_,i)=>s[i]||""));
+    if(splitUnits&&n>0) setUnits(u=>Array.from({length:n},(_,i)=>u[i]||{serial:"",loc:""}));
   },[n,splitUnits]);
   // Duplicate detection: flag existing items sharing a meaningful keyword with the typed name
   const STOP_WORDS=new Set(["the","for","and","or","of","in","on","to","a","an","at","by","is","it","its","be","as","up","do","if","so","but","not","are","was","has","had","that","with","from","this","into","have","than","then","they","when","also","each","set","per","lot","pack","box","kit","new","pcs","qty","use","via","vs","type","size","mod","gen"]);
@@ -841,10 +853,18 @@ const AddItemModal = ({onClose,onAdd,categories,allItems,onShowLabel}) => {
     if(!f.loc.trim()&&!warnNoLoc){setWarnNoLoc(true);return;}
     setWarnNoLoc(false);
     setSubmitting(true);
-    const base={...f,minQty:isNaN(+f.minQty)?0:+f.minQty,status:"Available",usedBy:[]};
+    const base={...f,minQty:isNaN(+f.minQty)?0:+f.minQty,status:"Available",usedBy:[],
+      // Whichever flag the category hides is forced off, so a value set before
+      // the category changed cannot survive as an invisible setting.
+      shared:isConsumableCat(f.cat)?false:!!f.shared, consumable:isConsumableCat(f.cat)?!!f.consumable:false};
     try{
-      if(splitUnits&&canSplit){
-        const results=await Promise.all(Array.from({length:n},(_,u)=>onAdd({...base,id:uid(),qty:1,serial:serials[u]||"",displayId:subIdOf(displayId,u+1)})));
+      if(splitUnits){
+        // A blank per-unit field means "same as above" — that is what keeps the
+        // extra forms cheap to skip when the units really are identical.
+        const results=await Promise.all(Array.from({length:n},(_,u)=>onAdd({...base,id:uid(),qty:1,
+          serial:String(units[u]?.serial||"").trim(),
+          loc:String(units[u]?.loc||"").trim()||base.loc,
+          displayId:subIdOf(displayId,u+1)})));
         const firstId=results[0]; // server-confirmed ID of first unit
         if(firstId&&onShowLabel) onShowLabel({name:base.name,displayId:firstId,baseId:getBaseId(firstId),count:results.filter(Boolean).length});
       } else {
@@ -890,7 +910,7 @@ const AddItemModal = ({onClose,onAdd,categories,allItems,onShowLabel}) => {
           <Fld label="Location"><Inp placeholder="Room 3A / Workbench 2 / Shelf C1" value={f.loc} onChange={e=>{s("loc")(e);setWarnNoLoc(false);}} style={warnNoLoc&&!f.loc.trim()?{borderColor:"var(--amber)"}:{}}/></Fld>
           {warnNoLoc&&!f.loc.trim()&&<div style={{marginTop:-10,marginBottom:8,fontSize:11,color:"var(--amber)"}}>⚠ No location set — this item will be hard to find later. Press Add Item again to skip.</div>}
         </div>
-        <div style={{gridColumn:"1/-1",display:"flex",gap:20,flexWrap:"wrap",padding:"4px 0"}}>{CHKBOX("Shared — multiple users simultaneously","shared")}{CHKBOX("Consumable — deduct qty, no checkout needed","consumable")}</div>
+        <div style={{gridColumn:"1/-1",display:"flex",gap:20,flexWrap:"wrap",padding:"4px 0"}}>{isConsumableCat(f.cat)?CHKBOX("Consumable — deduct qty, no checkout needed","consumable"):CHKBOX("Shared — multiple users simultaneously","shared")}</div>
         <div style={{gridColumn:"1/-1",marginBottom:4}}>
           <button onClick={()=>setAdvanced(v=>!v)} style={{background:"none",border:"none",color:"var(--dim)",fontSize:12,cursor:"pointer",padding:"2px 0",display:"flex",alignItems:"center",gap:4}}>
             <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{transform:advanced?"rotate(180deg)":"rotate(0deg)",transition:"transform .2s"}}><polyline points="6 9 12 15 18 9"/></svg>
@@ -900,31 +920,40 @@ const AddItemModal = ({onClose,onAdd,categories,allItems,onShowLabel}) => {
         {advanced&&(
           <Fld label="Min Stock Alert"><Inp type="number" min="0" placeholder="0" value={f.minQty} onChange={s("minQty")}/></Fld>
         )}
-        {advanced&&!(splitUnits&&canSplit)&&(
+        {advanced&&!splitUnits&&(
           <div style={{gridColumn:"1/-1"}}><Fld label="Serial/Product No."><Inp placeholder="e.g. SN-2024-001 or product number" value={f.serial} onChange={s("serial")}/></Fld></div>
         )}
         {advanced&&(
           <div style={{gridColumn:"1/-1"}}><Fld label="Tags / Specs" hint="Press Enter or , to add — e.g. M3×8, stainless, pack of 50"><TagInput tags={f.desc?f.desc.split(",").map(t=>t.trim()).filter(Boolean):[]} onChange={ts=>setF(p=>({...p,desc:ts.join(", ")}))} placeholder="Type a tag and press Enter…"/></Fld></div>
         )}
-        {advanced&&canSplit&&(
+        {/* Out of Advanced on purpose: for anything trackable this is the default
+            path now, so hiding it behind a disclosure meant the common case took
+            an extra click and the per-unit fields were easy to miss entirely. */}
+        {canSplit&&(
           <div style={{gridColumn:"1/-1",background:"var(--cyan-d)",border:"1px solid var(--cyan-m)",borderRadius:8,padding:"10px 14px"}}>
             <label style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer",fontSize:13,color:"var(--cyan)"}}>
-              <input type="checkbox" checked={splitUnits} onChange={e=>setSplitUnits(e.target.checked)} style={{accentColor:"var(--cyan)",width:14,height:14}}/>
-              <strong>Track each unit individually</strong><span style={{color:"var(--sub)",fontWeight:400}}> — for cameras, robots, laptops</span>
+              <input type="checkbox" checked={splitUnits} onChange={e=>setSplitOff(!e.target.checked)} style={{accentColor:"var(--cyan)",width:14,height:14}}/>
+              <strong>Track each unit individually</strong><span style={{color:"var(--sub)",fontWeight:400}}> — {n} separate labels, statuses and checkout histories</span>
             </label>
             {splitUnits&&(
-              <div style={{marginTop:8}}>
+              <div style={{marginTop:10}}>
                 <div style={{fontSize:11,color:"var(--sub)",fontFamily:"'IBM Plex Mono',monospace",marginBottom:8,lineHeight:1.6}}>
                   Creates {n} items:{" "}
                   {Array.from({length:Math.min(n,3)},(_,i)=>subIdOf(displayId,i+1)).join(", ")}
                   {n>3?` … ${subIdOf(displayId,n)}`:""}<br/>
-                  Each gets its own sticker, status, and checkout history.
+                  Leave a field blank to use the value from the form above.
                 </div>
-                <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(180px,1fr))",gap:6}}>
+                <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(230px,1fr))",gap:8}}>
                   {Array.from({length:n},(_,i)=>(
-                    <Fld key={i} label={`Serial/Product No. — unit ${String(i+1).padStart(LABEL_SUB_DIGITS,"0")}`}>
-                      <Inp placeholder="e.g. SN-001" value={serials[i]||""} onChange={e=>{const a=[...serials];a[i]=e.target.value;setSerials(a);}}/>
-                    </Fld>
+                    <div key={i} style={{background:"var(--bg1)",border:"1px solid var(--border)",borderRadius:8,padding:"8px 10px"}}>
+                      <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:11,fontWeight:700,color:"var(--cyan)",letterSpacing:"0.05em",marginBottom:6}}>{subIdOf(displayId,i+1)}</div>
+                      <Fld label="Serial/Product No.">
+                        <Inp placeholder="e.g. SN-001" value={units[i]?.serial||""} onChange={e=>{const a=[...units];a[i]={...(a[i]||{}),serial:e.target.value};setUnits(a);}}/>
+                      </Fld>
+                      <Fld label="Location">
+                        <Inp placeholder={f.loc||"same as above"} value={units[i]?.loc||""} onChange={e=>{const a=[...units];a[i]={...(a[i]||{}),loc:e.target.value};setUnits(a);}}/>
+                      </Fld>
+                    </div>
                   ))}
                 </div>
               </div>
@@ -937,7 +966,7 @@ const AddItemModal = ({onClose,onAdd,categories,allItems,onShowLabel}) => {
       </div>
       <div style={{borderTop:"1px solid var(--border)",marginTop:4,paddingTop:16,display:"flex",gap:10,justifyContent:"flex-end"}}>
         <Btn v="ghost" onClick={onClose}>Cancel</Btn>
-        <Btn onClick={submit} disabled={!f.name||!f.qty||submitting}><Ico n="plus" s={14} col="var(--on-accent)"/>{submitting?"Adding…":(splitUnits&&canSplit?`Create ${n} Items`:"Add Item")}</Btn>
+        <Btn onClick={submit} disabled={!f.name||!f.qty||submitting}><Ico n="plus" s={14} col="var(--on-accent)"/>{submitting?"Adding…":(splitUnits?`Create ${n} Items`:"Add Item")}</Btn>
       </div>
     </Modal>
   );
@@ -954,10 +983,11 @@ const EditItemModal = ({item,onClose,onSave,onDelete,onAdd,categories,isAdmin}) 
   const [splitConfirm,setSplitConfirm]=useState(false);
   const CHKBOX=(label,key)=><label style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer",fontSize:13,color:"var(--sub)"}}><input type="checkbox" checked={f[key]} onChange={chk(key)} style={{accentColor:"var(--cyan)",width:14,height:14}}/>{label}</label>;
   const n=+f.qty||0;
-  const canSplit=n>1&&!f.consumable;
+  const canSplit=n>1&&!isConsumableCat(f.cat);
   const baseId=getBaseId(f.displayId);
   const handleSplit=()=>{
-    const base={...item,...f,minQty:isNaN(+f.minQty)?0:+f.minQty,shared:f.shared,consumable:f.consumable};
+    const base={...item,...f,minQty:isNaN(+f.minQty)?0:+f.minQty,
+      shared:isConsumableCat(f.cat)?false:!!f.shared, consumable:isConsumableCat(f.cat)?!!f.consumable:false};
     onSave({...base,qty:1,displayId:subIdOf(baseId,1)});
     for(let u=2;u<=n;u++) onAdd({...base,id:uid(),qty:1,status:"Available",usedBy:[],displayId:subIdOf(baseId,u)});
     onClose();
@@ -975,7 +1005,7 @@ const EditItemModal = ({item,onClose,onSave,onDelete,onAdd,categories,isAdmin}) 
         <Fld label="Label ID" hint="ID on physical sticker"><Inp value={f.displayId} onChange={s("displayId")}/></Fld>
         <div style={{gridColumn:"1/-1"}}><Fld label="Serial/Product No."><Inp placeholder="e.g. SN-2024-001 or product number" value={f.serial} onChange={s("serial")}/></Fld></div>
         <div style={{gridColumn:"1/-1"}}><Fld label="Tags / Specs" hint="Press Enter or , to add — e.g. M3×8, stainless, pack of 50"><TagInput tags={f.desc?f.desc.split(",").map(t=>t.trim()).filter(Boolean):[]} onChange={ts=>{setF(p=>({...p,desc:ts.join(", ")}));setChanged(true);}}/></Fld></div>
-        <div style={{gridColumn:"1/-1",display:"flex",gap:20,flexWrap:"wrap",padding:"4px 0"}}>{CHKBOX("Shared — multiple users simultaneously","shared")}{CHKBOX("Consumable — deduct qty, no checkout needed","consumable")}</div>
+        <div style={{gridColumn:"1/-1",display:"flex",gap:20,flexWrap:"wrap",padding:"4px 0"}}>{isConsumableCat(f.cat)?CHKBOX("Consumable — deduct qty, no checkout needed","consumable"):CHKBOX("Shared — multiple users simultaneously","shared")}</div>
         {canSplit&&(
           <div style={{gridColumn:"1/-1",background:"var(--cyan-d)",border:"1px solid var(--cyan-m)",borderRadius:8,padding:"10px 14px"}}>
             {!splitConfirm?(
@@ -1022,7 +1052,8 @@ const EditItemModal = ({item,onClose,onSave,onDelete,onAdd,categories,isAdmin}) 
               fields keep whatever the current value is. */}
           <Btn onClick={()=>{if(f.name&&f.qty){
             const patch={id:item.id,name:f.name,cat:f.cat,unit:f.unit,loc:f.loc,desc:f.desc,img:f.img,serial:f.serial,
-                         qty:+f.qty,minQty:isNaN(+f.minQty)?0:+f.minQty,shared:f.shared,consumable:f.consumable,displayId:f.displayId};
+                         qty:+f.qty,minQty:isNaN(+f.minQty)?0:+f.minQty,displayId:f.displayId,
+                         shared:isConsumableCat(f.cat)?false:!!f.shared, consumable:isConsumableCat(f.cat)?!!f.consumable:false};
             if(f.status!==item.status) patch.status=f.status;
             onSave(patch);onClose();
           }}} disabled={!f.name||!f.qty}><Ico n="check" s={14} col="var(--on-accent)"/>Save Changes</Btn>
@@ -1209,17 +1240,23 @@ const GroupDetail = ({group,checkouts,onClose,onEdit,onQuickCheckout,onReturn,ed
         <span style={{background:"var(--bg3)",border:"1px solid var(--border)",borderRadius:4,padding:"2px 8px",color:"var(--cyan)",fontSize:11,fontFamily:"'IBM Plex Mono',monospace",letterSpacing:"0.05em"}}>{group.displayId}</span>
         <span style={{color:"var(--purple)",fontSize:11,fontWeight:700}}>TRACKED UNITS · {group.qty} total</span>
         <span style={{color:"var(--sub)",fontSize:11}}>{group.cat}</span>
-        {group.loc&&<span style={{color:"var(--dim)",fontSize:11}}>📍 {group.loc}</span>}
+        {/* Units can sit in different places, so list what is actually there.
+            The group's own `loc` is just the first unit's and hid the rest. */}
+        {(()=>{const locs=[...new Set((group._items||[]).map(u=>String(u.loc||"").trim()).filter(Boolean))];
+          return locs.length?<span style={{color:"var(--dim)",fontSize:11}}>📍 {locs.join(" · ")}</span>:null;})()}
       </div>
       {group.desc&&<div style={{margin:"0 0 12px"}}><DescChips desc={group.desc}/></div>}
       <div style={{display:"flex",flexDirection:"column",gap:8,maxHeight:"55vh",overflowY:"auto"}}>
         {group._items.map((unit,i)=>{
           const inUse=toArr(unit.usedBy).length>0;
-          const activeCheckout=checkouts.find(c=>c.item===unit.name&&c.status==="Active"&&(!c.displayId||c.displayId===unit.displayId));
+          // Match on itemId. Matching on name picked whichever sibling came first,
+          // and c.displayId never existed on a checkout record at all.
+          const activeCheckout=checkouts.find(c=>c.status==="Active"&&(c.itemId?String(c.itemId)===String(unit.id):c.item===unit.name));
           return(
             <div key={unit.id} style={{background:"var(--bg2)",border:"1px solid var(--border)",borderRadius:10,padding:"12px 14px",display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
               <div style={{minWidth:120}}>
                 <div style={{fontFamily:"'IBM Plex Mono',monospace",color:"var(--cyan)",fontSize:12,fontWeight:700,letterSpacing:"0.05em"}}>{unit.displayId}</div>
+                {unit.loc&&<div style={{color:"var(--dim)",fontSize:11,marginTop:2}}>📍 {unit.loc}</div>}
                 {unit.serial&&<div style={{color:"var(--dim)",fontSize:11,marginTop:2}}>S/N: {unit.serial}</div>}
               </div>
               <div style={{flex:1}}>
@@ -2755,9 +2792,17 @@ function LabInventory(){
                         <div style={{position:"relative"}}>
                           <ItemImage src={item.img} cat={item.cat} style={{width:"100%",height:112}}/>
                           <div style={{position:"absolute",bottom:0,left:0,right:0,height:44,background:"linear-gradient(transparent,var(--bg1))"}}/>
-                          <div style={{position:"absolute",top:10,right:10}}><Badge status={item.status}/></div>
-                          <div style={{position:"absolute",top:10,left:10,background:"color-mix(in srgb, var(--bg1) 82%, transparent)",border:"1px solid var(--border)",borderRadius:7,padding:"3px 8px"}}>
-                            <span style={{color:ac,fontSize:9,fontWeight:700,fontFamily:"'IBM Plex Mono',monospace",letterSpacing:"0.08em"}}>{(item.cat||"").toUpperCase()}</span>
+                          {/* One flex row rather than two independently-anchored corners: a long
+                              status ("PARTIALLY IN USE") used to grow leftward straight over the
+                              category tag. The category truncates instead, and the trailing
+                              letter-space is subtracted from the right padding so the chip is not
+                              visibly heavier on that side. */}
+                          <div style={{position:"absolute",top:10,left:10,right:10,display:"flex",alignItems:"flex-start",justifyContent:"space-between",gap:8}}>
+                            <span style={{background:"color-mix(in srgb, var(--bg1) 82%, transparent)",border:"1px solid var(--border)",borderRadius:7,
+                                          padding:"3px calc(8px - 0.08em) 3px 8px",minWidth:0,
+                                          color:ac,fontSize:9,fontWeight:700,fontFamily:"'IBM Plex Mono',monospace",letterSpacing:"0.08em",
+                                          overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{(item.cat||"").toUpperCase()}</span>
+                            <span style={{flexShrink:0}}><Badge status={item.status}/></span>
                           </div>
                         </div>
                         <div style={{padding:"11px 14px 13px"}}>
@@ -2787,9 +2832,17 @@ function LabInventory(){
                       <div style={{position:"relative"}}>
                         <ItemImage src={item.img} cat={item.cat} style={{width:"100%",height:112}}/>
                         <div style={{position:"absolute",bottom:0,left:0,right:0,height:44,background:"linear-gradient(transparent,var(--bg1))"}}/>
-                        <div style={{position:"absolute",top:10,right:10}}><Badge status={isLow?"Low Stock":item.status}/></div>
-                        <div style={{position:"absolute",top:10,left:10,background:"color-mix(in srgb, var(--bg1) 82%, transparent)",border:"1px solid var(--border)",borderRadius:7,padding:"3px 8px"}}>
-                          <span style={{color:ac,fontSize:9,fontWeight:700,fontFamily:"'IBM Plex Mono',monospace",letterSpacing:"0.08em"}}>{(item.cat||"").toUpperCase()}</span>
+                        {/* One flex row rather than two independently-anchored corners: a long
+                            status ("PARTIALLY IN USE") used to grow leftward straight over the
+                            category tag. The category truncates instead, and the trailing
+                            letter-space is subtracted from the right padding so the chip is not
+                            visibly heavier on that side. */}
+                        <div style={{position:"absolute",top:10,left:10,right:10,display:"flex",alignItems:"flex-start",justifyContent:"space-between",gap:8}}>
+                          <span style={{background:"color-mix(in srgb, var(--bg1) 82%, transparent)",border:"1px solid var(--border)",borderRadius:7,
+                                        padding:"3px calc(8px - 0.08em) 3px 8px",minWidth:0,
+                                        color:ac,fontSize:9,fontWeight:700,fontFamily:"'IBM Plex Mono',monospace",letterSpacing:"0.08em",
+                                        overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{(item.cat||"").toUpperCase()}</span>
+                          <span style={{flexShrink:0}}><Badge status={isLow?"Low Stock":item.status}/></span>
                         </div>
                       </div>
                       <div style={{padding:"11px 14px 13px"}}>
