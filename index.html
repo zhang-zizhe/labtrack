@@ -17,7 +17,7 @@
 // its own backend, and registering its origin as a redirect URI — nothing else
 // in this file is lab-specific.
 window.LAB_CONFIG = {
-  app_title:   "LabTrack for Alliance AI Lab @ JHU",   // browser tab, login page, header
+  app_title:   "LabTrack for Alliance AI Lab",   // browser tab, login page, header
   lab_name:    "Alliance AI Lab",
   institution: "Johns Hopkins University",
   signin_hint: "@jh.edu",          // shown on the login page; UPN domain, not the mail alias
@@ -993,7 +993,21 @@ const EditItemModal = ({item,onClose,onSave,onDelete,onAdd,categories,isAdmin}) 
         </div>
         <div style={{display:"flex",gap:10}}>
           <Btn v="ghost" onClick={onClose}>Cancel</Btn>
-          <Btn onClick={()=>{if(f.name&&f.qty){onSave({...item,...f,qty:+f.qty,minQty:isNaN(+f.minQty)?0:+f.minQty,shared:f.shared,consumable:f.consumable,displayId:f.displayId});onClose();}}} disabled={!f.name||!f.qty}><Ico n="check" s={14} col="var(--on-accent)"/>Save Changes</Btn>
+          {/* Send only the fields this form owns — never {...item}. `item` is the
+              snapshot from when the modal opened, so spreading it reverted anything
+              that changed in the meantime. Returning an item set it back to
+              Available; saving an edit then flipped it to "In Use" again while
+              leaving usedBy empty, which is the inconsistent state that showed up.
+              status ships only when the dropdown was actually touched, so an
+              untouched form can no longer re-assert a stale lifecycle value.
+              handleUpdateItem and the backend both merge by key, so omitted
+              fields keep whatever the current value is. */}
+          <Btn onClick={()=>{if(f.name&&f.qty){
+            const patch={id:item.id,name:f.name,cat:f.cat,unit:f.unit,loc:f.loc,desc:f.desc,img:f.img,serial:f.serial,
+                         qty:+f.qty,minQty:isNaN(+f.minQty)?0:+f.minQty,shared:f.shared,consumable:f.consumable,displayId:f.displayId};
+            if(f.status!==item.status) patch.status=f.status;
+            onSave(patch);onClose();
+          }}} disabled={!f.name||!f.qty}><Ico n="check" s={14} col="var(--on-accent)"/>Save Changes</Btn>
         </div>
       </div>
     </Modal>
@@ -2438,7 +2452,7 @@ function LabInventory(){
           </div>
           <div>
             <div style={{fontFamily:"'Roboto',sans-serif",fontWeight:900,fontSize:16,letterSpacing:"-0.02em",whiteSpace:"nowrap"}}>{LAB.app_title}</div>
-            <div style={{color:"var(--dim)",fontSize:10,fontFamily:"'IBM Plex Mono',monospace"}}>robotics · inventory · v4.0</div>
+            <div style={{color:"var(--dim)",fontSize:10,fontFamily:"'IBM Plex Mono',monospace"}}>robotics · inventory · v0.1</div>
           </div>
         </div>
         <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>

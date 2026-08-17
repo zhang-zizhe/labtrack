@@ -295,7 +295,7 @@ LabTrack up for another lab means editing this and nothing else in the file:
 
 ```js
 window.LAB_CONFIG = {
-  app_title:       "LabTrack for Alliance AI Lab @ JHU",  // tab, login page, header
+  app_title:       "LabTrack for Alliance AI Lab",  // tab, login page, header
   lab_name:        "Alliance AI Lab",
   institution:     "Johns Hopkins University",
   signin_hint:     "@jh.edu",
