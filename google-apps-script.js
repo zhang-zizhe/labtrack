@@ -9,7 +9,7 @@
  * and adds any column a pre-existing sheet is missing:
  *   Items      — id | name | cat | qty | unit | loc | minQty | img | desc | status | usedBy | serial | displayId | shared | consumable
  *   Deliveries — id | item | qty | unit | from | receivedBy | date | tracking | status
- *   Checkouts  — id | itemId | item | user | out | ret | status | checkedOutByEmail | groupEmails | qty
+ *   Checkouts  — id | itemId | item | user | out | ret | status | checkedOutByEmail | groupEmails | qty | fromTime | toTime
  *   Orders     — id | store | item | link | qty | unit | price | cat | requestedBy | reason | urgency | date | status | requestedByEmail
  *   Settings   — key | value
  *   DeleteLog  — date | type | name | details | deletedBy
@@ -61,6 +61,79 @@ const INITIAL_ADMIN = "zzhan409@jh.edu";
 // index.html mirrors both widths for its preview; this file assigns the real ones.
 const LABEL_DIGITS = 3;      // main number
 const LABEL_SUB_DIGITS = 2;  // split-unit suffix
+
+// ─── BOOKING RULES ───────────────────────────────────────────────────────────
+// A checkout runs from `out` to `ret`. A shared item may additionally be booked
+// for a daily window — fromTime/toTime, e.g. 09:00–12:00 every day in that range
+// — so several people can hold the same thing on the same day at different hours.
+// Empty times mean all day.
+//
+// Holding anything for longer than this needs an admin to agree, whether it is
+// shared or not: a month-long checkout is a transfer, not a loan.
+const MAX_DAYS_WITHOUT_APPROVAL = 7;
+const CHECKOUT_PENDING = "Pending Approval";
+
+// "YYYY-MM-DD HH:MM" → epoch ms. Apps Script's Date parses this reliably enough
+// for comparison; the values are always produced by the client in this shape.
+function bookingMs_(s) {
+  var t = String(s || "").trim().replace(" ", "T");
+  var d = new Date(t);
+  return isNaN(d.getTime()) ? null : d.getTime();
+}
+
+function bookingDays_(out, ret) {
+  var a = bookingMs_(out), b = bookingMs_(ret);
+  if (a === null || b === null) return 0;
+  return (b - a) / 86400000;
+}
+
+function needsApproval_(c) {
+  return bookingDays_(c.out, c.ret) > MAX_DAYS_WITHOUT_APPROVAL;
+}
+
+// "HH:MM" → minutes past midnight. Blank means all day, which the callers treat
+// as the full 0–1440 range rather than as a missing value.
+function minutes_(hhmm) {
+  var m = String(hhmm || "").match(/^(\d{1,2}):(\d{2})$/);
+  return m ? parseInt(m[1], 10) * 60 + parseInt(m[2], 10) : null;
+}
+
+// Two bookings clash when their date ranges overlap AND their daily windows do.
+// Touching endpoints don't clash: handing something over at 12:00 is fine.
+function bookingsClash_(a, b) {
+  var aStart = bookingMs_(a.out), aEnd = bookingMs_(a.ret);
+  var bStart = bookingMs_(b.out), bEnd = bookingMs_(b.ret);
+  if (aStart === null || aEnd === null || bStart === null || bEnd === null) return false;
+  if (aStart >= bEnd || bStart >= aEnd) return false;
+
+  var aFrom = minutes_(a.fromTime), aTo = minutes_(a.toTime);
+  var bFrom = minutes_(b.fromTime), bTo = minutes_(b.toTime);
+  if (aFrom === null || aTo === null || bFrom === null || bTo === null) return true;  // either is all day
+  return aFrom < bTo && bFrom < aTo;
+}
+
+/**
+ * Why a booking can't stand, or "" if it can.
+ *
+ * Called twice: once when the booking is made, and again when an admin approves a
+ * long hold — a pending request reserves nothing, so by the time someone gets to
+ * it the slot may be gone. ignoreId skips the row being approved, which is in the
+ * table by then and would otherwise clash with itself.
+ */
+function bookingConflict_(c, ignoreId) {
+  const target = findRow("Items", c.itemId ? c.itemId : function (r) { return r.name === c.item; });
+  const shared = !!target && (target.shared === true || String(target.shared).toLowerCase() === "true");
+  if (!shared) return "";   // sole-use items are gated by availability, not by the hour
+  const clash = readTable("Checkouts").filter(function (x) {
+    if (ignoreId != null && String(x.id) === String(ignoreId)) return false;
+    if (x.status !== "Active" && x.status !== CHECKOUT_PENDING) return false;
+    var same = x.itemId ? String(x.itemId) === String(c.itemId) : x.item === c.item;
+    return same && bookingsClash_(x, c);
+  })[0];
+  if (!clash) return "";
+  return "Already booked by " + clash.user + " (" + clash.out + " \u2192 " + clash.ret +
+         (clash.fromTime ? ", " + clash.fromTime + "\u2013" + clash.toTime : "") + ")";
+}
 
 // Lazy prefix so a prefix containing a hyphen still parses; the sub group is
 // optional. A width-based regex can't do this any more — at three digits,
@@ -641,7 +714,7 @@ function logAudit(userName, userEmail, action, details) {
 const TABLE_HEADERS = {
   Items:      ["id","name","cat","qty","unit","loc","minQty","img","desc","status","usedBy","serial","displayId","shared","consumable"],
   Deliveries: ["id","item","qty","unit","from","receivedBy","date","tracking","status"],
-  Checkouts:  ["id","itemId","item","user","out","ret","status","checkedOutByEmail","groupEmails","qty"],
+  Checkouts:  ["id","itemId","item","user","out","ret","status","checkedOutByEmail","groupEmails","qty","fromTime","toTime"],
   Orders:     ["id","store","item","link","qty","unit","price","cat","requestedBy","reason","urgency","date","status","requestedByEmail"],
   Settings:   ["key","value"],
   DeleteLog:  ["date","type","name","details","deletedBy"],
@@ -971,10 +1044,57 @@ function doPost(e) {
   // ── Add Checkout ──────────────────────────────────────────────────────────
   if (action === "addCheckout") {
     const c = body.checkout;
+
+    // Re-checked here because the browser's view of who holds what is a poll old,
+    // and two people can book the same slot inside that window.
+    const clash = bookingConflict_(c, null);
+    if (clash) return jsonResponse({ error: "Clash", detail: clash });
+
+    // Long holds wait for an admin. The item stays available until then — nothing
+    // is reserved by asking, or a rejected request would quietly take it away.
+    const pending = needsApproval_(c);
+    if (pending) c.status = CHECKOUT_PENDING;
     appendRow("Checkouts", c);
+
+    if (pending) {
+      sendSlack("⏳", "Approval Needed: " + c.item, "Longer than " + MAX_DAYS_WITHOUT_APPROVAL + " days",
+        ["*Person*\n" + c.user, "*From*\n" + (c.out||"—"), "*Until*\n" + (c.ret||"—")], "high");
+      logAudit(userName, userEmail, "CheckoutPending", c.item + " → " + c.user + " | until:" + (c.ret||"—"));
+      return jsonResponse({ ok: true, pending: true });
+    }
+
     updateItemStatus(c.itemId, c.item, "In Use", c.user, "add");
     sendSlack("🔑", "Item Checked Out: " + c.item, null, ["*Person*\n" + c.user, "*Date*\n" + (c.out||"—"), "*Return by*\n" + (c.ret||"—")]);
     logAudit(userName, userEmail, "Checkout", c.item + " → " + c.user + " | return by:" + (c.ret||"—"));
+    return jsonResponse({ ok: true });
+  }
+
+  // ── Approve / reject a long checkout (admin only) ─────────────────────────
+  if (action === "decideCheckout") {
+    if (!admin) return jsonResponse({ error: "Forbidden", detail: "Only admins can approve checkouts" });
+    const co = findRow("Checkouts", body.checkoutId);
+    if (!co) return jsonResponse({ error: "Checkout not found" });
+    if (co.status !== CHECKOUT_PENDING) return jsonResponse({ error: "Not pending", detail: "This request is already " + co.status });
+
+    if (body.approve) {
+      // Nothing was reserved while this waited, so the slot may be gone. Approving
+      // blindly would hand the same item to two people.
+      const gone = bookingConflict_(co, co.id);
+      if (gone) return jsonResponse({ error: "Clash", detail: "Taken while this was waiting \u2014 " + gone });
+      const item = findRow("Items", co.itemId ? co.itemId : function (r) { return r.name === co.item; });
+      const shared = !!item && (item.shared === true || String(item.shared).toLowerCase() === "true");
+      if (item && !shared && item.status === "In Use" && String(item.usedBy || "").indexOf(co.user) < 0) {
+        return jsonResponse({ error: "Clash", detail: "Someone checked out " + co.item + " while this was waiting" });
+      }
+      updateRow("Checkouts", body.checkoutId, { status: "Active" });
+      updateItemStatus(co.itemId, co.item, "In Use", co.user, "add");
+      sendSlack("✅", "Long Checkout Approved: " + co.item, null, ["*Person*\n" + co.user, "*Until*\n" + (co.ret||"—"), "*By*\n" + userName]);
+      logAudit(userName, userEmail, "CheckoutApproved", co.item + " → " + co.user);
+    } else {
+      updateRow("Checkouts", body.checkoutId, { status: "Rejected" });
+      sendSlack("🚫", "Long Checkout Rejected: " + co.item, null, ["*Person*\n" + co.user, "*By*\n" + userName], "high");
+      logAudit(userName, userEmail, "CheckoutRejected", co.item + " → " + co.user);
+    }
     return jsonResponse({ ok: true });
   }
 

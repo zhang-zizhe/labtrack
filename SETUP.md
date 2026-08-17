@@ -33,13 +33,14 @@ The backend uses a Google Sheet with these tabs:
 
 **Deliveries** — `id | item | qty | unit | from | receivedBy | date | tracking | status`
 
-**Checkouts** — `id | itemId | item | user | out | ret | status | checkedOutByEmail | groupEmails | qty`
+**Checkouts** — `id | itemId | item | user | out | ret | status | checkedOutByEmail | groupEmails | qty | fromTime | toTime`
 
 **Orders** — `id | store | item | link | qty | unit | price | cat | requestedBy | reason | urgency | date | status | requestedByEmail`
 
 > ⚠️ Column order matters for new rows written by the script. If upgrading an existing sheet:
 > - **Orders**: add `requestedByEmail` as the last column (column 14)
-> - **Checkouts**: add `checkedOutByEmail`, `groupEmails` and `qty` as the last three columns
+> - **Checkouts**: add `checkedOutByEmail`, `groupEmails`, `qty`, `fromTime` and `toTime` as the last five columns
+> - `setupNewLab()` appends whatever is missing for you, in place, without touching existing rows
 > - Existing rows without these columns remain fully functional (permissions fall back gracefully)
 
 **Settings** — `key | value`
@@ -278,6 +279,7 @@ All deletions are logged in the DeleteLog tab with timestamp, details, and who d
 - **Order Requests**: Submit orders (store, item, link, qty, price, etc.); only the requester or an admin can edit; admins can change status (Pending/Approved/Ordered/Received/Rejected); "Mark Received" opens a staging form to set location/label/serial before adding to inventory; generate copy-pasteable email text with per-item totals and grand total
 - **Usage Tracking**: Check out/return items with overdue alerts and bulk return; only the checkout creator, listed group members, or admins can return an item; consumables use a "Use" button instead of checkout
 - **Group Checkout**: When checking out, optionally list teammates' emails as group members — they can then return the item too
+- **Booking rules**: shared items are booked by the hour and long holds need an admin — see below
 - **Calendar**: Visual calendar of deliveries, checkouts, and return dates
 - **Live Sync**: Auto-polls every 30s so all users see changes without refreshing
 - **Pagination & Sort**: 24 items/page with sort by name, date, quantity; Order Requests tab has search/filter/pagination (15/page) with shift-click range select
@@ -285,6 +287,44 @@ All deletions are logged in the DeleteLog tab with timestamp, details, and who d
 - **Dark/Light Mode**: Toggle with the ☀/🌙 button in the header; preference saved per browser
 - **Access Control**: Server-side RBAC — admins control categories/deletion/settings; order editing restricted to requester; returns restricted to checkout owner + group members; all enforced in Apps Script, not just UI
 - **Delete Audit Log**: Full record of all deletions
+
+---
+
+## Booking rules
+
+Three rules govern checkouts. All three are enforced in `google-apps-script.js`,
+which is the only place that can see everyone's bookings at once; the checkout form
+re-implements them so it can refuse before a round trip instead of after one. The
+two halves have to be kept in step — the constants have the same names on both
+sides (`MAX_DAYS_WITHOUT_APPROVAL`, `bookingsClash_`/`bookingsClash`).
+
+**1. Shared items are booked by the hour.** Checking out an item marked *Shared*
+asks whether the hold is all day or the same window every day (`fromTime`,
+`toTime`, blank = all day). The question only appears when something shared is
+selected — a sole-use item is held for the whole span whatever the clock says, so
+asking would imply a freedom that isn't there. A batch containing both writes the
+window only onto the shared rows.
+
+**2. A repeat booking has to find an unoccupied slot.** Two bookings of the same
+shared item clash when their date ranges overlap **and** their daily windows do. A
+blank window is all day and clashes with anything inside the range. Touching
+endpoints don't clash, so handing something over at 12:00 is fine. Both `Active`
+and `Pending Approval` rows hold their slot; `Returned` and `Rejected` free it.
+
+**3. Anything held more than a week needs an admin.** Over
+`MAX_DAYS_WITHOUT_APPROVAL` (7) days, shared or not, the checkout is written with
+status `Pending Approval` and the item is **not** marked In Use — nothing is
+reserved by asking, or a request that gets turned down would quietly take the item
+off the shelf. Slack gets a high-priority ping. Admins see a *Waiting for approval*
+panel at the top of the Usage tab with Approve / Reject, which posts
+`decideCheckout`; members see "Waiting on an admin".
+
+> Because a pending request reserves nothing, the slot can be gone by the time an
+> admin gets to it. Approval re-runs both checks — the clash test for shared items,
+> and an "is it still on the shelf" test for sole-use ones — and refuses with
+> *"Taken while this was waiting"* rather than handing one item to two people.
+
+Both halves are covered by `node test-sheet-setup.js`.
 
 ---
 
@@ -351,6 +391,8 @@ python3 -m http.server 8000     # then open http://localhost:8000/index.html
 
 ```bash
 node --check google-apps-script.js       # backend syntax
+node test-sheet-setup.js                 # 67 assertions: setup, labels, per-unit
+                                         # targeting, order edit window, booking rules
 node test-storage-layer.js > after.json  # behaviour snapshot — see below
 ```
 

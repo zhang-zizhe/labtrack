@@ -101,7 +101,7 @@ function run(scriptPath, slackMode, asAdmin) {
   const ss = makeSpreadsheet({
     Items:      [["id","name","cat","qty","unit","loc","minQty","img","desc","status","usedBy","serial","displayId","shared","consumable"]],
     Deliveries: [["id","item","qty","unit","from","receivedBy","date","tracking","status"]],
-    Checkouts:  [["id","itemId","item","user","out","ret","status","checkedOutByEmail","groupEmails","qty"]],
+    Checkouts:  [["id","itemId","item","user","out","ret","status","checkedOutByEmail","groupEmails","qty","fromTime","toTime"]],
     Orders:     [["id","store","item","link","qty","unit","price","cat","requestedBy","reason","urgency","date","status","requestedByEmail"]],
     Settings:   [["key","value"],
                  ["admins", JSON.stringify(["zzhan409@jh.edu"])],

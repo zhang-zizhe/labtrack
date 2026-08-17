@@ -60,7 +60,7 @@ ctx.setupNewLab();
 const SCHEMA = {
   Items:      ["id","name","cat","qty","unit","loc","minQty","img","desc","status","usedBy","serial","displayId","shared","consumable"],
   Deliveries: ["id","item","qty","unit","from","receivedBy","date","tracking","status"],
-  Checkouts:  ["id","itemId","item","user","out","ret","status","checkedOutByEmail","groupEmails","qty"],
+  Checkouts:  ["id","itemId","item","user","out","ret","status","checkedOutByEmail","groupEmails","qty","fromTime","toTime"],
   Orders:     ["id","store","item","link","qty","unit","price","cat","requestedBy","reason","urgency","date","status","requestedByEmail"],
   Settings:   ["key","value"],
   DeleteLog:  ["date","type","name","details","deletedBy"],
@@ -100,7 +100,7 @@ console.log("upgrading a sheet whose header predates a column");
   c2.setupNewLab();
 
   const hdr = ss2.__sheets.Checkouts.__data[0];
-  check("qty appended to the existing header", hdr[hdr.length-1] === "qty");
+  check("every missing column appended", ["qty","fromTime","toTime"].every(h => hdr.indexOf(h) >= 0));
   check("pre-existing row untouched", ss2.__sheets.Checkouts.__data[1][2] === "Old Arm");
 
   // A write after the upgrade must land under the right heading.
@@ -202,6 +202,94 @@ console.log("a requester may revise a request, but not after it is approved");
   asAdmin();
   check("admin can still fix it",
         post({ action: "updateOrder", order: { id: "o1", qty: 6 } }).ok === true);
+}
+
+console.log("shared items book by the hour; long holds wait for an admin");
+{
+  const ss6 = fresh();
+  ss6.__sheets.Items = makeSheet("Items", [
+    ["id","name","cat","qty","unit","loc","minQty","img","desc","status","usedBy","serial","displayId","shared","consumable"],
+    ["s1","Oscilloscope","Compute & Electronics",1,"units","H306",0,"","","Available","[]","","CE-001",true,false],
+    ["p1","Franka Arm","Robots & Motors",1,"units","H306",0,"","","Available","[]","","RM-001",false,false],
+  ]);
+  const c6 = load(ss6);
+  const asAdmin  = () => { c6.verifyToken = () => ({ email:"zzhan409@jh.edu", name:"Z", oid:"a" }); };
+  const asMember = () => { c6.verifyToken = () => ({ email:"member@jh.edu", name:"Member", oid:"m" }); };
+  const post = p => JSON.parse(c6.doPost({ postData:{ contents: JSON.stringify(Object.assign({token:"t"}, p)) } }).__text);
+  const book = (id,user,out,ret,from,to,item,itemId) => post({ action:"addCheckout", checkout:{
+    id, itemId: itemId||"s1", item: item||"Oscilloscope", user, out, ret, status:"Active",
+    checkedOutByEmail:"x@jh.edu", groupEmails:"", qty:1, fromTime:from||"", toTime:to||"" } });
+
+  asAdmin();
+  c6.writeSetting("admins", JSON.stringify(["zzhan409@jh.edu"]));
+
+  check("morning slot books",
+        book("k1","Ann","2026-09-01 09:00","2026-09-03 12:00","09:00","12:00").ok === true);
+  check("afternoon slot on the same days books",
+        book("k2","Bob","2026-09-01 09:00","2026-09-03 12:00","13:00","17:00").ok === true);
+  check("an overlapping window is refused",
+        book("k3","Cat","2026-09-02 09:00","2026-09-02 12:00","11:00","14:00").error === "Clash");
+  check("all-day clashes with any window",
+        book("k4","Dan","2026-09-02 09:00","2026-09-02 12:00","","").error === "Clash");
+  check("a later date range is free",
+        book("k5","Eve","2026-09-10 09:00","2026-09-11 12:00","10:00","11:00").ok === true);
+  check("touching endpoints do not clash",
+        book("k6","Fay","2026-09-01 09:00","2026-09-03 12:00","12:00","13:00").ok === true);
+
+  // A plain item is kept exclusive by the availability filter, not by this check.
+  check("non-shared item is not clash-checked",
+        book("k7","Gil","2026-09-01 09:00","2026-09-02 12:00","","","Franka Arm","p1").ok === true);
+
+  // Over a week: recorded, but the item stays free until someone agrees.
+  const long = book("k8","Hal","2026-10-01 09:00","2026-10-20 09:00","","","Franka Arm","p1");
+  check("a long hold comes back pending", long.pending === true);
+  check("its row is Pending Approval",
+        c6.readTable("Checkouts").find(x=>x.id==="k8").status === "Pending Approval");
+  check("and the item is not marked In Use by asking",
+        c6.readTable("Items").find(i=>i.id==="p1").status !== "In Use" ||
+        c6.readTable("Items").find(i=>i.id==="p1").usedBy.indexOf("Hal") < 0);
+
+  asMember();
+  check("a member cannot approve it",
+        post({ action:"decideCheckout", checkoutId:"k8", approve:true }).error === "Forbidden");
+
+  // Gil (k7) still has the arm. Nothing was reserved by asking, so approving now
+  // would hand one item to two people.
+  asAdmin();
+  check("approving what someone else took is refused",
+        post({ action:"decideCheckout", checkoutId:"k8", approve:true }).error === "Clash");
+  check("and it stays pending",
+        c6.readTable("Checkouts").find(x=>x.id==="k8").status === "Pending Approval");
+
+  post({ action:"returnItem", checkoutId:"k7" });
+  check("an admin can once it is back", post({ action:"decideCheckout", checkoutId:"k8", approve:true }).ok === true);
+  check("which makes it Active",
+        c6.readTable("Checkouts").find(x=>x.id==="k8").status === "Active");
+  check("and hands the item over",
+        c6.readTable("Items").find(i=>i.id==="p1").usedBy.indexOf("Hal") >= 0);
+  check("deciding twice is refused",
+        post({ action:"decideCheckout", checkoutId:"k8", approve:true }).error === "Not pending");
+
+  // Same story for a shared item: the slot can be taken while the request waits.
+  const long2 = book("k9","Ivy","2026-11-01 09:00","2026-11-20 09:00","09:00","12:00");
+  check("a long shared hold is pending too", long2.pending === true);
+  check("its slot can still be booked by someone else",
+        book("k10","Jon","2026-11-05 09:00","2026-11-06 09:00","09:00","12:00").error === "Clash");
+  check("a non-overlapping window is still free",
+        book("k11","Kim","2026-11-05 09:00","2026-11-06 09:00","13:00","17:00").ok === true);
+  check("approving a still-free shared slot works",
+        post({ action:"decideCheckout", checkoutId:"k9", approve:true }).ok === true);
+
+  // Rejecting leaves the item alone.
+  const long3 = book("k12","Lee","2026-12-01 09:00","2026-12-20 09:00","","","Franka Arm","p1");
+  check("another long hold is pending", long3.pending === true);
+  check("rejecting marks it Rejected",
+        post({ action:"decideCheckout", checkoutId:"k12", approve:false }).ok === true &&
+        c6.readTable("Checkouts").find(x=>x.id==="k12").status === "Rejected");
+  check("a rejected request never touched the item",
+        c6.readTable("Items").find(i=>i.id==="p1").usedBy.indexOf("Lee") < 0);
+  check("a rejected slot frees up for someone else",
+        book("k13","Moe","2026-12-02 09:00","2026-12-03 09:00","","","Franka Arm","p1").ok === true);
 }
 
 console.log("\n" + pass + " passed, " + fail + " failed");

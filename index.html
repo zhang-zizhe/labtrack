@@ -267,6 +267,32 @@ const getCatAccent = (cat, categories) => {
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
 const isOverdue = (co) => co.status === "Active" && co.ret && getDatePart(co.ret) < getToday();
+
+// ─── BOOKING RULES ────────────────────────────────────────────────────────────
+// Mirrors the three rules in google-apps-script.js. The backend is what actually
+// enforces them — two people can open the form at the same moment and neither
+// browser knows about the other's draft. This half exists so the form can say no
+// before the round trip instead of after it. Keep the two in step.
+const MAX_DAYS_WITHOUT_APPROVAL = 7;
+const CO_PENDING = "Pending Approval";
+const bookingMs = s => { const d = new Date(String(s||"").trim().replace(" ","T")); return isNaN(d.getTime()) ? null : d.getTime(); };
+const bookingDays = (out,ret) => { const a=bookingMs(out), b=bookingMs(ret); return (a===null||b===null) ? 0 : (b-a)/86400000; };
+const needsApproval = c => bookingDays(c.out,c.ret) > MAX_DAYS_WITHOUT_APPROVAL;
+const hhmmMins = t => { const m=String(t||"").match(/^(\d{1,2}):(\d{2})$/); return m ? parseInt(m[1],10)*60+parseInt(m[2],10) : null; };
+// Two bookings collide when their date ranges overlap AND their daily windows do.
+// No window means all day, which collides with anything inside the range.
+const bookingsClash = (a,b) => {
+  const aS=bookingMs(a.out), aE=bookingMs(a.ret), bS=bookingMs(b.out), bE=bookingMs(b.ret);
+  if(aS===null||aE===null||bS===null||bE===null) return false;
+  if(aS>=bE||bS>=aE) return false;
+  const aF=hhmmMins(a.fromTime), aT=hhmmMins(a.toTime), bF=hhmmMins(b.fromTime), bT=hhmmMins(b.toTime);
+  if(aF===null||aT===null||bF===null||bT===null) return true;
+  return aF<bT && bF<aT;
+};
+const hasWindow = c => hhmmMins(c.fromTime)!==null && hhmmMins(c.toTime)!==null;
+const windowLabel = c => hasWindow(c) ? `${c.fromTime}–${c.toTime} daily` : "All day";
+// A booking holds the item until it is returned or rejected.
+const holdsSlot = c => c.status==="Active" || c.status===CO_PENDING;
 // Borders are mixed from the same token as the text, so they follow the theme
 // instead of being frozen hex+alpha from the old palette.
 const mix = (v,pct) => `color-mix(in srgb, var(${v}) ${pct}%, transparent)`;
@@ -283,6 +309,10 @@ const STATUS_C = {
   "Active":     {bg:"var(--blue-d)",  t:"var(--blue)",   b:mix("--blue",35)},
   "Returned":   {bg:"var(--bg4)",     t:"var(--sub)",    b:"var(--border)"},
   "Overdue":    {bg:"var(--red-d)",   t:"var(--red)",    b:mix("--red",35)},
+  // Waiting on an admin — amber, the same "not yet, but nothing is wrong" tone
+  // Low Stock uses. Rejected is grey like Returned: over with, not an alarm.
+  "Pending Approval": {bg:"var(--amber-d)", t:"var(--amber)", b:mix("--amber",35)},
+  "Rejected":   {bg:"var(--bg4)",     t:"var(--sub)",    b:"var(--border)"},
 };
 
 // ─── IMAGE COMPRESSION ──────────────────────────────────────────────────────
@@ -764,7 +794,7 @@ const ItemPicker = ({items, value, onChange, categories, exclude}) => {
 };
 
 // ─── CHECKOUT MODAL (multi-item) ─────────────────────────────────────────────
-const CheckoutModal = ({items,onClose,onAdd,preItem="",userName="",userEmail="",categories}) => {
+const CheckoutModal = ({items,onClose,onAdd,preItem="",userName="",userEmail="",categories,checkouts=[]}) => {
   const [coUser,setCoUser]=useState(userName);
   const [outDate,setOutDate]=useState(getToday());
   const [outTime,setOutTime]=useState(getNow());
@@ -772,6 +802,12 @@ const CheckoutModal = ({items,onClose,onAdd,preItem="",userName="",userEmail="",
   const [retTime,setRetTime]=useState("");
   const [notes,setNotes]=useState("");
   const [groupEmails,setGroupEmails]=useState("");
+  // Shared items are booked by the hour, so a checkout has to say whether it holds
+  // the item for the whole day or only a window of it. All day is the default —
+  // it is the stricter of the two, so nobody books a slot they didn't mean to free.
+  const [allDay,setAllDay]=useState(true);
+  const [fromTime,setFromTime]=useState("09:00");
+  const [toTime,setToTime]=useState("17:00");
   // Slots carry the unit's id. preItem is an id too — a name cannot identify one
   // of several split units, which is how checking out one ended up moving them all.
   const [slots,setSlots]=useState(()=>{
@@ -783,15 +819,29 @@ const CheckoutModal = ({items,onClose,onAdd,preItem="",userName="",userEmail="",
   const updSlot=(i,patch)=>setSlots(p=>p.map((s,j)=>j===i?{...s,...patch}:s));
   const valid=slots.filter(s=>s.itemId);
   const hasOutOfStock=valid.some(s=>{const it=items.find(i=>String(i.id)===String(s.itemId));return it&&(it.qty??0)<=0;});
-  const canSubmit=coUser.trim()&&valid.length>0&&retDate.trim()&&!hasOutOfStock;
+  const out=fmtDatetime(outDate,outTime);
+  const ret=fmtDatetime(retDate,retTime);
+  // A window only means something for an item several people share. A sole-use item
+  // is held for the whole span whatever the clock says, so asking would be a lie.
+  const sharedSel=valid.filter(sl=>items.find(i=>String(i.id)===String(sl.itemId))?.shared);
+  const askWindow=sharedSel.length>0;
+  const win=(askWindow&&!allDay)?{fromTime,toTime}:{fromTime:"",toTime:""};
+  const badWindow=askWindow&&!allDay&&!(hhmmMins(fromTime)!==null&&hhmmMins(toTime)!==null&&hhmmMins(fromTime)<hhmmMins(toTime));
+  // Rule 2 — a shared item can be booked again, but not over someone else's slot.
+  const clashes=sharedSel.map(sl=>{
+    const hit=checkouts.find(c=>holdsSlot(c)&&String(c.itemId)===String(sl.itemId)&&bookingsClash({out,ret,...win},c));
+    return hit?{item:sl.item,hit}:null;
+  }).filter(Boolean);
+  // Rule 3 — over a week is an admin's call, whatever the item.
+  const longHold=!!ret&&bookingDays(out,ret)>MAX_DAYS_WITHOUT_APPROVAL;
+  const canSubmit=coUser.trim()&&valid.length>0&&retDate.trim()&&!hasOutOfStock&&!clashes.length&&!badWindow;
   const submit=()=>{
     if(!canSubmit)return;
     const ts=uid();
-    const out=fmtDatetime(outDate,outTime);
-    const ret=fmtDatetime(retDate,retTime);
     valid.forEach((sl,i)=>{
       const sel=items.find(it=>String(it.id)===String(sl.itemId));
-      onAdd({id:ts+i,itemId:sl.itemId,item:sl.item,user:coUser.trim(),out,ret,qty:Math.min(sl.qty,sel?.qty||1),notes,groupEmails:groupEmails.trim(),status:"Active"});
+      onAdd({id:ts+i,itemId:sl.itemId,item:sl.item,user:coUser.trim(),out,ret,qty:Math.min(sl.qty,sel?.qty||1),notes,groupEmails:groupEmails.trim(),
+             status:longHold?CO_PENDING:"Active",...(sel?.shared?win:{fromTime:"",toTime:""})});
     });
     onClose();
   };
@@ -832,9 +882,40 @@ const CheckoutModal = ({items,onClose,onAdd,preItem="",userName="",userEmail="",
             );
           })}
         </div>
+        {askWindow&&(
+          <div style={{background:"var(--bg2)",border:"1px solid var(--border)",borderRadius:10,padding:"12px 14px"}}>
+            <div style={{color:"var(--sub)",fontSize:11,fontWeight:700,letterSpacing:"0.08em",textTransform:"uppercase",fontFamily:"'IBM Plex Mono',monospace",marginBottom:9}}>
+              {sharedSel.length>1?`${sharedSel.length} shared items`:"Shared item"} — when each day?
+            </div>
+            <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+              <Btn sm v={allDay?"primary":"ghost"} onClick={()=>setAllDay(true)}>All day</Btn>
+              <Btn sm v={allDay?"ghost":"primary"} onClick={()=>setAllDay(false)}>Same hours each day</Btn>
+            </div>
+            {!allDay&&(
+              <div style={{display:"flex",gap:8,alignItems:"center",marginTop:10,flexWrap:"wrap"}}>
+                <input type="time" value={fromTime} onChange={e=>setFromTime(e.target.value)} style={{...timeInputStyle,width:"auto"}}/>
+                <span style={{color:"var(--dim)",fontSize:13}}>to</span>
+                <input type="time" value={toTime} onChange={e=>setToTime(e.target.value)} style={{...timeInputStyle,width:"auto"}}/>
+                <span style={{color:"var(--dim)",fontSize:12}}>every day from {outDate} to {retDate||"…"}</span>
+              </div>
+            )}
+            {badWindow&&<div style={{color:"var(--red)",fontSize:12,marginTop:8}}>The end time has to be later than the start time.</div>}
+          </div>
+        )}
+        {clashes.map((cl,i)=>(
+          <div key={i} style={{background:"var(--red-d)",border:`1px solid ${mix("--red",30)}`,borderRadius:10,padding:"11px 14px",fontSize:13,color:"var(--text)",lineHeight:1.5}}>
+            <b>{cl.item}</b> is already booked then — {cl.hit.user}, {windowLabel(cl.hit)}, {cl.hit.out} to {cl.hit.ret}
+            {cl.hit.status===CO_PENDING&&" (awaiting approval)"}. Pick a slot that doesn't overlap.
+          </div>
+        ))}
+        {longHold&&(
+          <div style={{background:"var(--amber-d)",border:`1px solid ${mix("--amber",30)}`,borderRadius:10,padding:"11px 14px",fontSize:13,color:"var(--text)",lineHeight:1.5}}>
+            That's {Math.ceil(bookingDays(out,ret))} days. Holds longer than {MAX_DAYS_WITHOUT_APPROVAL} need an admin to approve them, so this goes in as a request — the item stays available to everyone until it is approved.
+          </div>
+        )}
         <div style={{borderTop:"1px solid var(--border)",paddingTop:14,display:"flex",gap:10,justifyContent:"flex-end"}}>
           <Btn v="ghost" onClick={onClose}>Cancel</Btn>
-          <Btn onClick={submit} disabled={!canSubmit}><Ico n="check" s={14} col="var(--on-accent)"/>Confirm Checkout{valid.length>1?` (${valid.length} items)`:""}</Btn>
+          <Btn onClick={submit} disabled={!canSubmit}><Ico n="check" s={14} col="var(--on-accent)"/>{longHold?"Request Approval":"Confirm Checkout"}{valid.length>1?` (${valid.length} items)`:""}</Btn>
         </div>
       </div>
     </Modal>
@@ -1498,7 +1579,7 @@ const ItemDetail = ({item,checkouts,onClose,onReturn,onQuickCheckout,onUse,onNot
               <div key={c.id} style={{display:"flex",alignItems:"center",gap:10,background:od?"var(--red-d)":"var(--bg2)",border:`1px solid ${od?"color-mix(in srgb, var(--red) 30%, transparent)":"var(--border)"}`,borderRadius:8,padding:"8px 12px",marginBottom:6,flexWrap:"wrap"}}>
                 <MemberAvatar name={c.user} sz={26}/>
                 <span style={{color:"var(--text)",fontSize:13,flex:1}}>{c.user}{Number(c.qty)>1&&<span style={{color:"var(--sub)",fontFamily:"'IBM Plex Mono',monospace",fontSize:12,marginLeft:6}}>×{Number(c.qty)}</span>}</span>
-                <span style={{color:od?"var(--red)":"var(--dim)",fontSize:10,fontFamily:"'IBM Plex Mono',monospace"}}>{c.out} → {c.ret||"—"}{od&&" OVERDUE"}</span>
+                <span style={{color:od?"var(--red)":"var(--dim)",fontSize:10,fontFamily:"'IBM Plex Mono',monospace"}}>{c.out} → {c.ret||"—"}{hasWindow(c)&&` · ${windowLabel(c)}`}{od&&" OVERDUE"}</span>
                 <Badge status={od?"Overdue":c.status}/>
                 {c.status==="Active"&&<Btn v="ghost" sm onClick={()=>setConfirmId(c.id)}><Ico n="undo" s={12}/>Return</Btn>}
               </div>
@@ -1649,7 +1730,7 @@ const CalView=({checkouts,deliveries})=>{
   const wkLabel=()=>{const s=wkDays[0],e=wkDays[6];return s.getMonth()===e.getMonth()?`${MNS[s.getMonth()].slice(0,3)} ${s.getDate()}–${e.getDate()}, ${s.getFullYear()}`:`${MNS[s.getMonth()].slice(0,3)} ${s.getDate()} – ${MNS[e.getMonth()].slice(0,3)} ${e.getDate()}, ${e.getFullYear()}`;};
   // All-day strip: deliveries + checkouts spanning the whole day (started before, not yet returned)
   const delivByDay=wkStrs.map(ds=>deliveries.filter(x=>x.date===ds).map(x=>({t:"pkg",l:x.item,time:"",user:""})));
-  const spanByDay=wkStrs.map(ds=>checkouts.filter(x=>x.status==="Active"&&getDatePart(x.out)<ds&&getDatePart(x.ret)>=ds).map(x=>({t:"act",l:x.item,time:"",user:x.user})));
+  const spanByDay=wkStrs.map(ds=>checkouts.filter(x=>x.status==="Active"&&getDatePart(x.out)<ds&&getDatePart(x.ret)>=ds).map(x=>({t:"act",l:x.item,time:hasWindow(x)?x.fromTime:"",user:x.user})));
   // Duration blocks for week view: checkout→return block within a single day column
   const toH=t=>{if(!t)return null;const h=parseInt(t);return isNaN(h)?null:h;}; // parse hour from "HH:MM"
   const toM=t=>{if(!t)return 0;const m=parseInt((t.split(":")[1]||"0"));return isNaN(m)?0:m;};
@@ -2381,6 +2462,7 @@ function LabInventory(){
   const lowStock = items.filter(isLowStock);
   const activeOut = checkouts.filter(c=>c.status==="Active");
   const overdues = checkouts.filter(c=>isOverdue(c));
+  const pendingCos = checkouts.filter(c=>c.status===CO_PENDING);
 
   // handlers
   const postAction = (action, payload) => {
@@ -2434,14 +2516,37 @@ function LabInventory(){
       ? String(item.id)===String(co.itemId)
       : item.name===co.item;
 
-  const handleCheckout=(c)=>{
+  const markInUse=(co)=>setItems(prev=>prev.map(i=>isCheckoutTarget(i,co)?{...i,status:i.shared?"Available":"In Use",usedBy:toArr(i.usedBy).includes(co.user)?toArr(i.usedBy):[...toArr(i.usedBy),co.user]}:i));
+
+  const handleCheckout=async(c)=>{
     // itemId comes from the picker now. It used to be left unset, so the column
     // sat empty and every lookup fell back to the item's name.
     const checkout={...c, checkedOutByEmail: user?.email||""};
-    setItems(prev=>prev.map(i=>isCheckoutTarget(i,checkout)?{...i,status:i.shared?"Available":"In Use",usedBy:toArr(i.usedBy).includes(checkout.user)?toArr(i.usedBy):[...toArr(i.usedBy),checkout.user]}:i));
+    const pending=checkout.status===CO_PENDING;
+    // A pending booking reserves the slot but not the item. Marking it In Use now
+    // would take it off the shelf just for having been asked for.
+    if(!pending) markInUse(checkout);
     setCheckouts(p=>[checkout,...p]);
-    addToast("success",`${checkout.item} → ${checkout.user}`);
-    postAction("addCheckout", {checkout});
+    addToast("success",pending?`${checkout.item} — sent to an admin for approval`:`${checkout.item} → ${checkout.user}`);
+    const res=await postAction("addCheckout", {checkout});
+    // Two people can fill in the same slot at once and neither browser sees the
+    // other's draft, so the backend gets the last word. Undo the optimistic write.
+    if(res&&res.error){
+      // `checkouts` is the list from before this one was added — i.e. the rest.
+      const heldElsewhere=checkouts.some(x=>x.status==="Active"&&x.user===checkout.user&&String(x.itemId||"")===String(checkout.itemId||""));
+      setCheckouts(p=>p.filter(x=>x.id!==checkout.id));
+      if(!pending&&!heldElsewhere) setItems(prev=>prev.map(i=>isCheckoutTarget(i,checkout)?{...i,status:"Available",usedBy:toArr(i.usedBy).filter(u=>u!==checkout.user)}:i));
+      addToast("error",res.detail||res.error);
+    }
+  };
+
+  const handleDecideCheckout=async(coId,approve)=>{
+    const co=checkouts.find(c=>c.id===coId); if(!co)return;
+    setCheckouts(p=>p.map(c=>c.id===coId?{...c,status:approve?"Active":"Rejected"}:c));
+    if(approve) markInUse(co);
+    addToast("success",approve?`${co.item} approved for ${co.user}`:`Request for ${co.item} rejected`);
+    const res=await postAction("decideCheckout",{checkoutId:coId,approve});
+    if(res&&res.error) addToast("error",res.detail||res.error);
   };
 
   const handleNotifyLowStock = async (item, note) => {
@@ -3299,7 +3404,7 @@ function LabInventory(){
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20,flexWrap:"wrap",gap:12}}>
               <div>
                 <h2 style={{margin:"0 0 3px",fontFamily:"'Roboto',sans-serif",fontSize:18,fontWeight:700}}>Item Usage</h2>
-                <p style={{margin:0,color:"var(--sub)",fontSize:13}}>{activeOut.length} active · {overdues.length>0&&<span style={{color:"var(--red)",fontWeight:600}}>{overdues.length} overdue · </span>}Slack notifies on checkout & return</p>
+                <p style={{margin:0,color:"var(--sub)",fontSize:13}}>{activeOut.length} active · {overdues.length>0&&<span style={{color:"var(--red)",fontWeight:600}}>{overdues.length} overdue · </span>}{pendingCos.length>0&&<span style={{color:"var(--amber)",fontWeight:600}}>{pendingCos.length} awaiting approval · </span>}Slack notifies on checkout & return</p>
               </div>
               <div style={{display:"flex",gap:8}}>
                 {selected.size>0&&(
@@ -3340,7 +3445,7 @@ function LabInventory(){
                         <div key={c.id} style={{background:od2?"var(--red-d)":"var(--bg2)",border:`1px solid ${od2?"color-mix(in srgb, var(--red) 30%, transparent)":"var(--border)"}`,borderRadius:8,padding:"8px 11px",marginBottom:6,display:"flex",justifyContent:"space-between",alignItems:"center",gap:8}}>
                           <div style={{minWidth:0}}>
                             <div style={{color:"var(--text)",fontSize:13,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{c.item}</div>
-                            <div style={{color:od2?"var(--red)":"var(--dim)",fontSize:10,fontFamily:"'IBM Plex Mono',monospace",marginTop:2}}>{od2?"OVERDUE":"Return"} {c.ret||"—"}</div>
+                            <div style={{color:od2?"var(--red)":"var(--dim)",fontSize:10,fontFamily:"'IBM Plex Mono',monospace",marginTop:2}}>{od2?"OVERDUE":"Return"} {c.ret||"—"}{hasWindow(c)&&<span style={{color:"var(--cyan)"}}> · {windowLabel(c)}</span>}</div>
                           </div>
                           {canReturn(c)&&<Btn v="ghost" sm onClick={()=>setConfirm({msg:`Return "${c.item}" from ${c.user}?`,onConfirm:()=>handleReturn(c.id)})}><Ico n="undo" s={11}/></Btn>}
                         </div>
@@ -3350,6 +3455,35 @@ function LabInventory(){
                 );
               })}
             </div>
+
+            {pendingCos.length>0&&(
+              <div style={{background:"var(--bg1)",border:`1px solid ${mix("--amber",30)}`,borderRadius:14,overflow:"hidden",marginBottom:28}}>
+                <div style={{padding:"13px 18px",borderBottom:"1px solid var(--border)",display:"flex",alignItems:"center",gap:9,flexWrap:"wrap"}}>
+                  <Ico n="clock" s={15} col="var(--amber)"/>
+                  <span style={{fontWeight:700,fontFamily:"'Roboto',sans-serif",fontSize:15}}>Waiting for approval</span>
+                  <span style={{color:"var(--dim)",fontSize:12}}>Held longer than {MAX_DAYS_WITHOUT_APPROVAL} days · the item stays available until approved</span>
+                </div>
+                {pendingCos.map((c,i)=>(
+                  <div key={c.id} style={{padding:"12px 18px",borderTop:i?"1px solid var(--border)":"none",display:"flex",gap:12,alignItems:"center",flexWrap:"wrap"}}>
+                    <MemberAvatar name={c.user} sz={30}/>
+                    <div style={{flex:1,minWidth:190}}>
+                      <div style={{fontWeight:600,fontSize:13}}>{c.item}{Number(c.qty)>1&&<span style={{color:"var(--sub)",fontWeight:400,fontFamily:"'IBM Plex Mono',monospace",fontSize:12,marginLeft:6}}>×{Number(c.qty)}</span>}</div>
+                      <div style={{color:"var(--dim)",fontSize:11,fontFamily:"'IBM Plex Mono',monospace",marginTop:3}}>
+                        {c.user} · {c.out} → {c.ret} · {Math.ceil(bookingDays(c.out,c.ret))} days · {windowLabel(c)}
+                      </div>
+                    </div>
+                    {effectiveRole==="admin"?(
+                      <div style={{display:"flex",gap:8}}>
+                        <Btn sm v="success" onClick={()=>setConfirm({msg:`Approve "${c.item}" for ${c.user}, ${Math.ceil(bookingDays(c.out,c.ret))} days?`,onConfirm:()=>handleDecideCheckout(c.id,true)})}><Ico n="check" s={12} col="var(--green)"/>Approve</Btn>
+                        <Btn sm v="danger" onClick={()=>setConfirm({msg:`Reject the request for "${c.item}" from ${c.user}?`,onConfirm:()=>handleDecideCheckout(c.id,false)})}><Ico n="x" s={12} col="var(--red)"/>Reject</Btn>
+                      </div>
+                    ):(
+                      <span style={{color:"var(--amber)",fontSize:12,fontWeight:600}}>Waiting on an admin</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
 
             <div style={{background:"var(--bg1)",border:"1px solid var(--border)",borderRadius:14,overflow:"hidden"}}>
               <div style={{padding:"13px 18px",borderBottom:"1px solid var(--border)",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
@@ -3384,7 +3518,7 @@ function LabInventory(){
                         <td style={{padding:"10px 16px"}}>{c.status==="Active"&&canRet&&<input type="checkbox" checked={isSel} onChange={handleCoClick} onClick={e=>e.stopPropagation()} style={{cursor:"pointer",accentColor:"var(--cyan)"}}/>}</td>
                         <td style={{padding:"10px 16px",color:"var(--text)",fontWeight:600}}>{c.item}{Number(c.qty)>1&&<span style={{color:"var(--sub)",fontWeight:400,fontFamily:"'IBM Plex Mono',monospace",fontSize:12,marginLeft:6}}>×{Number(c.qty)}</span>}</td>
                         <td style={{padding:"10px 16px"}}><div style={{display:"flex",alignItems:"center",gap:8}}><MemberAvatar name={c.user} sz={26}/><span style={{color:"var(--sub)"}}>{c.user}</span></div></td>
-                        <td style={{padding:"10px 16px",color:"var(--dim)",fontFamily:"'IBM Plex Mono',monospace",fontSize:11}}>{c.out}</td>
+                        <td style={{padding:"10px 16px",color:"var(--dim)",fontFamily:"'IBM Plex Mono',monospace",fontSize:11}}>{c.out}{hasWindow(c)&&<div style={{color:"var(--cyan)",marginTop:2}}>{windowLabel(c)}</div>}</td>
                         <td style={{padding:"10px 16px",color:od?"var(--red)":"var(--dim)",fontFamily:"'IBM Plex Mono',monospace",fontSize:11,fontWeight:od?700:400}}>{c.ret||"—"}{od&&" !"}</td>
                         <td style={{padding:"10px 16px"}}><Badge status={od?"Overdue":c.status}/></td>
                         <td style={{padding:"10px 16px"}}>{c.status==="Active"&&canRet&&<Btn v="ghost" sm onClick={e=>{e.stopPropagation();setConfirm({msg:`Return "${c.item}" from ${c.user}?`,onConfirm:()=>handleReturn(c.id)});}}><Ico n="undo" s={12}/>Return</Btn>}</td>
@@ -3421,7 +3555,7 @@ function LabInventory(){
       {modal==="delivery" && <DeliveryModal onClose={()=>setModal(null)} onAdd={handleDelivery} userName={user?.name||""}/>}
       {useItem && <UseModal item={useItem} onClose={()=>setUseItem(null)} onUse={handleUseConsumable}/>}
       {notifyItem && <NotifyModal item={notifyItem} onClose={()=>setNotifyItem(null)} onNotify={handleNotifyLowStock}/>}
-      {modal==="checkout" && <CheckoutModal items={items} onClose={()=>setModal(null)} onAdd={handleCheckout} preItem={preItem} userName={user?.name||""} userEmail={user?.email||""} categories={categories}/>}
+      {modal==="checkout" && <CheckoutModal items={items} onClose={()=>setModal(null)} onAdd={handleCheckout} preItem={preItem} userName={user?.name||""} userEmail={user?.email||""} categories={categories} checkouts={checkouts}/>}
       {modal==="addItem" && <AddItemModal onClose={()=>setModal(null)} onAdd={handleAddItem} categories={categories} allItems={items} onShowLabel={setLabelItem}/>}
       {labelItem&&<LabelModal item={labelItem} onClose={()=>setLabelItem(null)} onAddAnother={()=>{setLabelItem(null);setModal("addItem");}}/>}
       {modal==="order" && <OrderModal onClose={()=>setModal(null)} onAddMany={handleAddOrderMany} userName={user?.name||""} userEmail={user?.email||""} categories={categories}/>}
