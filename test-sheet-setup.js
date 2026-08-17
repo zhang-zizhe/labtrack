@@ -1,4 +1,6 @@
 /**
+ * Assertion-style backend checks: sheet setup and per-unit item targeting.
+ *
  * setupNewLab() must build a working sheet from nothing, be safe to re-run, and
  * upgrade a sheet whose header predates a column.
  *
@@ -108,6 +110,38 @@ console.log("upgrading a sheet whose header predates a column");
   const added = rows.find(r => r.id === "c10");
   check("qty readable after upgrade", added && Number(added.qty) === 3);
   check("other fields still aligned", added && added.item === "New Arm" && added.status === "Active");
+}
+
+console.log("checkout targets one unit, not every item sharing its name");
+{
+  // Two split units: same name, different ids and labels — what handleSplit produces.
+  const ss3 = fresh();
+  ss3.__sheets.Items = makeSheet("Items", [
+    ["id","name","cat","qty","unit","loc","minQty","img","desc","status","usedBy","serial","displayId","shared","consumable"],
+    ["u1","TEST ROBOT","Robots & Motors",1,"units","H306",0,"","","Available","[]","","RM-000001-001",false,false],
+    ["u2","TEST ROBOT","Robots & Motors",1,"units","H306",0,"","","Available","[]","","RM-000001-002",false,false],
+  ]);
+  const c3 = load(ss3);
+
+  // Check out the SECOND unit. Matching on name would have moved the first.
+  c3.updateItemStatus("u2", "TEST ROBOT", "In Use", "Zizhe", "add");
+  const after = c3.readTable("Items");
+  const u1 = after.find(r => r.id === "u1"), u2 = after.find(r => r.id === "u2");
+  check("picked unit went In Use",       u2.status === "In Use");
+  check("its sibling stayed Available",  u1.status === "Available");
+  check("usedBy set on the picked unit", JSON.stringify(u2.usedBy) === '["Zizhe"]');
+  check("sibling usedBy untouched",      JSON.stringify(u1.usedBy) === "[]");
+
+  // Returning it must also only touch that unit.
+  c3.updateItemStatus("u2", "TEST ROBOT", "Available", "Zizhe", "remove");
+  const back = c3.readTable("Items");
+  check("return clears only that unit", back.find(r=>r.id==="u2").status === "Available"
+                                     && JSON.stringify(back.find(r=>r.id==="u2").usedBy) === "[]");
+
+  // Legacy rows carry no itemId, so the name is all there is to fall back on.
+  c3.updateItemStatus("", "TEST ROBOT", "In Use", "Zizhe", "add");
+  const legacy = c3.readTable("Items");
+  check("no itemId falls back to name", legacy.some(r => r.status === "In Use"));
 }
 
 console.log("\n" + pass + " passed, " + fail + " failed");

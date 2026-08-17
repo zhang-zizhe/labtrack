@@ -940,7 +940,7 @@ function doPost(e) {
   if (action === "addCheckout") {
     const c = body.checkout;
     appendRow("Checkouts", c);
-    updateItemStatus(c.item, "In Use", c.user, "add");
+    updateItemStatus(c.itemId, c.item, "In Use", c.user, "add");
     sendSlack("🔑", "Item Checked Out: " + c.item, null, ["*Person*\n" + c.user, "*Date*\n" + (c.out||"—"), "*Return by*\n" + (c.ret||"—")]);
     logAudit(userName, userEmail, "Checkout", c.item + " → " + c.user + " | return by:" + (c.ret||"—"));
     return jsonResponse({ ok: true });
@@ -962,7 +962,7 @@ function doPost(e) {
       const nowStr = now.getFullYear()+"-"+String(now.getMonth()+1).padStart(2,"0")+"-"+String(now.getDate()).padStart(2,"0")
                     +" "+String(now.getHours()).padStart(2,"0")+":"+String(now.getMinutes()).padStart(2,"0");
       updateRow("Checkouts", coId, { ret: nowStr, status: "Returned" });
-      updateItemStatus(co.item, "Available", co.user, "remove");
+      updateItemStatus(co.itemId, co.item, "Available", co.user, "remove");
       sendSlack("✅", "Item Returned: " + co.item, null, ["*Returned by*\n" + userName]);
       logAudit(userName, userEmail, "Return", co.item + " | originally checked out by:" + co.user);
     }
@@ -1161,9 +1161,15 @@ function doPost(e) {
 }
 
 // ─── Update item status & usedBy in Items sheet ──────────────────────────────
-function updateItemStatus(itemName, newStatus, userName, mode) {
-  const byName = function(r) { return r.name === itemName; };
-  const item = findRow("Items", byName);
+// A checkout points at one specific unit, so target it by id. Split units share a
+// name, and matching on name moved whichever sibling happened to come first —
+// which is also why the sheet and the browser could disagree about which one
+// changed. Rows written before itemId was populated have only the name to go on.
+function updateItemStatus(itemId, itemName, newStatus, userName, mode) {
+  const target = (itemId !== undefined && itemId !== null && String(itemId) !== "")
+    ? function(r) { return idsMatch(r.id, itemId); }
+    : function(r) { return r.name === itemName; };
+  const item = findRow("Items", target);
   if (!item) return;
 
   const patch = {};
@@ -1178,5 +1184,5 @@ function updateItemStatus(itemName, newStatus, userName, mode) {
   else if (mode === "remove") usedBy = usedBy.filter(u => u !== userName);
   patch.usedBy = usedBy;   // serialized on write by the storage layer
 
-  updateRow("Items", byName, patch);
+  updateRow("Items", target, patch);
 }

@@ -619,7 +619,9 @@ const ItemPicker = ({items, value, onChange, categories}) => {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
   const inputRef = useRef(null);
-  const selected = items.find(i=>i.name===value);
+  // Addressed by id, not name: split units share a name and differ only by id and
+  // label, so a name could never say which physical unit was being taken.
+  const selected = items.find(i=>String(i.id)===String(value));
   // Exclude: consumables (use "Use" button), broken/maintenance, and "In Use" non-shared items
   const avail = items.filter(i=>!i.consumable && i.status!=="Maintenance" && i.status!=="Broken" && !(i.status==="In Use"&&!i.shared));
   const filtered = avail.filter(i=>{
@@ -632,7 +634,7 @@ const ItemPicker = ({items, value, onChange, categories}) => {
     return()=>document.removeEventListener("mousedown",handler);
   },[]);
   useEffect(()=>{if(open&&inputRef.current)inputRef.current.focus();},[open]);
-  const pick=(item)=>{onChange(item.name);setOpen(false);setQ("");};
+  const pick=(item)=>{onChange(item);setOpen(false);setQ("");};
   const ac = selected?getCatAccent(selected.cat,categories):"var(--dim)";
   return(
     <div ref={ref} style={{position:"relative"}}>
@@ -669,13 +671,15 @@ const ItemPicker = ({items, value, onChange, categories}) => {
             {filtered.length===0?(
               <div style={{padding:"24px 16px",textAlign:"center",color:"var(--dim)",fontSize:13}}>No items match "{q}"</div>
             ):filtered.map(item=>{
-              const itemAc=getCatAccent(item.cat,categories);const low=item.minQty>0&&item.qty<=item.minQty;const isSel=item.name===value;
+              const itemAc=getCatAccent(item.cat,categories);const low=item.minQty>0&&item.qty<=item.minQty;const isSel=String(item.id)===String(value);
               return(
                 <div key={item.id} onClick={()=>pick(item)} className={isSel?"item-sel-row":"row-hover"} style={{padding:"10px 14px",cursor:"pointer",display:"flex",alignItems:"center",gap:12,borderBottom:"1px solid var(--border)",transition:"background .12s"}}>
                   <span style={{width:8,height:8,borderRadius:"50%",background:low?"var(--red)":itemAc,flexShrink:0}}/>
                   <div style={{flex:1,minWidth:0}}>
                     <div style={{fontWeight:600,fontSize:13,color:"var(--text)",marginBottom:1}}>{item.name}</div>
-                    <div style={{color:"var(--dim)",fontSize:11,fontFamily:"'IBM Plex Mono',monospace"}}>{item.cat} · {item.loc}</div>
+                    {/* The label ID is what separates split units — without it two
+                        siblings render as identical rows and can't be told apart. */}
+                    <div style={{color:"var(--dim)",fontSize:11,fontFamily:"'IBM Plex Mono',monospace"}}>{item.displayId?item.displayId+" · ":""}{item.cat} · {item.loc}</div>
                   </div>
                   <div style={{textAlign:"right",flexShrink:0}}>
                     <div style={{fontSize:14,fontWeight:800,fontFamily:"'Roboto',sans-serif",color:low?"var(--red)":itemAc}}>{item.qty}</div>
@@ -706,12 +710,17 @@ const CheckoutModal = ({items,onClose,onAdd,preItem="",userName="",userEmail="",
   const [retTime,setRetTime]=useState("");
   const [notes,setNotes]=useState("");
   const [groupEmails,setGroupEmails]=useState("");
-  const [slots,setSlots]=useState([{item:preItem,qty:1}]);
-  const addSlot=()=>setSlots(p=>[...p,{item:"",qty:1}]);
+  // Slots carry the unit's id. preItem is an id too — a name cannot identify one
+  // of several split units, which is how checking out one ended up moving them all.
+  const [slots,setSlots]=useState(()=>{
+    const pre=items.find(i=>String(i.id)===String(preItem));
+    return [{itemId:pre?pre.id:"",item:pre?pre.name:"",qty:1}];
+  });
+  const addSlot=()=>setSlots(p=>[...p,{itemId:"",item:"",qty:1}]);
   const removeSlot=i=>setSlots(p=>p.filter((_,j)=>j!==i));
-  const updSlot=(i,k,v)=>setSlots(p=>p.map((s,j)=>j===i?{...s,[k]:v}:s));
-  const valid=slots.filter(s=>s.item);
-  const hasOutOfStock=valid.some(s=>{const it=items.find(i=>i.name===s.item);return it&&(it.qty??0)<=0;});
+  const updSlot=(i,patch)=>setSlots(p=>p.map((s,j)=>j===i?{...s,...patch}:s));
+  const valid=slots.filter(s=>s.itemId);
+  const hasOutOfStock=valid.some(s=>{const it=items.find(i=>String(i.id)===String(s.itemId));return it&&(it.qty??0)<=0;});
   const canSubmit=coUser.trim()&&valid.length>0&&retDate.trim()&&!hasOutOfStock;
   const submit=()=>{
     if(!canSubmit)return;
@@ -719,8 +728,8 @@ const CheckoutModal = ({items,onClose,onAdd,preItem="",userName="",userEmail="",
     const out=fmtDatetime(outDate,outTime);
     const ret=fmtDatetime(retDate,retTime);
     valid.forEach((sl,i)=>{
-      const sel=items.find(it=>it.name===sl.item);
-      onAdd({id:ts+i,item:sl.item,user:coUser.trim(),out,ret,qty:Math.min(sl.qty,sel?.qty||1),notes,groupEmails:groupEmails.trim(),status:"Active"});
+      const sel=items.find(it=>String(it.id)===String(sl.itemId));
+      onAdd({id:ts+i,itemId:sl.itemId,item:sl.item,user:coUser.trim(),out,ret,qty:Math.min(sl.qty,sel?.qty||1),notes,groupEmails:groupEmails.trim(),status:"Active"});
     });
     onClose();
   };
@@ -747,15 +756,15 @@ const CheckoutModal = ({items,onClose,onAdd,preItem="",userName="",userEmail="",
             <Btn sm v="ghost" onClick={addSlot}><Ico n="plus" s={12}/>Add Another</Btn>
           </div>
           {slots.map((sl,i)=>{
-            const sel=items.find(it=>it.name===sl.item);
+            const sel=items.find(it=>String(it.id)===String(sl.itemId));
             const maxQ=sel?.qty??0;
             const outOfStock=sel&&maxQ<=0;
             return(
               <div key={i} style={{display:"flex",gap:8,alignItems:"center",marginBottom:8}}>
-                <div style={{flex:1}}><ItemPicker items={items} value={sl.item} onChange={v=>updSlot(i,"item",v)} categories={categories}/></div>
+                <div style={{flex:1}}><ItemPicker items={items} value={sl.itemId} onChange={it=>updSlot(i,{itemId:it.id,item:it.name})} categories={categories}/></div>
                 {outOfStock
                   ?<span style={{fontSize:11,color:"var(--red)",fontWeight:700,whiteSpace:"nowrap"}}>Out of stock</span>
-                  :<input type="number" min={1} max={maxQ} value={sl.qty} title={`Max ${maxQ}`} onChange={e=>updSlot(i,"qty",Math.min(maxQ,Math.max(1,parseInt(e.target.value)||1)))} style={{width:60,background:"var(--bg1)",border:"1px solid var(--border)",borderRadius:8,padding:"9px 8px",textAlign:"center",fontFamily:"'Roboto',sans-serif",fontWeight:700,fontSize:15,color:"var(--text)",outline:"none"}}/>}
+                  :<input type="number" min={1} max={maxQ} value={sl.qty} title={`Max ${maxQ}`} onChange={e=>updSlot(i,{qty:Math.min(maxQ,Math.max(1,parseInt(e.target.value)||1))})} style={{width:60,background:"var(--bg1)",border:"1px solid var(--border)",borderRadius:8,padding:"9px 8px",textAlign:"center",fontFamily:"'Roboto',sans-serif",fontWeight:700,fontSize:15,color:"var(--text)",outline:"none"}}/>}
                 {slots.length>1&&<button onClick={()=>removeSlot(i)} style={{background:"none",border:"none",color:"var(--dim)",cursor:"pointer",padding:4,display:"flex",flexShrink:0}}><Ico n="x" s={14}/></button>}
               </div>
             );
@@ -1214,7 +1223,7 @@ const GroupDetail = ({group,checkouts,onClose,onEdit,onQuickCheckout,onReturn,ed
                   <Btn v="ghost" sm onClick={()=>{onReturn(activeCheckout.id);onClose();}}>Return</Btn>
                 )}
                 {!inUse&&(
-                  <Btn v="cyan" sm onClick={()=>{onClose();onQuickCheckout(unit.name);}}>Check Out</Btn>
+                  <Btn v="cyan" sm onClick={()=>{onClose();onQuickCheckout(unit.id);}}>Check Out</Btn>
                 )}
                 <Btn v="ghost" sm onClick={()=>{if(editLocked){return;}onClose();onEdit(unit);}} disabled={editLocked} style={editLocked?{opacity:0.4,cursor:"not-allowed"}:{}}>
                   <Ico n={editLocked?"lock":"edit"} s={13}/>{editLocked?"":"Edit"}
@@ -1273,7 +1282,7 @@ const ItemDetail = ({item,checkouts,onClose,onReturn,onQuickCheckout,onEdit,cate
             ))}
           </div>
           <div style={{display:"flex",gap:8}}>
-            {item.status!=="Maintenance"&&<Btn onClick={()=>{onClose();onQuickCheckout(item.name);}}><Ico n="tag" s={14} col="var(--on-accent)"/>Quick Check Out</Btn>}
+            {item.status!=="Maintenance"&&<Btn onClick={()=>{onClose();onQuickCheckout(item.id);}}><Ico n="tag" s={14} col="var(--on-accent)"/>Quick Check Out</Btn>}
             <Btn v="ghost" onClick={()=>{onClose();onEdit(item);}} disabled={editLocked} title={editLocked?"Editing is locked":"Edit item"} style={editLocked?{opacity:0.4,cursor:"not-allowed"}:{}}><Ico n={editLocked?"lock":"edit"} s={14}/>{editLocked?"Locked":"Edit"}</Btn>
           </div>
         </div>
@@ -2182,12 +2191,20 @@ function LabInventory(){
     await postAction("addDelivery", {delivery: d});
   };
 
+  // A checkout points at one specific unit. Splitting an item produces siblings
+  // that share a name and differ only by id and label, so matching on name moved
+  // all of them at once — checking out one unit marked every sibling In Use.
+  // Records written before itemId was populated have only the name to go on.
+  const isCheckoutTarget=(item,co)=>
+    (co.itemId!==undefined&&co.itemId!==null&&String(co.itemId)!=="")
+      ? String(item.id)===String(co.itemId)
+      : item.name===co.item;
+
   const handleCheckout=(c)=>{
-    // itemId was never populated, so that column sat empty and every lookup had
-    // to fall back to matching on the item's name.
-    const src=items.find(i=>i.name===c.item);
-    const checkout={...c, itemId: src?.id ?? "", checkedOutByEmail: user?.email||""};
-    setItems(prev=>prev.map(i=>i.name===checkout.item?{...i,status:i.shared?"Available":"In Use",usedBy:[...toArr(i.usedBy),checkout.user]}:i));
+    // itemId comes from the picker now. It used to be left unset, so the column
+    // sat empty and every lookup fell back to the item's name.
+    const checkout={...c, checkedOutByEmail: user?.email||""};
+    setItems(prev=>prev.map(i=>isCheckoutTarget(i,checkout)?{...i,status:i.shared?"Available":"In Use",usedBy:[...toArr(i.usedBy),checkout.user]}:i));
     setCheckouts(p=>[checkout,...p]);
     addToast("success",`${checkout.item} → ${checkout.user}`);
     postAction("addCheckout", {checkout});
@@ -2207,7 +2224,7 @@ function LabInventory(){
     const now=new Date();
     const nowStr=`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}-${String(now.getDate()).padStart(2,"0")} ${String(now.getHours()).padStart(2,"0")}:${String(now.getMinutes()).padStart(2,"0")}`;
     setCheckouts(p=>p.map(c=>c.id===coId?{...c,status:"Returned",ret:nowStr}:c));
-    setItems(p=>p.map(i=>i.name===co.item?{...i,status:"Available",usedBy:toArr(i.usedBy).filter(u=>u!==co.user)}:i));
+    setItems(p=>p.map(i=>isCheckoutTarget(i,co)?{...i,status:"Available",usedBy:toArr(i.usedBy).filter(u=>u!==co.user)}:i));
     addToast("success",`${co.item} returned`);
     await postAction("returnItem", {checkoutId: coId});
   };
@@ -2229,7 +2246,7 @@ function LabInventory(){
     setCheckouts(prev=>prev.map(c=>ids.includes(c.id)?{...c,status:"Returned"}:c));
     setItems(prev=>{
       let s=[...prev];
-      ids.forEach(id=>{const co=coMap[id];if(!co)return;s=s.map(i=>i.name===co.item?{...i,status:"Available",usedBy:toArr(i.usedBy).filter(u=>u!==co.user)}:i);});
+      ids.forEach(id=>{const co=coMap[id];if(!co)return;s=s.map(i=>isCheckoutTarget(i,co)?{...i,status:"Available",usedBy:toArr(i.usedBy).filter(u=>u!==co.user)}:i);});
       return s;
     });
     setSelected(new Set());
@@ -2237,7 +2254,7 @@ function LabInventory(){
     ids.forEach(id=>postAction("returnItem",{checkoutId:id}));
   };
 
-  const handleQuickCheckout=(itemName)=>{ setPreItem(itemName); setModal("checkout"); };
+  const handleQuickCheckout=(itemId)=>{ setPreItem(itemId); setModal("checkout"); };
 
   const handleAddItem = async (item) => {
     if(editLocked){addToast("error","Editing is locked — click 🔒 in the header to unlock");return null;}
