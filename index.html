@@ -556,7 +556,7 @@ const LabelModal = ({item,onClose,onAddAnother}) => {
         <div style={{fontSize:17,fontWeight:700,color:"var(--text)",marginBottom:24,lineHeight:1.3}}>{item.name}</div>
         <div onClick={copy} style={{background:"var(--bg2)",border:`2px solid ${copied?"var(--green)":"var(--cyan)"}`,borderRadius:14,padding:"24px 16px",cursor:"pointer",marginBottom:24,transition:"border-color .2s",userSelect:"none"}}>
           <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:36,fontWeight:900,letterSpacing:"0.06em",color:copied?"var(--green)":"var(--cyan)",lineHeight:1}}>{item.displayId}</div>
-          {item.count>1&&<div style={{marginTop:10,fontSize:12,color:"var(--dim)",fontFamily:"'IBM Plex Mono',monospace"}}>{item.baseId}-001 → {item.baseId}-{String(item.count).padStart(3,"0")}</div>}
+          {item.count>1&&<div style={{marginTop:10,fontSize:12,color:"var(--dim)",fontFamily:"'IBM Plex Mono',monospace"}}>{subIdOf(item.baseId,1)} → {subIdOf(item.baseId,item.count)}</div>}
           <div style={{marginTop:10,fontSize:12,color:copied?"var(--green)":"var(--dim)",fontWeight:copied?700:400}}>{copied?"✓ Copied to clipboard!":"tap to copy"}</div>
         </div>
         <div style={{background:"var(--bg3)",border:"1px solid var(--border)",borderRadius:8,padding:"9px 14px",marginBottom:20,fontSize:12,color:"var(--sub)",lineHeight:1.5}}>
@@ -582,7 +582,7 @@ const ManageCategoriesModal = ({categories, onSave, onClose}) => {
   const saveAll = () => {localStorage.setItem("labtrack_catprefixes",JSON.stringify(prefixes));onSave(cats);onClose();};
   return (
     <Modal onClose={onClose} title="Manage Categories" mw={460}>
-      <div style={{color:"var(--dim)",fontSize:12,marginBottom:10}}>Optionally set a custom prefix per category — auto-generated from initials if left blank. Label IDs look like <span style={{color:"var(--cyan)",fontFamily:"'IBM Plex Mono',monospace"}}>RM-000001</span>, <span style={{color:"var(--cyan)",fontFamily:"'IBM Plex Mono',monospace"}}>SV-000042</span>.</div>
+      <div style={{color:"var(--dim)",fontSize:12,marginBottom:10}}>Optionally set a custom prefix per category — auto-generated from initials if left blank. Label IDs look like <span style={{color:"var(--cyan)",fontFamily:"'IBM Plex Mono',monospace"}}>RM-001</span>, <span style={{color:"var(--cyan)",fontFamily:"'IBM Plex Mono',monospace"}}>SV-042</span>.</div>
       <div style={{display:"grid",gridTemplateColumns:"1fr auto auto auto",alignItems:"center",gap:6,marginBottom:6,padding:"0 4px"}}>
         <span style={{color:"var(--dim)",fontSize:11,fontWeight:600}}>CATEGORY</span>
         <span style={{color:"var(--dim)",fontSize:11,fontWeight:600,textAlign:"center",width:72}}>PREFIX</span>
@@ -594,7 +594,7 @@ const ManageCategoriesModal = ({categories, onSave, onClose}) => {
           <div key={c} style={{display:"grid",gridTemplateColumns:"1fr auto auto auto",alignItems:"center",gap:6,background:"var(--bg2)",border:"1px solid var(--border)",borderRadius:8,padding:"6px 10px"}}>
             <span style={{fontSize:14,color:"var(--text)",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{c}</span>
             <input value={prefixes[c]||""} placeholder={autoP(c)} title="Custom prefix (letters only). Leave blank to auto-generate." onChange={e=>setPrefixes(p=>({...p,[c]:e.target.value.replace(/[^a-zA-Z]/g,"").toUpperCase().slice(0,5)}))} style={{width:72,background:"var(--bg0)",border:"1px solid var(--border)",borderRadius:6,padding:"3px 6px",color:"var(--cyan)",fontSize:12,fontFamily:"'IBM Plex Mono',monospace",textAlign:"center"}}/>
-            <span style={{color:"var(--sub)",fontSize:11,fontFamily:"'IBM Plex Mono',monospace",width:80,textAlign:"center"}}>{(prefixes[c]||autoP(c))+"-000001"}</span>
+            <span style={{color:"var(--sub)",fontSize:11,fontFamily:"'IBM Plex Mono',monospace",width:80,textAlign:"center"}}>{mainId(prefixes[c]||autoP(c),1)}</span>
             <button onClick={()=>removeCat(c)} style={{background:"none",border:"none",color:"var(--dim)",cursor:"pointer",padding:0,display:"flex"}}><Ico n="x" s={14}/></button>
           </div>
         ))}
@@ -835,9 +835,9 @@ const AddItemModal = ({onClose,onAdd,categories,allItems,onShowLabel}) => {
     const base={...f,minQty:isNaN(+f.minQty)?0:+f.minQty,status:"Available",usedBy:[]};
     try{
       if(splitUnits&&canSplit){
-        const results=await Promise.all(Array.from({length:n},(_,u)=>onAdd({...base,id:uid(),qty:1,serial:serials[u]||"",displayId:`${displayId}-${String(u+1).padStart(3,"0")}`})));
+        const results=await Promise.all(Array.from({length:n},(_,u)=>onAdd({...base,id:uid(),qty:1,serial:serials[u]||"",displayId:subIdOf(displayId,u+1)})));
         const firstId=results[0]; // server-confirmed ID of first unit
-        if(firstId&&onShowLabel) onShowLabel({name:base.name,displayId:firstId,baseId:firstId.replace(/-\d{3}$/,""),count:results.filter(Boolean).length});
+        if(firstId&&onShowLabel) onShowLabel({name:base.name,displayId:firstId,baseId:getBaseId(firstId),count:results.filter(Boolean).length});
       } else {
         const finalId=await onAdd({...base,id:uid(),qty:n,displayId});
         if(finalId&&onShowLabel) onShowLabel({name:base.name,displayId:finalId,count:1});
@@ -907,13 +907,13 @@ const AddItemModal = ({onClose,onAdd,categories,allItems,onShowLabel}) => {
               <div style={{marginTop:8}}>
                 <div style={{fontSize:11,color:"var(--sub)",fontFamily:"'IBM Plex Mono',monospace",marginBottom:8,lineHeight:1.6}}>
                   Creates {n} items:{" "}
-                  {Array.from({length:Math.min(n,3)},(_,i)=>`${displayId}-${String(i+1).padStart(3,"0")}`).join(", ")}
-                  {n>3?` … ${displayId}-${String(n).padStart(3,"0")}`:""}<br/>
+                  {Array.from({length:Math.min(n,3)},(_,i)=>subIdOf(displayId,i+1)).join(", ")}
+                  {n>3?` … ${subIdOf(displayId,n)}`:""}<br/>
                   Each gets its own sticker, status, and checkout history.
                 </div>
                 <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(180px,1fr))",gap:6}}>
                   {Array.from({length:n},(_,i)=>(
-                    <Fld key={i} label={`Serial/Product No. — unit ${String(i+1).padStart(3,"0")}`}>
+                    <Fld key={i} label={`Serial/Product No. — unit ${String(i+1).padStart(LABEL_SUB_DIGITS,"0")}`}>
                       <Inp placeholder="e.g. SN-001" value={serials[i]||""} onChange={e=>{const a=[...serials];a[i]=e.target.value;setSerials(a);}}/>
                     </Fld>
                   ))}
@@ -940,17 +940,17 @@ const EditItemModal = ({item,onClose,onSave,onDelete,onAdd,categories,isAdmin}) 
   const [changed,setChanged]=useState(false);
   const s=k=>e=>{setF(p=>({...p,[k]:e.target.value}));setChanged(true);};
   const chk=k=>e=>{setF(p=>({...p,[k]:e.target.checked}));setChanged(true);};
-  const onCatChange=e=>{setChanged(true);const nc=e.target.value;setF(p=>{const np=catPrefix(nc);const m=String(p.displayId||"").match(/(\d{6}(?:-\d{3})?)$/);const num=m?m[1]:"";return{...p,cat:nc,displayId:num?`${np}-${num}`:p.displayId};});};
+  const onCatChange=e=>{setChanged(true);const nc=e.target.value;setF(p=>{const np=catPrefix(nc);const d=parseDisplayId(p.displayId);return{...p,cat:nc,displayId:d?(d.sub!==null?subIdOf(mainId(np,d.num),d.sub):mainId(np,d.num)):p.displayId};});};
   const [confirmDel,setConfirmDel]=useState(false);
   const [splitConfirm,setSplitConfirm]=useState(false);
   const CHKBOX=(label,key)=><label style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer",fontSize:13,color:"var(--sub)"}}><input type="checkbox" checked={f[key]} onChange={chk(key)} style={{accentColor:"var(--cyan)",width:14,height:14}}/>{label}</label>;
   const n=+f.qty||0;
   const canSplit=n>1&&!f.consumable;
-  const baseId=f.displayId.replace(/-\d{3}$/,"");
+  const baseId=getBaseId(f.displayId);
   const handleSplit=()=>{
     const base={...item,...f,minQty:isNaN(+f.minQty)?0:+f.minQty,shared:f.shared,consumable:f.consumable};
-    onSave({...base,qty:1,displayId:`${baseId}-001`});
-    for(let u=2;u<=n;u++) onAdd({...base,id:uid(),qty:1,status:"Available",usedBy:[],displayId:`${baseId}-${String(u).padStart(3,"0")}`});
+    onSave({...base,qty:1,displayId:subIdOf(baseId,1)});
+    for(let u=2;u<=n;u++) onAdd({...base,id:uid(),qty:1,status:"Available",usedBy:[],displayId:subIdOf(baseId,u)});
     onClose();
   };
   return(
@@ -971,12 +971,12 @@ const EditItemModal = ({item,onClose,onSave,onDelete,onAdd,categories,isAdmin}) 
           <div style={{gridColumn:"1/-1",background:"var(--cyan-d)",border:"1px solid var(--cyan-m)",borderRadius:8,padding:"10px 14px"}}>
             {!splitConfirm?(
               <button onClick={()=>setSplitConfirm(true)} style={{background:"none",border:"none",color:"var(--cyan)",fontSize:13,cursor:"pointer",padding:0,textAlign:"left"}}>
-                <Ico n="layers" s={12} col="var(--cyan)"/> Split into {n} individual units ({baseId}-001 … -{String(n).padStart(3,"0")})
+                <Ico n="layers" s={12} col="var(--cyan)"/> Split into {n} individual units ({subIdOf(baseId,1)} … {subIdOf(baseId,n)})
               </button>
             ):(
               <div>
                 <div style={{fontSize:12,color:"var(--sub)",marginBottom:8}}>
-                  Creates {n} items: <span style={{fontFamily:"'IBM Plex Mono',monospace"}}>{baseId}-001</span> → <span style={{fontFamily:"'IBM Plex Mono',monospace"}}>{baseId}-{String(n).padStart(3,"0")}</span>. This item becomes <span style={{fontFamily:"'IBM Plex Mono',monospace"}}>{baseId}-001</span> with qty 1.
+                  Creates {n} items: <span style={{fontFamily:"'IBM Plex Mono',monospace"}}>{subIdOf(baseId,1)}</span> → <span style={{fontFamily:"'IBM Plex Mono',monospace"}}>{subIdOf(baseId,n)}</span>. This item becomes <span style={{fontFamily:"'IBM Plex Mono',monospace"}}>{subIdOf(baseId,1)}</span> with qty 1.
                 </div>
                 <div style={{display:"flex",gap:8}}>
                   <Btn sm onClick={handleSplit}><Ico n="check" s={12} col="var(--on-accent)"/>Confirm Split</Btn>
@@ -1189,8 +1189,8 @@ const GroupDetail = ({group,checkouts,onClose,onEdit,onQuickCheckout,onReturn,ed
   const [newSerial,setNewSerial] = React.useState("");
   const ac = getCatAccent(group.cat,categories||[]);
   const handleAddUnit = () => {
-    const maxIdx = Math.max(0,...group._items.map(u=>{const m=String(u.displayId||"").match(/-(\d{3})$/);return m?parseInt(m[1]):0;}));
-    const nextDisplayId = `${group._baseId}-${String(maxIdx+1).padStart(3,"0")}`;
+    const maxIdx = Math.max(0,...group._items.map(u=>parseDisplayId(u.displayId)?.sub??0));
+    const nextDisplayId = subIdOf(group._baseId, maxIdx+1);
     onAddUnit({id:uid(),name:group.name,cat:group.cat,qty:1,unit:group.unit||"units",loc:group.loc||"",desc:group.desc||"",minQty:group.minQty||0,img:group.img||"",status:"Available",usedBy:[],serial:newSerial.trim(),displayId:nextDisplayId,shared:group.shared||false,consumable:false});
     setNewSerial(""); setAddingUnit(false);
   };
@@ -1236,7 +1236,7 @@ const GroupDetail = ({group,checkouts,onClose,onEdit,onQuickCheckout,onReturn,ed
       {!editLocked&&addingUnit&&(
         <div style={{marginTop:12,background:"var(--cyan-d)",border:"1px solid var(--cyan-m)",borderRadius:8,padding:"10px 12px",display:"flex",gap:8,alignItems:"center"}}>
           <span style={{color:"var(--cyan)",fontSize:12,fontFamily:"'IBM Plex Mono',monospace",whiteSpace:"nowrap"}}>
-            Next: {group._baseId}-{String(Math.max(0,...group._items.map(u=>{const m=String(u.displayId||"").match(/-(\d{3})$/);return m?parseInt(m[1]):0;}))+1).padStart(3,"0")}
+            Next: {subIdOf(group._baseId, Math.max(0,...group._items.map(u=>parseDisplayId(u.displayId)?.sub??0))+1)}
           </span>
           <Inp placeholder="Serial / Product No. (optional)" value={newSerial} onChange={e=>setNewSerial(e.target.value)} style={{flex:1,padding:"6px 10px",fontSize:13}}/>
           <Btn sm onClick={handleAddUnit}><Ico n="check" s={12} col="var(--on-accent)"/>Add</Btn>
@@ -1795,18 +1795,43 @@ function catPrefix(cat) {
   const words=(cat||"GEN").split(/[\s&\/\-_]+/).filter(Boolean);
   return (words.length===1 ? words[0].slice(0,4) : words.map(w=>w[0]).join("")).toUpperCase()||"GEN";
 }
+// ─── LABEL IDS ────────────────────────────────────────────────────────────────
+// PREFIX-NNN, and a split unit appends -NN:  RM-001,  RM-001-01
+// Keep these two widths in sync with google-apps-script.js, which is what actually
+// assigns the numbers — the client only previews them.
+const LABEL_DIGITS = 3;      // main number
+const LABEL_SUB_DIGITS = 2;  // split-unit suffix
+
+// The prefix is lazy so a prefix containing a hyphen still parses, and the sub
+// group is optional — which is why this can't be a single width-based regex any
+// more: at three digits, /^.+-\d{3}$/ matches "RM-001" and would read every plain
+// item as a split unit.
+function parseDisplayId(displayId) {
+  const m = String(displayId||"").match(/^(.*?)-(\d+)(?:-(\d+))?$/);
+  if (!m) return null;
+  return { prefix:m[1], num:parseInt(m[2],10), sub:m[3]===undefined?null:parseInt(m[3],10) };
+}
+function mainId(prefix, num) { return `${prefix}-${String(num).padStart(LABEL_DIGITS,"0")}`; }
+function subIdOf(baseId, n)  { return `${baseId}-${String(n).padStart(LABEL_SUB_DIGITS,"0")}`; }
+
 function genDisplayId(cat, allItems) {
   const prefix = catPrefix(cat);
-  // Global sequential 6-digit counter. The regex ignores any sub-ID suffix
-  // (e.g. captures 000042 from "CE-000042-001" so split units don't corrupt the counter)
-  const maxNum = Math.max(0,...(allItems||[]).map(i=>{const m=String(i.displayId||"").match(/(\d{6})(?:-\d+)?$/);return m?parseInt(m[1]):0;}));
-  return `${prefix}-${String(maxNum+1).padStart(6,"0")}`;
+  // Counted per prefix: the first Sensors & Vision item is SV-001 even when
+  // Robots & Motors is already at RM-004. A single shared counter made the number
+  // meaningless — it only said how many items existed in total.
+  const maxNum = Math.max(0,...(allItems||[])
+    .map(i=>parseDisplayId(i.displayId))
+    .filter(p=>p&&p.prefix===prefix)
+    .map(p=>p.num));
+  return mainId(prefix, maxNum+1);
 }
 function isSubItem(displayId) {
-  return /^.+-\d{3}$/.test(String(displayId||""));
+  const p = parseDisplayId(displayId);
+  return !!p && p.sub !== null;
 }
 function getBaseId(displayId) {
-  return String(displayId||"").replace(/-\d{3}$/, "");
+  const p = parseDisplayId(displayId);
+  return p && p.sub !== null ? mainId(p.prefix, p.num) : String(displayId||"");
 }
 
 // ─── PURCHASE TEXT GENERATOR ──────────────────────────────────────────────────
@@ -3187,7 +3212,7 @@ function LabInventory(){
       {modal==="help" && <Modal onClose={()=>setModal(null)} title="LabTrack — Help & Guide" mw={640}>
         <div style={{display:"flex",flexDirection:"column",gap:20,fontSize:13}}>
           {[
-            {icon:"box",title:"Inventory Tab",color:"var(--cyan)",items:["Add items with the + button. Fill in name, category, location, and quantity.","Set Min Stock to get a red Low Stock badge when qty drops to or below that number.","Shared items (e.g. toolboxes) stay Available when checked out — multiple people can use them simultaneously.","Consumable items (e.g. stickers, reagents) show a Use button on the card — enter quantity used to deduct without a formal checkout.","Each item gets a Label ID (e.g. RM-000001). Print it on a sticker and attach it to the physical item. Configure prefixes in Settings → Manage Categories.","When adding multiple cameras, laptops, or robots, check 'Track each unit individually' to create separate items with sub-IDs (e.g. CE-000042-001, CE-000042-002), each with its own serial number.","Click any item card to see full details, checkout history, and quick actions."]},
+            {icon:"box",title:"Inventory Tab",color:"var(--cyan)",items:["Add items with the + button. Fill in name, category, location, and quantity.","Set Min Stock to get a red Low Stock badge when qty drops to or below that number.","Shared items (e.g. toolboxes) stay Available when checked out — multiple people can use them simultaneously.","Consumable items (e.g. stickers, reagents) show a Use button on the card — enter quantity used to deduct without a formal checkout.","Each item gets a Label ID (e.g. RM-001). Print it on a sticker and attach it to the physical item. Configure prefixes in Settings → Manage Categories.","When adding multiple cameras, laptops, or robots, check 'Track each unit individually' to create separate items with sub-IDs (e.g. CE-042-01, CE-042-002), each with its own serial number.","Click any item card to see full details, checkout history, and quick actions."]},
             {icon:"tag",title:"Usage / Checkout Tab",color:"var(--blue)",items:["Use Check Out to assign a non-consumable, non-shared item to a person. Enter qty, dates, and optional notes.","Shared items can be checked out by multiple people at the same time and remain Available.","Consumable items do not appear in the checkout list — use the Use button on the card instead.","Mark items Returned when done. Overdue checkouts are highlighted in red.","Only the person who created the checkout, listed group members, or admins can return an item.","Group members: when checking out, optionally add teammates' emails (comma-separated) so they can also return the item.","Bulk Return lets you return multiple items at once."]},
             {icon:"cart",title:"Order Requests Tab",color:"var(--amber)",items:["Submit purchase requests with store, item, link, qty, and price.","Only the person who submitted an order (or an admin) can edit it.","Select multiple orders with checkboxes → Copy Text generates a bullet-list (qty · item · link · price) with grand total — ready to paste into an email or message. Save to Sheet writes the same summary as a table to your Google Sheet.","Admins can move orders through: Pending → Approved → Ordered → Received.","When marked Received, a staging form opens — fill in location, label ID, and serial number before it is added to inventory.","Deliveries are automatically logged when an order is marked Received."]},
             {icon:"calendar",title:"Calendar Tab",color:"var(--purple)",items:["Visual monthly calendar showing deliveries, active checkouts, and return due dates.","Color-coded: green = delivery, blue = checkout start, amber = return due.","Click any day to see all events on that date."]},

@@ -53,6 +53,25 @@ const DEV_NO_AUTH_EMAIL = "zzhan409@jh.edu";
 // Must be the sign-in name (<JHED>@jh.edu), not the @jhu.edu mail alias.
 const INITIAL_ADMIN = "zzhan409@jh.edu";
 
+// ─── LABEL IDS ────────────────────────────────────────────────────────────────
+// PREFIX-NNN, and a split unit appends -NN:  RM-001,  RM-001-01
+// These get printed on stickers and stuck to hardware, so they are kept short.
+// index.html mirrors both widths for its preview; this file assigns the real ones.
+const LABEL_DIGITS = 3;      // main number
+const LABEL_SUB_DIGITS = 2;  // split-unit suffix
+
+// Lazy prefix so a prefix containing a hyphen still parses; the sub group is
+// optional. A width-based regex can't do this any more — at three digits,
+// /^.+-\d{3}$/ matches "RM-001" and would read every plain item as a split unit.
+function parseDisplayId_(displayId) {
+  var m = String(displayId || "").match(/^(.*?)-(\d+)(?:-(\d+))?$/);
+  if (!m) return null;
+  return { prefix: m[1], num: parseInt(m[2], 10), sub: m[3] === undefined ? null : parseInt(m[3], 10) };
+}
+function mainId_(prefix, num) {
+  return prefix + "-" + String(num).padStart(LABEL_DIGITS, "0");
+}
+
 // ─── SLACK HELPER ────────────────────────────────────────────────────────────
 // slack_mode in Settings tab: "all" | "important" | "digest" | "off"
 // "important" = only deletions, urgent/high orders, overdue returns
@@ -862,28 +881,28 @@ function doPost(e) {
       const it = body.item;
       // Always generate displayId server-side (inside the lock) to prevent collisions.
       const allItems = readTable("Items");
-      const isSubId = /^.+-\d{3}$/.test(String(it.displayId||""));
-      if (!isSubId) {
-        // Regular item: global sequential 6-digit counter across all prefixes.
-        const prefixMatch = String(it.displayId||"GEN-000000").match(/^([^-]+)-/);
-        const prefix = prefixMatch ? prefixMatch[1] : "GEN";
-        const maxNum = Math.max(0, ...allItems.map(function(i) {
-          var m = String(i.displayId||"").match(/(\d{6})(?:-\d+)?$/);
-          return m ? parseInt(m[1]) : 0;
-        }));
-        it.displayId = prefix + "-" + String(maxNum + 1).padStart(6, "0");
+      const parsed = parseDisplayId_(it.displayId);
+      if (!parsed || parsed.sub === null) {
+        // Plain item. The counter runs per prefix, so each category starts at 001 —
+        // one shared counter only told you how many items existed in total, which
+        // is not what a label on a shelf is for.
+        var prefix = parsed ? parsed.prefix : "GEN";
+        var maxNum = 0;
+        allItems.forEach(function (i) {
+          var p = parseDisplayId_(i.displayId);
+          if (p && p.prefix === prefix && p.num > maxNum) maxNum = p.num;
+        });
+        it.displayId = mainId_(prefix, maxNum + 1);
       } else {
-        // Sub-ID item (e.g. CE-000042-001): assign next available 3-digit suffix
-        // for this base ID server-side so concurrent "Add Unit" calls can't collide.
-        const baseId = String(it.displayId||"").replace(/-\d{3}$/, "");
-        const maxSuffix = Math.max(0, ...allItems
-          .filter(function(i) { return String(i.displayId||"").replace(/-\d{3}$/, "") === baseId; })
-          .map(function(i) {
-            var m = String(i.displayId||"").match(/-(\d{3})$/);
-            return m ? parseInt(m[1]) : 0;
-          })
-        );
-        it.displayId = baseId + "-" + String(maxSuffix + 1).padStart(3, "0");
+        // Split unit: next free suffix under this base, chosen inside the lock so
+        // concurrent "Add Unit" calls can't land on the same number.
+        const baseId = mainId_(parsed.prefix, parsed.num);
+        var maxSub = 0;
+        allItems.forEach(function (i) {
+          var p = parseDisplayId_(i.displayId);
+          if (p && p.sub !== null && mainId_(p.prefix, p.num) === baseId && p.sub > maxSub) maxSub = p.sub;
+        });
+        it.displayId = baseId + "-" + String(maxSub + 1).padStart(LABEL_SUB_DIGITS, "0");
       }
       appendRow("Items", it);
       sendSlack("📦", "New Item Added: " + it.name, null, ["*Category*\n" + (it.cat||"—"), "*Qty*\n" + (it.qty||0) + " " + (it.unit||""), "*Location*\n" + (it.loc||"—"), "*Added by*\n" + userName]);

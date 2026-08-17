@@ -22,7 +22,7 @@ Sign in with Microsoft using your JHU account (`<JHED>@jh.edu`).
 
 :pencil: *Action required*
 • *Add your items to the inventory* — if you own or regularly use any lab equipment, add it so everyone can find it
-• *Label physical items* — once added, print the generated label ID (e.g. RM-000001) on a sticker and attach it to the item
+• *Label physical items* — once added, print the generated label ID (e.g. RM-001) on a sticker and attach it to the item
 • *Use this for all purchase requests going forward* — no more emailing purchase lists separately
 • *Check out items when you take them* and return them when done — this is how we know where things are
 

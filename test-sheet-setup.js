@@ -144,5 +144,33 @@ console.log("checkout targets one unit, not every item sharing its name");
   check("no itemId falls back to name", legacy.some(r => r.status === "In Use"));
 }
 
+console.log("label IDs count per category and stay short");
+{
+  const ss4 = fresh();
+  const c4 = load(ss4);
+  c4.setupNewLab();
+  c4.verifyToken = () => ({ email: "zzhan409@jh.edu", name: "Z", oid: "o" });
+
+  const add = (name, cat, wanted) => {
+    const res = c4.doPost({ postData: { contents: JSON.stringify({ token: "t", action: "addItem",
+      item: { id: "x"+Math.abs(name.length*7+cat.length), name, cat, qty: 1, unit: "units", loc: "",
+              minQty: 0, img: "", desc: "", status: "Available", usedBy: [], serial: "",
+              displayId: wanted, shared: false, consumable: false } }) } });
+    return JSON.parse(res.__text).displayId;
+  };
+
+  check("first robot is RM-001",        add("Arm",   "Robots & Motors",  "RM-000") === "RM-001");
+  check("second robot is RM-002",       add("Base",  "Robots & Motors",  "RM-000") === "RM-002");
+  // The bug: a shared counter made this SV-003 because two RM items already existed.
+  check("first sensor is SV-001",       add("Cam",   "Sensors & Vision", "SV-000") === "SV-001");
+  check("second sensor is SV-002",      add("Lidar", "Sensors & Vision", "SV-000") === "SV-002");
+  check("robots keep their own run",    add("Servo", "Robots & Motors",  "RM-000") === "RM-003");
+
+  // Split units hang off a base and use a two-digit suffix.
+  check("first split unit is RM-001-01",  add("Arm", "Robots & Motors", "RM-001-01") === "RM-001-01");
+  check("second split unit is RM-001-02", add("Arm", "Robots & Motors", "RM-001-01") === "RM-001-02");
+  check("a split does not bump the main run", add("Gripper", "Robots & Motors", "RM-000") === "RM-004");
+}
+
 console.log("\n" + pass + " passed, " + fail + " failed");
 process.exit(fail ? 1 : 0);

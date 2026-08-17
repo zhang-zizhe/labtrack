@@ -169,20 +169,20 @@ function run(scriptPath, slackMode, asAdmin) {
   step("addItem/regular", { action: "addItem", item: {
     id: "i1", name: "UR5e Arm", cat: "Robots & Motors", qty: 1, unit: "unit",
     loc: "Hackerman 306", minQty: 0, img: "", desc: "", status: "Available",
-    usedBy: [], serial: "SN-9001", displayId: "RM-000000", shared: false, consumable: false } });
+    usedBy: [], serial: "SN-9001", displayId: "RM-000", shared: false, consumable: false } });
 
   step("addItem/second", { action: "addItem", item: {
     id: "i2", name: "RealSense D435", cat: "Sensors & Vision", qty: 3, unit: "unit",
     loc: "Hackerman 306", minQty: 1, img: "", desc: "", status: "Available",
-    usedBy: [], serial: "", displayId: "SV-000000", shared: true, consumable: false } });
+    usedBy: [], serial: "", displayId: "SV-000", shared: true, consumable: false } });
 
   step("addItem/subId", { action: "addItem", item: {
     id: "i3", name: "RealSense D435 #2", cat: "Sensors & Vision", qty: 1, unit: "unit",
     loc: "Hackerman 306", minQty: 0, img: "", desc: "", status: "Available",
-    usedBy: [], serial: "", displayId: "SV-000002-001", shared: false, consumable: false } });
+    usedBy: [], serial: "", displayId: "SV-001-01", shared: false, consumable: false } });
 
   step("updateItem", { action: "updateItem", item: {
-    id: "i1", name: "UR5e Arm", qty: 2, loc: "Hackerman 310", serial: "SN-9001", displayId: "RM-000001" } });
+    id: "i1", name: "UR5e Arm", qty: 2, loc: "Hackerman 310", serial: "SN-9001", displayId: "RM-001" } });
 
   step("updateItem/missing", { action: "updateItem", item: { id: "nope", name: "x" } });
 
