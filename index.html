@@ -1323,10 +1323,13 @@ const ItemDetail = ({item,checkouts,onClose,onReturn,onQuickCheckout,onEdit,cate
 };
 
 // ─── STAT CARD ───────────────────────────────────────────────────────────────
-// `bar` draws the accent edge. Only the tile whose colour means something gets
-// one — on the plain counts it was decoration competing with the one that isn't.
-const Stat=({label,val,icon,ac,sub,warn,bar})=>(
-  <div style={{background:"var(--bg1)",border:`1px solid ${warn?"color-mix(in srgb, var(--red) 30%, transparent)":"var(--border)"}`,...(bar?{borderLeft:`3px solid ${ac}`}:{}),borderRadius:14,padding:"17px 20px",flex:1,minWidth:130}}>
+// No accent edge on any tile. The row is uniform until something is wrong, and
+// then the whole Overdue tile washes red — a tinted surface reads at a glance in a
+// way a 3px stripe does not, and it only appears when the number actually matters.
+// Mixed into --bg1 rather than laid over it as translucency, so the tile still
+// reads as a card and the tint follows the surface token in dark mode.
+const Stat=({label,val,icon,ac,sub,warn})=>(
+  <div style={{background:warn?"color-mix(in srgb, var(--red) 12%, var(--bg1))":"var(--bg1)",border:`1px solid ${warn?"color-mix(in srgb, var(--red) 30%, transparent)":"var(--border)"}`,borderRadius:14,padding:"17px 20px",flex:1,minWidth:130}}>
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
       <div>
         <div style={{color:"var(--dim)",fontSize:10,fontWeight:700,letterSpacing:"0.12em",textTransform:"uppercase",fontFamily:"'IBM Plex Mono',monospace",marginBottom:5}}>{label}</div>
@@ -2613,13 +2616,12 @@ function LabInventory(){
               only because its value means something. Giving each tile its own hue
               spent the colour channel on nothing, and it could not be made safe:
               in a blue-dominant palette the fifth and sixth hues collapse against
-              the blues (normal-vision ΔE 10.8–13.8, floor 15). One red among four
-              blues is also simply easier to spot, which is the point of the row. */}
+              the blues (normal-vision ΔE 10.8–13.8, floor 15). */}
           <Stat label="Total Items" val={items.length} icon="box" ac="var(--cyan)" sub="in inventory"/>
           <Stat label="Categories" val={[...new Set(items.map(i=>i.cat))].length} icon="layers" ac="var(--cyan)" sub="active types"/>
           <Stat label="Orders" val={activeOrders.length} icon="cart" ac="var(--cyan)" sub="in pipeline"/>
           <Stat label="Checked Out" val={activeOut.length} icon="users" ac="var(--cyan)" sub="active"/>
-          <Stat label="Overdue" val={overdues.length} icon="clock" ac={overdues.length?"var(--red)":"var(--green)"} sub="past return date" warn={overdues.length>0} bar/>
+          <Stat label="Overdue" val={overdues.length} icon="clock" ac={overdues.length?"var(--red)":"var(--green)"} sub="past return date" warn={overdues.length>0}/>
         </div>
 
         {/* Alert banners */}
