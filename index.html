@@ -613,7 +613,10 @@ const ManageCategoriesModal = ({categories, onSave, onClose}) => {
 };
 
 // ─── SEARCHABLE ITEM PICKER ──────────────────────────────────────────────────
-const ItemPicker = ({items, value, onChange, categories}) => {
+// `exclude` is the ids already claimed by the other slots of the same checkout.
+// The status filter below only sees committed state, so without this two slots
+// in one unsubmitted form could both take the same unit and it would go out twice.
+const ItemPicker = ({items, value, onChange, categories, exclude}) => {
   const [q, setQ] = useState("");
   const [cat, setCat] = useState("All");
   const [open, setOpen] = useState(false);
@@ -623,7 +626,8 @@ const ItemPicker = ({items, value, onChange, categories}) => {
   // label, so a name could never say which physical unit was being taken.
   const selected = items.find(i=>String(i.id)===String(value));
   // Exclude: consumables (use "Use" button), broken/maintenance, and "In Use" non-shared items
-  const avail = items.filter(i=>!i.consumable && i.status!=="Maintenance" && i.status!=="Broken" && !(i.status==="In Use"&&!i.shared));
+  const taken = new Set((exclude||[]).filter(Boolean).map(String));
+  const avail = items.filter(i=>!i.consumable && i.status!=="Maintenance" && i.status!=="Broken" && !(i.status==="In Use"&&!i.shared) && !taken.has(String(i.id)));
   const filtered = avail.filter(i=>{
     const match = i.name.toLowerCase().includes(q.toLowerCase()) || i.loc?.toLowerCase().includes(q.toLowerCase()) || i.desc?.toLowerCase().includes(q.toLowerCase());
     return match && (cat==="All" || i.cat===cat);
@@ -686,7 +690,12 @@ const ItemPicker = ({items, value, onChange, categories}) => {
                     <div style={{fontSize:10,color:"var(--dim)"}}>{item.unit}</div>
                   </div>
                   {(low||item.status==="In Use")&&<Badge status={low?"Low Stock":item.status}/>}
-                  {isSel&&<Ico n="check" s={14} col="var(--cyan)"/>}
+                  {/* Fixed-size box, always rendered — the tick used to appear out of
+                      nowhere at the end of the row and shove the qty column sideways. */}
+                  <span style={{width:18,height:18,borderRadius:5,flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",
+                                border:`1.5px solid ${isSel?"var(--cyan)":"var(--border-hi)"}`,background:isSel?"var(--cyan)":"transparent",transition:"all .12s"}}>
+                    {isSel&&<Ico n="check" s={11} col="var(--on-accent)"/>}
+                  </span>
                 </div>
               );
             })}
@@ -761,7 +770,7 @@ const CheckoutModal = ({items,onClose,onAdd,preItem="",userName="",userEmail="",
             const outOfStock=sel&&maxQ<=0;
             return(
               <div key={i} style={{display:"flex",gap:8,alignItems:"center",marginBottom:8}}>
-                <div style={{flex:1}}><ItemPicker items={items} value={sl.itemId} onChange={it=>updSlot(i,{itemId:it.id,item:it.name})} categories={categories}/></div>
+                <div style={{flex:1}}><ItemPicker items={items} value={sl.itemId} exclude={slots.filter((_,j)=>j!==i).map(s=>s.itemId)} onChange={it=>updSlot(i,{itemId:it.id,item:it.name})} categories={categories}/></div>
                 {outOfStock
                   ?<span style={{fontSize:11,color:"var(--red)",fontWeight:700,whiteSpace:"nowrap"}}>Out of stock</span>
                   :<input type="number" min={1} max={maxQ} value={sl.qty} title={`Max ${maxQ}`} onChange={e=>updSlot(i,{qty:Math.min(maxQ,Math.max(1,parseInt(e.target.value)||1))})} style={{width:60,background:"var(--bg1)",border:"1px solid var(--border)",borderRadius:8,padding:"9px 8px",textAlign:"center",fontFamily:"'Roboto',sans-serif",fontWeight:700,fontSize:15,color:"var(--text)",outline:"none"}}/>}
