@@ -870,18 +870,20 @@ const DeliveryModal = ({onClose,onAdd,userName=""}) => {
 // left the top Location field looking like it applied to nothing in particular.
 // The rest inherit it unless overridden, which is what makes identical units
 // free to skip.
-const SplitUnitFields = ({n, baseId, units, setUnits, baseLoc}) => {
+// startIndex offsets the labels so this can also number units appended to an
+// existing group; lockFirst is for the split forms, where unit 1 is the form above.
+const SplitUnitFields = ({n, baseId, units, setUnits, baseLoc, startIndex=0, lockFirst=false}) => {
   const patch=(i,k)=>e=>{const a=[...units];a[i]={...(a[i]||{}),[k]:e.target.value};setUnits(a);};
   return(
     <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(230px,1fr))",gap:8}}>
       {Array.from({length:n},(_,i)=>(
         <div key={i} style={{background:"var(--bg1)",border:"1px solid var(--border)",borderRadius:8,padding:"8px 10px"}}>
-          <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:11,fontWeight:700,color:"var(--cyan)",letterSpacing:"0.05em",marginBottom:6}}>{subIdOf(baseId,i+1)}</div>
+          <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:11,fontWeight:700,color:"var(--cyan)",letterSpacing:"0.05em",marginBottom:6}}>{subIdOf(baseId,startIndex+i+1)}</div>
           <Fld label="Serial/Product No.">
             <Inp placeholder="e.g. SN-001" value={units[i]?.serial||""} onChange={patch(i,"serial")}/>
           </Fld>
-          <Fld label="Location" hint={i===0?"set in the form above":undefined}>
-            {i===0
+          <Fld label="Location" hint={lockFirst&&i===0?"set in the form above":undefined}>
+            {lockFirst&&i===0
               ? <Inp value={baseLoc||"—"} disabled style={{color:"var(--dim)",cursor:"not-allowed"}}/>
               : <Inp placeholder={baseLoc||"same as above"} value={units[i]?.loc||""} onChange={patch(i,"loc")}/>}
           </Fld>
@@ -1068,7 +1070,7 @@ const AddItemModal = ({onClose,onAdd,categories,allItems,onShowLabel}) => {
                   {n>3?` … ${subIdOf(displayId,n)}`:""}<br/>
                   Leave a field blank to use the value from the form above.
                 </div>
-                <SplitUnitFields n={n} baseId={displayId} units={units} setUnits={setUnits} baseLoc={f.loc}/>
+                <SplitUnitFields n={n} baseId={displayId} units={units} setUnits={setUnits} baseLoc={f.loc} lockFirst/>
               </div>
             )}
           </div>
@@ -1122,10 +1124,12 @@ const EditItemModal = ({item,onClose,onSave,onDelete,onAdd,categories,isAdmin}) 
         <div style={{gridColumn:"1/-1"}}><Fld label="Item Name"><Inp value={f.name} onChange={s("name")}/></Fld></div>
         <Fld label="Category"><Sel value={f.cat} onChange={onCatChange}>{categories.map(c=><option key={c}>{c}</option>)}</Sel></Fld>
         <Fld label="Status"><Sel value={f.status} onChange={s("status")}>{["Available","In Use","Maintenance","Broken"].map(st=><option key={st}>{st}</option>)}</Sel></Fld>
-        <Fld label="Quantity">
-          {f.untracked
-            ? <Inp value="Not tracked" disabled style={{color:"var(--dim)",cursor:"not-allowed"}}/>
-            : <Inp type="number" min="0" value={f.qty} onChange={s("qty")}/>}
+        <Fld label="Quantity" hint={isSubItem(f.displayId)?"one tracked unit":undefined}>
+          {isSubItem(f.displayId)
+            ? <Inp value="1" disabled style={{color:"var(--dim)",cursor:"not-allowed"}}/>
+            : f.untracked
+              ? <Inp value="Not tracked" disabled style={{color:"var(--dim)",cursor:"not-allowed"}}/>
+              : <Inp type="number" min="0" value={f.qty} onChange={s("qty")}/>}
         </Fld>
         <Fld label="Unit"><Sel value={f.unit} onChange={s("unit")}>{["units","pcs","boxes","bottles","sets","racks","rolls","kg","L","m"].map(u=><option key={u}>{u}</option>)}</Sel></Fld>
         <Fld label="Min Stock Alert"><Inp type="number" min="0" value={f.minQty} onChange={s("minQty")}/></Fld>
@@ -1146,7 +1150,7 @@ const EditItemModal = ({item,onClose,onSave,onDelete,onAdd,categories,isAdmin}) 
                   This item becomes {subIdOf(baseId,1)}; {n-1} more {n-1===1?"is":"are"} created, through {subIdOf(baseId,n)}.<br/>
                   Leave a field blank to use the value from the form above.
                 </div>
-                <SplitUnitFields n={n} baseId={baseId} units={units} setUnits={setUnits} baseLoc={f.loc}/>
+                <SplitUnitFields n={n} baseId={baseId} units={units} setUnits={setUnits} baseLoc={f.loc} lockFirst/>
               </div>
             )}
           </div>
@@ -1352,13 +1356,18 @@ const ConfirmModal = ({msg,onConfirm,onClose}) => (
 // ─── GROUP DETAIL MODAL ─────────────────────────────────────────────────────
 const GroupDetail = ({group,checkouts,onClose,onEdit,onQuickCheckout,onReturn,editLocked,categories,onAddUnit}) => {
   const [addingUnit,setAddingUnit] = React.useState(false);
-  const [newSerial,setNewSerial] = React.useState("");
+  const [newUnits,setNewUnits] = React.useState([]);   // same shape the split form uses
   const ac = getCatAccent(group.cat,categories||[]);
   const handleAddUnit = () => {
     const maxIdx = Math.max(0,...group._items.map(u=>parseDisplayId(u.displayId)?.sub??0));
     const nextDisplayId = subIdOf(group._baseId, maxIdx+1);
-    onAddUnit({id:uid(),name:group.name,cat:group.cat,qty:1,unit:group.unit||"units",loc:group.loc||"",desc:group.desc||"",minQty:group.minQty||0,img:group.img||"",status:"Available",usedBy:[],serial:newSerial.trim(),displayId:nextDisplayId,shared:group.shared||false,consumable:false});
-    setNewSerial(""); setAddingUnit(false);
+    const u = newUnits[0] || {};
+    onAddUnit({id:uid(),name:group.name,cat:group.cat,qty:1,unit:group.unit||"units",
+      loc:String(u.loc||"").trim()||group.loc||"",
+      desc:group.desc||"",minQty:group.minQty||0,img:group.img||"",status:"Available",usedBy:[],
+      serial:String(u.serial||"").trim(),displayId:nextDisplayId,
+      shared:group.shared||false,consumable:false});
+    setNewUnits([]); setAddingUnit(false);
   };
   return(
     <Modal onClose={onClose} title={`📦 ${group.name}`} mw={640}>
@@ -1406,13 +1415,15 @@ const GroupDetail = ({group,checkouts,onClose,onEdit,onQuickCheckout,onReturn,ed
         })}
       </div>
       {!editLocked&&addingUnit&&(
-        <div style={{marginTop:12,background:"var(--cyan-d)",border:"1px solid var(--cyan-m)",borderRadius:8,padding:"10px 12px",display:"flex",gap:8,alignItems:"center"}}>
-          <span style={{color:"var(--cyan)",fontSize:12,fontFamily:"'IBM Plex Mono',monospace",whiteSpace:"nowrap"}}>
-            Next: {subIdOf(group._baseId, Math.max(0,...group._items.map(u=>parseDisplayId(u.displayId)?.sub??0))+1)}
-          </span>
-          <Inp placeholder="Serial / Product No. (optional)" value={newSerial} onChange={e=>setNewSerial(e.target.value)} style={{flex:1,padding:"6px 10px",fontSize:13}}/>
-          <Btn sm onClick={handleAddUnit}><Ico n="check" s={12} col="var(--on-accent)"/>Add</Btn>
-          <Btn v="ghost" sm onClick={()=>{setAddingUnit(false);setNewSerial("");}}>Cancel</Btn>
+        <div style={{marginTop:12,background:"var(--cyan-d)",border:"1px solid var(--cyan-m)",borderRadius:8,padding:"10px 12px"}}>
+          {/* The same card the split form uses. It only asked for a serial before,
+              so a unit that lived somewhere else had to be added and then edited. */}
+          <SplitUnitFields n={1} baseId={group._baseId} units={newUnits} setUnits={setNewUnits}
+            baseLoc={group.loc} startIndex={Math.max(0,...group._items.map(u=>parseDisplayId(u.displayId)?.sub??0))}/>
+          <div style={{display:"flex",gap:8,marginTop:8}}>
+            <Btn sm onClick={handleAddUnit}><Ico n="check" s={12} col="var(--on-accent)"/>Add unit</Btn>
+            <Btn v="ghost" sm onClick={()=>{setAddingUnit(false);setNewUnits([]);}}>Cancel</Btn>
+          </div>
         </div>
       )}
       <div style={{marginTop:16,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
