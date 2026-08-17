@@ -293,11 +293,12 @@ All deletions are logged in the DeleteLog tab with timestamp, details, and who d
 
 ## Booking rules
 
-Four rules govern checkouts. All four are enforced in `google-apps-script.js`,
+Five rules govern checkouts. All five are enforced in `google-apps-script.js`,
 which is the only place that can see everyone's bookings at once; the checkout form
 re-implements them so it can refuse before a round trip instead of after one. The
 two halves have to be kept in step — the constants carry the same names on both
-sides (`MAX_DAYS_WITHOUT_APPROVAL`, `bookingsClash_`/`bookingsClash`).
+sides (`MAX_DAYS_WITHOUT_APPROVAL`, `MAX_LEAD_DAYS`, `bookingsClash_`/`bookingsClash`,
+`waitReason_`/`waitReason`, `leadTooFar_`/`leadTooFar`).
 
 **1. Shared items are booked by the hour.** Checking out an item marked *Shared*
 asks whether the hold is all day or the same window every day (`fromTime`,
@@ -332,9 +333,8 @@ which posts `decideCheckout`; members see "Waiting on an admin".
 > **The queue is transitive, and that is worth knowing.** Once a short booking
 > joins the queue it holds the slot open for the *next* one too, so a single
 > long-range request can put every overlapping booking behind an admin until it is
-> decided. In a lab this size that is a feature — it forces the decision — but a
-> request stretching over months would effectively freeze that item. The remedy is
-> for an admin to reject it, which is one click.
+> decided. In a lab this size that is a feature — it forces the decision. Rule 5
+> is what keeps its blast radius finite.
 
 **4. A pending request reserves nothing, so several people may ask for the same
 slot.** This is the point of it being pending: `Pending Approval` rows are reported
@@ -348,6 +348,23 @@ the queue and the next booking is ordinary again.
 > pending request marks nothing In Use, so the availability filter that normally
 > keeps a sole-use item exclusive cannot see the queue at all. Two people both
 > asking for the arm is the ordinary case, not an edge case.
+
+**5. Nothing may start more than `MAX_LEAD_DAYS` (31) days from now.**
+`leadTooFar_()` refuses with `"Too far ahead"`, on both `addCheckout` and
+`updateCheckout`. Only the **start** is capped — a long hold is still allowed, it
+just needs approval, so a request may legitimately end well past the limit.
+
+This exists because of rule 3's queue. A request starting months out would sit
+there holding its slot open against every overlapping booking until somebody
+decided it, so one speculative request could freeze an item for a term. Capping
+the lead time bounds that at a month.
+
+Start dates in the **past** stay legal — logging a checkout after the fact is
+normal, and nothing about it can block a future booking that isn't already there.
+
+The date picker carries `max={leadLimitDate()}`, so the native calendar greys out
+anything later; the red notice is for typed or pasted dates, and the backend
+refuses regardless.
 
 ### What happens when the admin picks one
 
@@ -383,8 +400,9 @@ makes it a different request.
   which of the two reasons applies.
 - Moving it onto an `Active` booking is refused, exactly like making one there.
 
-All four rules and both admin paths are covered by `node test-sheet-setup.js`
-(101 assertions).
+All five rules and both admin paths are covered by `node test-sheet-setup.js`
+(112 assertions). That suite runs on a **frozen clock** — bookings are judged
+against "now", so a real one would quietly rot every fixture date.
 
 ---
 
@@ -451,7 +469,7 @@ python3 -m http.server 8000     # then open http://localhost:8000/index.html
 
 ```bash
 node --check google-apps-script.js       # backend syntax
-node test-sheet-setup.js                 # 101 assertions: setup, labels, per-unit
+node test-sheet-setup.js                 # 112 assertions: setup, labels, per-unit
                                          # targeting, order edit window, booking rules
 node test-storage-layer.js > after.json  # behaviour snapshot — see below
 ```

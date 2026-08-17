@@ -274,6 +274,7 @@ const isOverdue = (co) => co.status === "Active" && co.ret && getDatePart(co.ret
 // browser knows about the other's draft. This half exists so the form can say no
 // before the round trip instead of after it. Keep the two in step.
 const MAX_DAYS_WITHOUT_APPROVAL = 7;
+const MAX_LEAD_DAYS = 31;              // how far ahead a booking may start
 const CO_PENDING = "Pending Approval";
 const bookingMs = s => { const d = new Date(String(s||"").trim().replace(" ","T")); return isNaN(d.getTime()) ? null : d.getTime(); };
 const bookingDays = (out,ret) => { const a=bookingMs(out), b=bookingMs(ret); return (a===null||b===null) ? 0 : (b-a)/86400000; };
@@ -289,6 +290,13 @@ const bookingsClash = (a,b) => {
   if(aF===null||aT===null||bF===null||bT===null) return true;
   return aF<bT && bF<aT;
 };
+// A request starting months out would hold its slot open against every
+// overlapping booking until somebody decided it, so one speculative request could
+// freeze an item for a term. Only the start is capped; a long hold is still
+// allowed, it just needs approval. Past starts stay legal — checkouts get logged
+// after the fact. Mirrors leadTooFar_() in google-apps-script.js.
+const leadLimitDate = () => { const d=new Date(Date.now()+MAX_LEAD_DAYS*86400000); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; };
+const leadTooFar = out => { const st=bookingMs(out); return st!==null && st-Date.now() > MAX_LEAD_DAYS*86400000; };
 const hasWindow = c => hhmmMins(c.fromTime)!==null && hhmmMins(c.toTime)!==null;
 const windowLabel = c => hasWindow(c) ? `${c.fromTime}–${c.toTime} daily` : "All day";
 // Only an active booking holds the slot. A pending request reserves nothing —
@@ -896,7 +904,8 @@ const CheckoutModal = ({items,onClose,onAdd,preItem="",userName="",userEmail="",
   // that would step over someone already waiting.
   const longHold=!!ret&&bookingDays(out,ret)>MAX_DAYS_WITHOUT_APPROVAL;
   const willWait=longHold||rivals.length>0;
-  const canSubmit=coUser.trim()&&valid.length>0&&retDate.trim()&&!hasOutOfStock&&!clashes.length&&!badWindow;
+  const tooFar=leadTooFar(out);
+  const canSubmit=coUser.trim()&&valid.length>0&&retDate.trim()&&!hasOutOfStock&&!clashes.length&&!badWindow&&!tooFar;
   const submit=()=>{
     if(!canSubmit)return;
     const ts=uid();
@@ -914,7 +923,7 @@ const CheckoutModal = ({items,onClose,onAdd,preItem="",userName="",userEmail="",
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
           <Fld label="Person *"><Inp placeholder="Your name" value={coUser} onChange={e=>setCoUser(e.target.value)}/></Fld>
           <Fld label="Notes (optional)"><Inp placeholder="Experiment, purpose…" value={notes} onChange={e=>setNotes(e.target.value)}/></Fld>
-          <Fld label="Checkout Date"><Inp type="date" value={outDate} onChange={e=>setOutDate(e.target.value)}/></Fld>
+          <Fld label="Checkout Date" hint={`At most ${MAX_LEAD_DAYS} days ahead`}><Inp type="date" max={leadLimitDate()} value={outDate} onChange={e=>setOutDate(e.target.value)}/></Fld>
           <Fld label="Checkout Time"><input type="time" value={outTime} onChange={e=>setOutTime(e.target.value)} style={timeInputStyle}/></Fld>
           <Fld label="Return By (date) *"><Inp type="date" value={retDate} onChange={e=>setRetDate(e.target.value)}/></Fld>
           <Fld label="Return By (time)"><input type="time" value={retTime} onChange={e=>setRetTime(e.target.value)} style={timeInputStyle}/></Fld>
@@ -962,6 +971,11 @@ const CheckoutModal = ({items,onClose,onAdd,preItem="",userName="",userEmail="",
               </div>
             )}
             {badWindow&&<div style={{color:"var(--red)",fontSize:12,marginTop:8}}>The end time has to be later than the start time.</div>}
+          </div>
+        )}
+        {tooFar&&(
+          <div style={{background:"var(--red-d)",border:`1px solid ${mix("--red",30)}`,borderRadius:10,padding:"11px 14px",fontSize:13,color:"var(--text)",lineHeight:1.5}}>
+            Bookings can start at most {MAX_LEAD_DAYS} days from now — on or before <b>{leadLimitDate()}</b>. Reaching further out would hold the slot against everyone else until an admin got to it.
           </div>
         )}
         {clashes.map((cl,i)=>(
@@ -1026,10 +1040,11 @@ const EditRequestModal = ({co,items,checkouts,onClose,onSave}) => {
   const badWindow=askWindow&&!allDay&&!(hhmmMins(fromTime)!==null&&hhmmMins(toTime)!==null&&hhmmMins(fromTime)<hhmmMins(toTime));
   const blocker=blockerFor(draft,checkouts);
   const rivals=rivalsFor(draft,checkouts);
+  const tooFar=leadTooFar(out);
   const days=ret?bookingDays(out,ret):0;
   const reason=ret?waitReason(draft,checkouts):"long";
   const stillPending=!!reason;
-  const canSave=retDate.trim()&&!blocker&&!badWindow;
+  const canSave=retDate.trim()&&!blocker&&!badWindow&&!tooFar;
   const timeInputStyle={background:"var(--bg1)",border:"1px solid var(--border)",borderRadius:8,padding:"9px 10px",color:"var(--text)",fontSize:14,outline:"none",width:"100%",fontFamily:"'Roboto',sans-serif",boxSizing:"border-box"};
   return(
     <Modal onClose={onClose} title="Edit Request" mw={600}>
@@ -1039,7 +1054,7 @@ const EditRequestModal = ({co,items,checkouts,onClose,onSave}) => {
           <div style={{color:"var(--dim)",fontSize:11,fontFamily:"'IBM Plex Mono',monospace",marginTop:3}}>for {co.user} · waiting for approval</div>
         </div>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
-          <Fld label="Checkout Date"><Inp type="date" value={outDate} onChange={e=>setOutDate(e.target.value)}/></Fld>
+          <Fld label="Checkout Date" hint={`At most ${MAX_LEAD_DAYS} days ahead`}><Inp type="date" max={leadLimitDate()} value={outDate} onChange={e=>setOutDate(e.target.value)}/></Fld>
           <Fld label="Checkout Time"><input type="time" value={outTime} onChange={e=>setOutTime(e.target.value)} style={timeInputStyle}/></Fld>
           <Fld label="Return By (date) *"><Inp type="date" value={retDate} onChange={e=>setRetDate(e.target.value)}/></Fld>
           <Fld label="Return By (time)"><input type="time" value={retTime} onChange={e=>setRetTime(e.target.value)} style={timeInputStyle}/></Fld>
@@ -1065,6 +1080,11 @@ const EditRequestModal = ({co,items,checkouts,onClose,onSave}) => {
               </div>
             )}
             {badWindow&&<div style={{color:"var(--red)",fontSize:12,marginTop:8}}>The end time has to be later than the start time.</div>}
+          </div>
+        )}
+        {tooFar&&(
+          <div style={{background:"var(--red-d)",border:`1px solid ${mix("--red",30)}`,borderRadius:10,padding:"11px 14px",fontSize:13,color:"var(--text)",lineHeight:1.5}}>
+            Bookings can start at most {MAX_LEAD_DAYS} days from now — on or before <b>{leadLimitDate()}</b>. Reaching further out would hold the slot against everyone else until an admin got to it.
           </div>
         )}
         {blocker&&(

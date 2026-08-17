@@ -71,6 +71,7 @@ const LABEL_SUB_DIGITS = 2;  // split-unit suffix
 // Holding anything for longer than this needs an admin to agree, whether it is
 // shared or not: a month-long checkout is a transfer, not a loan.
 const MAX_DAYS_WITHOUT_APPROVAL = 7;
+const MAX_LEAD_DAYS = 31;              // how far ahead a booking may start
 const CHECKOUT_PENDING = "Pending Approval";
 
 // "YYYY-MM-DD HH:MM" → epoch ms. Apps Script's Date parses this reliably enough
@@ -89,6 +90,22 @@ function bookingDays_(out, ret) {
 
 function needsApproval_(c) {
   return bookingDays_(c.out, c.ret) > MAX_DAYS_WITHOUT_APPROVAL;
+}
+
+/**
+ * True when a booking starts further ahead than the lab books.
+ *
+ * A request starting months out would sit in the queue holding its slot open
+ * against every overlapping booking until somebody decided it, so one speculative
+ * request could freeze an item for a whole term. Only the *start* is capped — a
+ * long hold is still allowed, it just needs approval.
+ *
+ * Past start dates stay legal: a checkout logged after the fact is normal.
+ */
+function leadTooFar_(c) {
+  const start = bookingMs_(c.out);
+  if (start === null) return false;
+  return start - new Date().getTime() > MAX_LEAD_DAYS * 86400000;
 }
 
 /**
@@ -1095,6 +1112,11 @@ function doPost(e) {
   if (action === "addCheckout") {
     const c = body.checkout;
 
+    if (leadTooFar_(c)) {
+      return jsonResponse({ error: "Too far ahead",
+        detail: "Bookings can start at most " + MAX_LEAD_DAYS + " days from now" });
+    }
+
     // Re-checked here because the browser's view of who holds what is a poll old,
     // and two people can book the same slot inside that window.
     const clash = bookingConflict_(c, null);
@@ -1180,6 +1202,10 @@ function doPost(e) {
     });
     const merged = Object.assign({}, co, patch);
 
+    if (leadTooFar_(merged)) {
+      return jsonResponse({ error: "Too far ahead",
+        detail: "Bookings can start at most " + MAX_LEAD_DAYS + " days from now" });
+    }
     const blocked = bookingConflict_(merged, co.id);
     if (blocked) return jsonResponse({ error: "Clash", detail: blocked });
 
