@@ -33,13 +33,13 @@ The backend uses a Google Sheet with these tabs:
 
 **Deliveries** — `id | item | qty | unit | from | receivedBy | date | tracking | status`
 
-**Checkouts** — `id | itemId | item | user | out | ret | status | checkedOutByEmail | groupEmails`
+**Checkouts** — `id | itemId | item | user | out | ret | status | checkedOutByEmail | groupEmails | qty`
 
 **Orders** — `id | store | item | link | qty | unit | price | cat | requestedBy | reason | urgency | date | status | requestedByEmail`
 
 > ⚠️ Column order matters for new rows written by the script. If upgrading an existing sheet:
 > - **Orders**: add `requestedByEmail` as the last column (column 14)
-> - **Checkouts**: add `checkedOutByEmail` and `groupEmails` as the last two columns
+> - **Checkouts**: add `checkedOutByEmail`, `groupEmails` and `qty` as the last three columns
 > - Existing rows without these columns remain fully functional (permissions fall back gracefully)
 
 **Settings** — `key | value`

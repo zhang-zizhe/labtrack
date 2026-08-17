@@ -101,7 +101,7 @@ function run(scriptPath, slackMode, asAdmin) {
   const ss = makeSpreadsheet({
     Items:      [["id","name","cat","qty","unit","loc","minQty","img","desc","status","usedBy","serial","displayId","shared","consumable"]],
     Deliveries: [["id","item","qty","unit","from","receivedBy","date","tracking","status"]],
-    Checkouts:  [["id","itemId","item","user","out","ret","status","checkedOutByEmail","groupEmails"]],
+    Checkouts:  [["id","itemId","item","user","out","ret","status","checkedOutByEmail","groupEmails","qty"]],
     Orders:     [["id","store","item","link","qty","unit","price","cat","requestedBy","reason","urgency","date","status","requestedByEmail"]],
     Settings:   [["key","value"],
                  ["admins", JSON.stringify(["zzhan409@jh.edu"])],
@@ -190,10 +190,11 @@ function run(scriptPath, slackMode, asAdmin) {
     id: "d1", item: "Jetson Orin", qty: 2, unit: "unit", from: "Arrow",
     receivedBy: "Zizhe Zhang", date: "2026-08-16", tracking: "1Z999", status: "Received" } });
 
+  // qty > 1 — the checkout form collects a quantity, so a row has to carry it.
   step("addCheckout", { action: "addCheckout", checkout: {
     id: "c1", itemId: "i1", item: "UR5e Arm", user: "Zizhe Zhang",
     out: "2026-08-16 10:00", ret: "2026-08-20 10:00", status: "Active",
-    checkedOutByEmail: "zzhan409@jh.edu", groupEmails: "peer@jh.edu" } });
+    checkedOutByEmail: "zzhan409@jh.edu", groupEmails: "peer@jh.edu", qty: 2 } });
 
   step("addCheckout/shared", { action: "addCheckout", checkout: {
     id: "c2", itemId: "i2", item: "RealSense D435", user: "Zizhe Zhang",

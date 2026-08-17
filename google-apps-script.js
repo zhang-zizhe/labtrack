@@ -528,8 +528,19 @@ function isMember(email) {
 function setupNewLab() {
   var created = [], seeded = [];
 
+  var widened = [];
   Object.keys(TABLE_HEADERS).forEach(function(name) {
-    if (!getSheet(name)) { getOrCreateSheet(name); created.push(name); }
+    var sheet = getSheet(name);
+    if (!sheet) { getOrCreateSheet(name); created.push(name); return; }
+
+    // Existing tab: append any columns it is missing, so re-running this upgrades
+    // a sheet in place instead of leaving new fields silently unwritable.
+    var have = sheetHeaders_(sheet, name);
+    var missing = TABLE_HEADERS[name].filter(function (h) { return have.indexOf(h) < 0; });
+    if (missing.length) {
+      sheet.getRange(1, have.length + 1, 1, missing.length).setValues([missing]);
+      widened.push(name + " (+" + missing.join(", ") + ")");
+    }
   });
 
   var existing = readSettings();
@@ -552,6 +563,7 @@ function setupNewLab() {
 
   var msg = "LabTrack setup complete."
     + "\n  tabs created : " + (created.join(", ") || "(none — all existed)")
+    + "\n  columns added: " + (widened.join(", ") || "(none — all up to date)")
     + "\n  settings set : " + (seeded.join(", ") || "(none — all existed)")
     + "\n  admins       : " + readSettings()["admins"]
     + "\n\nNext: Deploy → New deployment → Web app (Execute as: Me, Access: Anyone),"
@@ -601,7 +613,7 @@ function logAudit(userName, userEmail, action, details) {
 const TABLE_HEADERS = {
   Items:      ["id","name","cat","qty","unit","loc","minQty","img","desc","status","usedBy","serial","displayId","shared","consumable"],
   Deliveries: ["id","item","qty","unit","from","receivedBy","date","tracking","status"],
-  Checkouts:  ["id","itemId","item","user","out","ret","status","checkedOutByEmail","groupEmails"],
+  Checkouts:  ["id","itemId","item","user","out","ret","status","checkedOutByEmail","groupEmails","qty"],
   Orders:     ["id","store","item","link","qty","unit","price","cat","requestedBy","reason","urgency","date","status","requestedByEmail"],
   Settings:   ["key","value"],
   DeleteLog:  ["date","type","name","details","deletedBy"],
@@ -708,9 +720,24 @@ function serializeCell_(header, val) {
   return (val === undefined || val === null) ? "" : val;
 }
 
+// The sheet's own header row is authoritative for writes, not TABLE_HEADERS.
+// A sheet created before a column was added still has the old header, and writing
+// in canonical order would file values under the wrong headings — or into an
+// unlabelled column that reads back as nothing, since reads go by the header row.
+// Run setupNewLab() to add missing columns to an existing sheet.
+function sheetHeaders_(sheet, name) {
+  var lastCol = sheet.getLastColumn();
+  if (lastCol > 0) {
+    var row = sheet.getRange(1, 1, 1, lastCol).getValues()[0]
+                   .filter(function (h) { return String(h) !== ""; });
+    if (row.length) return row;
+  }
+  return TABLE_HEADERS[name] || [];
+}
+
 function appendRow(name, obj) {
   var sheet = getOrCreateSheet(name);
-  var headers = TABLE_HEADERS[name] || sheet.getDataRange().getValues()[0];
+  var headers = sheetHeaders_(sheet, name);
   sheet.appendRow(headers.map(function(h) { return serializeCell_(h, obj[h]); }));
   // Keep ids textual — Sheets would otherwise render "0012" as 12 and break lookups.
   var idCol = headers.indexOf("id");

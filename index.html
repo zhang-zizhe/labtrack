@@ -1298,7 +1298,7 @@ const ItemDetail = ({item,checkouts,onClose,onReturn,onQuickCheckout,onEdit,cate
             return(
               <div key={c.id} style={{display:"flex",alignItems:"center",gap:10,background:od?"var(--red-d)":"var(--bg2)",border:`1px solid ${od?"color-mix(in srgb, var(--red) 30%, transparent)":"var(--border)"}`,borderRadius:8,padding:"8px 12px",marginBottom:6,flexWrap:"wrap"}}>
                 <MemberAvatar name={c.user} sz={26}/>
-                <span style={{color:"var(--text)",fontSize:13,flex:1}}>{c.user}</span>
+                <span style={{color:"var(--text)",fontSize:13,flex:1}}>{c.user}{Number(c.qty)>1&&<span style={{color:"var(--sub)",fontFamily:"'IBM Plex Mono',monospace",fontSize:12,marginLeft:6}}>×{Number(c.qty)}</span>}</span>
                 <span style={{color:od?"var(--red)":"var(--dim)",fontSize:10,fontFamily:"'IBM Plex Mono',monospace"}}>{c.out} → {c.ret||"—"}{od&&" OVERDUE"}</span>
                 <Badge status={od?"Overdue":c.status}/>
                 {c.status==="Active"&&<Btn v="ghost" sm onClick={()=>setConfirmId(c.id)}><Ico n="undo" s={12}/>Return</Btn>}
@@ -2183,7 +2183,10 @@ function LabInventory(){
   };
 
   const handleCheckout=(c)=>{
-    const checkout={...c, checkedOutByEmail: user?.email||""};
+    // itemId was never populated, so that column sat empty and every lookup had
+    // to fall back to matching on the item's name.
+    const src=items.find(i=>i.name===c.item);
+    const checkout={...c, itemId: src?.id ?? "", checkedOutByEmail: user?.email||""};
     setItems(prev=>prev.map(i=>i.name===checkout.item?{...i,status:i.shared?"Available":"In Use",usedBy:[...toArr(i.usedBy),checkout.user]}:i));
     setCheckouts(p=>[checkout,...p]);
     addToast("success",`${checkout.item} → ${checkout.user}`);
@@ -3108,9 +3111,9 @@ function LabInventory(){
                       }
                     };
                     return(
-                      <tr key={c.id} onClick={handleCoClick} className="row-hover" style={{borderBottom:i<checkouts.length-1?"1px solid var(--border)":"none",transition:"background .15s",background:od?"rgba(45,0,16,.4)":isSel?"var(--cyan-d)":undefined,cursor:(c.status==="Active"&&canRet)?"pointer":"default",userSelect:"none"}}>
+                      <tr key={c.id} onClick={handleCoClick} className="row-hover" style={{borderBottom:i<checkouts.length-1?"1px solid var(--border)":"none",transition:"background .15s",background:od?"var(--red-d)":isSel?"var(--cyan-d)":undefined,cursor:(c.status==="Active"&&canRet)?"pointer":"default",userSelect:"none"}}>
                         <td style={{padding:"10px 16px"}}>{c.status==="Active"&&canRet&&<input type="checkbox" checked={isSel} onChange={handleCoClick} onClick={e=>e.stopPropagation()} style={{cursor:"pointer",accentColor:"var(--cyan)"}}/>}</td>
-                        <td style={{padding:"10px 16px",color:"var(--text)",fontWeight:600}}>{c.item}</td>
+                        <td style={{padding:"10px 16px",color:"var(--text)",fontWeight:600}}>{c.item}{Number(c.qty)>1&&<span style={{color:"var(--sub)",fontWeight:400,fontFamily:"'IBM Plex Mono',monospace",fontSize:12,marginLeft:6}}>×{Number(c.qty)}</span>}</td>
                         <td style={{padding:"10px 16px"}}><div style={{display:"flex",alignItems:"center",gap:8}}><MemberAvatar name={c.user} sz={26}/><span style={{color:"var(--sub)"}}>{c.user}</span></div></td>
                         <td style={{padding:"10px 16px",color:"var(--dim)",fontFamily:"'IBM Plex Mono',monospace",fontSize:11}}>{c.out}</td>
                         <td style={{padding:"10px 16px",color:od?"var(--red)":"var(--dim)",fontFamily:"'IBM Plex Mono',monospace",fontSize:11,fontWeight:od?700:400}}>{c.ret||"—"}{od&&" !"}</td>
