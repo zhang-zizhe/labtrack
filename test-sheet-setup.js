@@ -270,15 +270,80 @@ console.log("shared items book by the hour; long holds wait for an admin");
   check("deciding twice is refused",
         post({ action:"decideCheckout", checkoutId:"k8", approve:true }).error === "Not pending");
 
-  // Same story for a shared item: the slot can be taken while the request waits.
+  // Asking reserves nothing, so several people may ask for the same week.
   const long2 = book("k9","Ivy","2026-11-01 09:00","2026-11-20 09:00","09:00","12:00");
   check("a long shared hold is pending too", long2.pending === true);
-  check("its slot can still be booked by someone else",
-        book("k10","Jon","2026-11-05 09:00","2026-11-06 09:00","09:00","12:00").error === "Clash");
-  check("a non-overlapping window is still free",
+  const long2b = book("k10","Jon","2026-11-05 09:00","2026-11-25 09:00","09:00","12:00");
+  check("a second request for the same slot is allowed", long2b.pending === true);
+  check("and is told who it is up against",
+        long2b.competing.length === 1 && long2b.competing[0].user === "Ivy");
+  check("both are still waiting",
+        c6.readTable("Checkouts").filter(x=>x.status==="Pending Approval" && x.item==="Oscilloscope").length === 0 ||
+        ["k9","k10"].every(id=>c6.readTable("Checkouts").find(x=>x.id===id).status === "Pending Approval"));
+  check("a non-overlapping window is unaffected",
         book("k11","Kim","2026-11-05 09:00","2026-11-06 09:00","13:00","17:00").ok === true);
-  check("approving a still-free shared slot works",
+
+  // The admin picks one. The loser is not auto-rejected — it just stops being
+  // approvable, which is what tells the admin to reject it or ask for new dates.
+  check("the admin can approve either one",
         post({ action:"decideCheckout", checkoutId:"k9", approve:true }).ok === true);
+  check("the runner-up can no longer be approved",
+        post({ action:"decideCheckout", checkoutId:"k10", approve:true }).error === "Clash");
+  check("but it is still there to reject",
+        c6.readTable("Checkouts").find(x=>x.id==="k10").status === "Pending Approval");
+  check("rejecting the runner-up works",
+        post({ action:"decideCheckout", checkoutId:"k10", approve:false }).ok === true);
+
+  // Two people wanting the same sole-use arm is the ordinary case, and the one
+  // the availability filter cannot catch: a pending request marks nothing In Use.
+  const solo1 = book("s20","Pat","2027-06-01 09:00","2027-06-20 09:00","","","Franka Arm","p1");
+  const solo2 = book("s21","Quinn","2027-06-10 09:00","2027-06-30 09:00","","","Franka Arm","p1");
+  check("both may ask for the same sole-use item", solo1.pending === true && solo2.pending === true);
+  check("and the second is told about the first",
+        solo2.competing.length === 1 && solo2.competing[0].user === "Pat");
+  const solo3 = book("s22","Rex","2027-08-01 09:00","2027-08-20 09:00","","","Franka Arm","p1");
+  check("a request in a different month competes with nobody", solo3.competing.length === 0);
+
+  // ── editing a request that is still waiting ──
+  const long4 = book("k14","Ned","2027-01-01 09:00","2027-01-20 09:00","09:00","12:00");
+  check("a fresh request is pending", long4.pending === true);
+  check("its owner can move the dates",
+        post({ action:"updateCheckout", checkoutId:"k14", checkout:{ out:"2027-02-01 09:00", ret:"2027-02-20 09:00" } }).ok === true);
+  check("the move stuck",
+        c6.readTable("Checkouts").find(x=>x.id==="k14").out === "2027-02-01 09:00");
+  check("and it is still pending", 
+        c6.readTable("Checkouts").find(x=>x.id==="k14").status === "Pending Approval");
+  check("the window can be changed too",
+        post({ action:"updateCheckout", checkoutId:"k14", checkout:{ fromTime:"14:00", toTime:"16:00" } }).ok === true &&
+        c6.readTable("Checkouts").find(x=>x.id==="k14").fromTime === "14:00");
+
+  // A member may not edit someone else's request, and may not smuggle in a status.
+  asMember();
+  check("a stranger cannot edit it",
+        post({ action:"updateCheckout", checkoutId:"k14", checkout:{ ret:"2027-03-01 09:00" } }).error === "Forbidden");
+  asAdmin();
+  const sneaky = post({ action:"updateCheckout", checkoutId:"k14", checkout:{ status:"Active", user:"Someone Else" } });
+  check("status cannot be patched in", sneaky.ok === true &&
+        c6.readTable("Checkouts").find(x=>x.id==="k14").status === "Pending Approval");
+  check("nor can the person", c6.readTable("Checkouts").find(x=>x.id==="k14").user === "Ned");
+
+  // Editing re-runs the rules: shorten it under the limit and it stops needing one.
+  const shortened = post({ action:"updateCheckout", checkoutId:"k14", checkout:{ out:"2027-02-01 09:00", ret:"2027-02-03 09:00" } });
+  check("shortening it clears the approval", shortened.pending === false);
+  check("it becomes a plain checkout",
+        c6.readTable("Checkouts").find(x=>x.id==="k14").status === "Active");
+  check("and the item is handed over",
+        c6.readTable("Items").find(i=>i.id==="s1").usedBy.indexOf("Ned") >= 0);
+  check("a decided request can no longer be edited",
+        post({ action:"updateCheckout", checkoutId:"k14", checkout:{ ret:"2027-02-05 09:00" } }).error === "Not pending");
+
+  // Editing into an Active booking is refused just like making one there.
+  const long5 = book("k15","Ola","2027-04-01 09:00","2027-04-20 09:00","09:00","12:00");
+  check("another request goes in", long5.pending === true);
+  check("moving it onto Ned's active slot is refused",
+        post({ action:"updateCheckout", checkoutId:"k15", checkout:{ out:"2027-02-01 09:00", ret:"2027-02-03 09:00", fromTime:"14:00", toTime:"16:00" } }).error === "Clash");
+  check("so it stays where it was",
+        c6.readTable("Checkouts").find(x=>x.id==="k15").out === "2027-04-01 09:00");
 
   // Rejecting leaves the item alone.
   const long3 = book("k12","Lee","2026-12-01 09:00","2026-12-20 09:00","","","Franka Arm","p1");

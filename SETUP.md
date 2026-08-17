@@ -22,6 +22,7 @@
 | Backend | ❌ no Sheet yet; `apps_script_url` is empty, so the app runs out of localStorage |
 | Slack | ❌ webhook not created |
 | Data store | Google Sheet for now, **SharePoint List is the destination** — see [Moving the data](#moving-the-data-to-sharepoint) |
+| Backend host | Apps Script for now; whether it moves to Azure depends on the scheduled jobs — see [Moving the backend](#moving-the-backend-off-google) |
 
 ---
 
@@ -292,10 +293,10 @@ All deletions are logged in the DeleteLog tab with timestamp, details, and who d
 
 ## Booking rules
 
-Three rules govern checkouts. All three are enforced in `google-apps-script.js`,
+Four rules govern checkouts. All four are enforced in `google-apps-script.js`,
 which is the only place that can see everyone's bookings at once; the checkout form
 re-implements them so it can refuse before a round trip instead of after one. The
-two halves have to be kept in step — the constants have the same names on both
+two halves have to be kept in step — the constants carry the same names on both
 sides (`MAX_DAYS_WITHOUT_APPROVAL`, `bookingsClash_`/`bookingsClash`).
 
 **1. Shared items are booked by the hour.** Checking out an item marked *Shared*
@@ -305,26 +306,62 @@ selected — a sole-use item is held for the whole span whatever the clock says,
 asking would imply a freedom that isn't there. A batch containing both writes the
 window only onto the shared rows.
 
-**2. A repeat booking has to find an unoccupied slot.** Two bookings of the same
-shared item clash when their date ranges overlap **and** their daily windows do. A
-blank window is all day and clashes with anything inside the range. Touching
-endpoints don't clash, so handing something over at 12:00 is fine. Both `Active`
-and `Pending Approval` rows hold their slot; `Returned` and `Rejected` free it.
+**2. An active booking owns its slot.** Two bookings of the same shared item clash
+when their date ranges overlap **and** their daily windows do. A blank window is
+all day and clashes with anything inside the range. Touching endpoints don't clash,
+so handing something over at 12:00 is fine. Only `Active` blocks — see rule 4.
 
 **3. Anything held more than a week needs an admin.** Over
 `MAX_DAYS_WITHOUT_APPROVAL` (7) days, shared or not, the checkout is written with
-status `Pending Approval` and the item is **not** marked In Use — nothing is
-reserved by asking, or a request that gets turned down would quietly take the item
-off the shelf. Slack gets a high-priority ping. Admins see a *Waiting for approval*
-panel at the top of the Usage tab with Approve / Reject, which posts
-`decideCheckout`; members see "Waiting on an admin".
+status `Pending Approval` and the item is **not** marked In Use. Slack gets a
+high-priority ping. Admins see a *Waiting for approval* panel at the top of the
+Usage tab with Approve / Reject, which posts `decideCheckout`; members see
+"Waiting on an admin".
 
-> Because a pending request reserves nothing, the slot can be gone by the time an
-> admin gets to it. Approval re-runs both checks — the clash test for shared items,
-> and an "is it still on the shelf" test for sole-use ones — and refuses with
-> *"Taken while this was waiting"* rather than handing one item to two people.
+**4. A pending request reserves nothing, so several people may ask for the same
+slot.** This is the point of it being pending: `Pending Approval` rows are reported
+as *competing*, never used to refuse. The requester sees who else is in the queue
+before submitting; the admin sees the whole queue for one item grouped together and
+picks. `Returned` and `Rejected` rows are inert.
 
-Both halves are covered by `node test-sheet-setup.js`.
+> Competing is detected for **sole-use items too**, and matters most there. A
+> pending request marks nothing In Use, so the availability filter that normally
+> keeps a sole-use item exclusive cannot see the queue at all. Two people both
+> asking for the arm is the ordinary case, not an edge case.
+
+### What happens when the admin picks one
+
+Approving does **not** auto-reject the others — that would be destructive and
+sometimes wrong, since two long requests for the same item may not overlap at all.
+Instead the loser stays pending and becomes unapprovable: its Approve button greys
+out and the row explains *"Conflicts with <name>'s approved booking"*. The admin
+then rejects it, or edits it onto free dates. The backend refuses the approval
+independently, so a stale browser can't slip one through.
+
+The same re-check protects the gap between asking and approving. Because nothing
+was reserved, the slot can be gone by the time an admin gets to it. `decideCheckout`
+re-runs both tests on approve — the clash test for shared items, an
+"is it still on the shelf" test for sole-use ones — and refuses with *"Taken while
+this was waiting"* rather than handing one item to two people.
+
+### Editing a request that is still waiting
+
+`updateCheckout` lets the requester (or an admin) move a pending request without
+cancelling and retyping it — usually because the app has just told them their slot
+collides with someone else's. Editable: `out`, `ret`, `fromTime`, `toTime`,
+`groupEmails`. Not editable: the item, the person, the quantity — changing those
+makes it a different request.
+
+- The patch is **whitelisted server-side**. Accepting `body.checkout` wholesale
+  would let a member send `status: "Active"` and approve themselves.
+- Only rows still in `Pending Approval` can be edited. Once decided, it's fixed.
+- Editing re-runs the rules. Shorten it under the seven-day limit and the reason it
+  needed an admin is gone, so it becomes a plain `Active` checkout on save and the
+  item is handed over — the button changes to *Save & Check Out* to say so.
+- Moving it onto an `Active` booking is refused, exactly like making one there.
+
+All four rules and both admin paths are covered by `node test-sheet-setup.js`
+(90 assertions).
 
 ---
 
@@ -391,7 +428,7 @@ python3 -m http.server 8000     # then open http://localhost:8000/index.html
 
 ```bash
 node --check google-apps-script.js       # backend syntax
-node test-sheet-setup.js                 # 67 assertions: setup, labels, per-unit
+node test-sheet-setup.js                 # 90 assertions: setup, labels, per-unit
                                          # targeting, order edit window, booking rules
 node test-storage-layer.js > after.json  # behaviour snapshot — see below
 ```
@@ -554,6 +591,112 @@ connector is premium.
 | Pagination | `readTable` reads a whole tab; Graph list items page via `@odata.nextLink` |
 | Item images | `<50 KB` base64 in a cell. SharePoint plain-text fields cap at 63,999 characters ≈ 50 KB — fits, but barely. Eventually belongs in a document library |
 | Backup | `backupSpreadsheet()` becomes meaningless; SharePoint has version history and a recycle bin |
+
+---
+
+## Moving the backend off Google
+
+Moving the *data* to SharePoint still leaves `google-apps-script.js` running on
+script.google.com. This section is about whether that should move too.
+
+### What's actually still on Google
+
+At the time of writing, four things — and the first three are one thing seen from
+three angles, because they all disappear together the moment the data moves:
+
+1. **The API server.** Apps Script deployed as a Web App. `Execute as: Me` binds
+   the deployment to one Google account permanently, and since JHU has no Google
+   Workspace, that account is necessarily a personal one.
+2. **The data store.** Google Sheets via `SpreadsheetApp`.
+3. **The weekly backup.** `backupSpreadsheet()` copies the sheet to Drive.
+4. **Google Fonts.** A stylesheet link in `<head>`. Unrelated to data; it just
+   means every visitor's browser makes one request to Google. Removable at any time
+   by self-hosting the three woff2 files.
+
+Everything else is already Microsoft or neutral: authentication is Entra end to end
+with no Google Sign-In remnant, hosting is GitHub Pages, the logo is inlined, and
+React/Babel come from unpkg and jsdelivr.
+
+### Azure Functions maps 1:1
+
+| Apps Script | Azure Functions |
+|---|---|
+| Web App `doGet`/`doPost` | HTTP trigger |
+| `verifyToken` + `verifyRs256_` + JWKS cache (~140 lines) | **Easy Auth** — delete the lot |
+| `SpreadsheetApp` | Graph → SharePoint List |
+| `LockService` | ETag + `If-Match` optimistic concurrency |
+| `CacheService` (JWKS, 6 h) | not needed once Easy Auth validates |
+| `ScriptApp` triggers ×3 | Timer trigger (CRON) |
+| `UrlFetchApp` → Slack | `fetch` |
+| `SLACK_WEBHOOK_URL` constant | App settings / Key Vault |
+| `backupSpreadsheet()` | delete — version history |
+
+The real prize is the ~140 lines of hand-rolled RS256 verification. Microsoft has no
+tokeninfo endpoint, so Apps Script has to fetch the JWKS, verify the signature and
+check every claim itself. Easy Auth does that at the platform layer.
+
+### Two routes that don't work
+
+- **Power Automate** — the "When an HTTP request is received" trigger is premium,
+  not included in A3/A5.
+- **Browser talks to Graph directly, no backend** — technically possible since MSAL
+  already holds a token, but it **destroys server-side RBAC**. `isAdmin` is currently
+  unforgeable because it runs in Apps Script; with a direct-to-Graph client, anyone
+  who can write the list can edit the `admins` setting, approve their own purchase
+  request, or approve their own long checkout. SharePoint permissions are
+  list-level, so they cannot express "only the requester may edit their own order
+  while it is Pending". The Slack webhook would also end up in page source.
+
+### The thing that decides it
+
+The reason to leave Apps Script is continuity, but the continuity risk is in the
+**data**, not the compute:
+
+- Data in a personal Google Drive → the student graduates and the lab's inventory
+  goes with them. **Serious.**
+- Compute on a personal Google account → the student graduates and someone pastes
+  1,360 lines into a fresh Apps Script project. **Five minutes, no data lost.**
+
+So moving the data to SharePoint solves most of the problem on its own.
+
+The catch is the three scheduled jobs. Nobody is signed in at 5 pm, so a cron job
+cannot use a delegated token. If Apps Script is to write to SharePoint on a
+schedule it needs **application permissions** — a client secret stored in the
+script, plus an admin granting an app role. That is a *larger* consent request than
+the delegated-only one currently planned. Azure Functions gets app-only Graph access
+through a **managed identity with no secret at all**, which is a genuine
+architectural advantage rather than a preference.
+
+| | |
+|---|---|
+| Drop the scheduled jobs | Delegated is enough — Apps Script + SharePoint is fine, and far less work |
+| Keep the scheduled jobs | App-only is required either way → Azure Functions is the better home |
+
+### Cost and the open question
+
+Azure Functions Consumption includes a permanent monthly free grant (1 M executions,
+400,000 GB-s) — not trial credit. At 30-second polling, 15 people, 8 h/day,
+22 days/month ≈ 320 k executions, inside the grant. Tabs left open around the clock
+could push past 1 M; overage is cents.
+
+**The open question is whether an Azure subscription is obtainable.** Azure for
+Students needs only a .edu address, but a subscription in a student's own name
+reproduces the continuity problem in Microsoft colours. The clean answer is a
+lab or departmental subscription, which is another IT request.
+
+If the move does happen, **Azure Static Web Apps** is a better target than bare
+Functions: free tier, bundles static hosting + managed Functions + Entra auth +
+custom domains, and would replace GitHub Pages and solve `labtrack.<lab domain>`
+at the same time.
+
+### Recommendation
+
+**Move the data first; leave the backend on Apps Script; decide about the scheduled
+jobs afterwards.** The storage seam is already cut, so the data move is a road
+already built. Azure introduces a new dependency that isn't yet known to be
+obtainable, in order to address the smaller half of the risk — and everything is
+already queued behind the same IT approvals, so there is no reason to open a second
+front.
 
 ---
 

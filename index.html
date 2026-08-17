@@ -291,8 +291,17 @@ const bookingsClash = (a,b) => {
 };
 const hasWindow = c => hhmmMins(c.fromTime)!==null && hhmmMins(c.toTime)!==null;
 const windowLabel = c => hasWindow(c) ? `${c.fromTime}–${c.toTime} daily` : "All day";
-// A booking holds the item until it is returned or rejected.
-const holdsSlot = c => c.status==="Active" || c.status===CO_PENDING;
+// Only an active booking holds the slot. A pending request reserves nothing —
+// that is the whole point of it being pending — so several people may ask for the
+// same week and an admin picks between them.
+const blocksSlot = c => c.status==="Active";
+const isPending  = c => c.status===CO_PENDING;
+// Bookings written before itemId was populated have only the name to go on.
+const sameBooked = (a,b) => (a.itemId&&b.itemId) ? String(a.itemId)===String(b.itemId) : a.item===b.item;
+// Competing requests exist for sole-use items too, and matter most there: nothing
+// is marked In Use, so the availability filter cannot see the queue at all.
+const rivalsFor = (c, all) => all.filter(x=>String(x.id)!==String(c.id)&&isPending(x)&&sameBooked(x,c)&&bookingsClash(x,c));
+const blockerFor = (c, all) => all.find(x=>String(x.id)!==String(c.id)&&blocksSlot(x)&&sameBooked(x,c)&&bookingsClash(x,c));
 // Borders are mixed from the same token as the text, so they follow the theme
 // instead of being frozen hex+alpha from the old palette.
 const mix = (v,pct) => `color-mix(in srgb, var(${v}) ${pct}%, transparent)`;
@@ -829,9 +838,15 @@ const CheckoutModal = ({items,onClose,onAdd,preItem="",userName="",userEmail="",
   const badWindow=askWindow&&!allDay&&!(hhmmMins(fromTime)!==null&&hhmmMins(toTime)!==null&&hhmmMins(fromTime)<hhmmMins(toTime));
   // Rule 2 — a shared item can be booked again, but not over someone else's slot.
   const clashes=sharedSel.map(sl=>{
-    const hit=checkouts.find(c=>holdsSlot(c)&&String(c.itemId)===String(sl.itemId)&&bookingsClash({out,ret,...win},c));
+    const hit=checkouts.find(c=>blocksSlot(c)&&String(c.itemId)===String(sl.itemId)&&bookingsClash({out,ret,...win},c));
     return hit?{item:sl.item,hit}:null;
   }).filter(Boolean);
+  // Pending requests don't block, they just mean you are not the only one asking.
+  // Sole-use items count here too — nothing is In Use, so the picker can't tell.
+  const rivals=valid.flatMap(sl=>{
+    const mine={itemId:sl.itemId,item:sl.item,out,ret,...(items.find(i=>String(i.id)===String(sl.itemId))?.shared?win:{fromTime:"",toTime:""})};
+    return checkouts.filter(c=>isPending(c)&&sameBooked(c,mine)&&bookingsClash(c,mine)).map(c=>({item:sl.item,hit:c}));
+  });
   // Rule 3 — over a week is an admin's call, whatever the item.
   const longHold=!!ret&&bookingDays(out,ret)>MAX_DAYS_WITHOUT_APPROVAL;
   const canSubmit=coUser.trim()&&valid.length>0&&retDate.trim()&&!hasOutOfStock&&!clashes.length&&!badWindow;
@@ -908,6 +923,22 @@ const CheckoutModal = ({items,onClose,onAdd,preItem="",userName="",userEmail="",
             {cl.hit.status===CO_PENDING&&" (awaiting approval)"}. Pick a slot that doesn't overlap.
           </div>
         ))}
+        {rivals.length>0&&(
+          <div style={{background:"var(--bg2)",border:`1px solid ${mix("--cyan",35)}`,borderRadius:10,padding:"11px 14px",fontSize:13,color:"var(--text)",lineHeight:1.5}}>
+            <div style={{fontWeight:700,marginBottom:5,display:"flex",alignItems:"center",gap:7}}>
+              <Ico n="clock" s={14} col="var(--cyan)"/>
+              {rivals.length===1?"Someone else has asked for this too":`${rivals.length} other people have asked for this too`}
+            </div>
+            {rivals.map((r,i)=>(
+              <div key={i} style={{color:"var(--sub)",fontSize:12,fontFamily:"'IBM Plex Mono',monospace",marginTop:3}}>
+                {r.hit.user} · {r.item} · {r.hit.out} to {r.hit.ret} · {windowLabel(r.hit)}
+              </div>
+            ))}
+            <div style={{color:"var(--dim)",fontSize:12,marginTop:7}}>
+              Nothing is reserved until an admin approves it, so you can still ask. They will see the requests side by side and pick.
+            </div>
+          </div>
+        )}
         {longHold&&(
           <div style={{background:"var(--amber-d)",border:`1px solid ${mix("--amber",30)}`,borderRadius:10,padding:"11px 14px",fontSize:13,color:"var(--text)",lineHeight:1.5}}>
             That's {Math.ceil(bookingDays(out,ret))} days. Holds longer than {MAX_DAYS_WITHOUT_APPROVAL} need an admin to approve them, so this goes in as a request — the item stays available to everyone until it is approved.
@@ -916,6 +947,101 @@ const CheckoutModal = ({items,onClose,onAdd,preItem="",userName="",userEmail="",
         <div style={{borderTop:"1px solid var(--border)",paddingTop:14,display:"flex",gap:10,justifyContent:"flex-end"}}>
           <Btn v="ghost" onClick={onClose}>Cancel</Btn>
           <Btn onClick={submit} disabled={!canSubmit}><Ico n="check" s={14} col="var(--on-accent)"/>{longHold?"Request Approval":"Confirm Checkout"}{valid.length>1?` (${valid.length} items)`:""}</Btn>
+        </div>
+      </div>
+    </Modal>
+  );
+};
+
+// ─── EDIT A REQUEST THAT IS STILL WAITING ────────────────────────────────────
+// The usual reason to open this is that the app has just said your slot collides
+// with someone else's. Cancelling and retyping the whole thing to move it by two
+// hours would be silly, so the dates, the window and the group are editable in
+// place. The item and the person are not — changing those makes it a new request.
+const EditRequestModal = ({co,items,checkouts,onClose,onSave}) => {
+  const [outDate,setOutDate]=useState(getDatePart(co.out)||getToday());
+  const [outTime,setOutTime]=useState(String(co.out||"").split(" ")[1]||"09:00");
+  const [retDate,setRetDate]=useState(getDatePart(co.ret)||"");
+  const [retTime,setRetTime]=useState(String(co.ret||"").split(" ")[1]||"");
+  const [allDay,setAllDay]=useState(!hasWindow(co));
+  const [fromTime,setFromTime]=useState(co.fromTime||"09:00");
+  const [toTime,setToTime]=useState(co.toTime||"17:00");
+  const [groupEmails,setGroupEmails]=useState(co.groupEmails||"");
+
+  const item=items.find(i=>String(i.id)===String(co.itemId));
+  const askWindow=!!item?.shared;
+  const win=(askWindow&&!allDay)?{fromTime,toTime}:{fromTime:"",toTime:""};
+  const out=fmtDatetime(outDate,outTime);
+  const ret=fmtDatetime(retDate,retTime);
+  const draft={...co,out,ret,...win};
+  const badWindow=askWindow&&!allDay&&!(hhmmMins(fromTime)!==null&&hhmmMins(toTime)!==null&&hhmmMins(fromTime)<hhmmMins(toTime));
+  const blocker=blockerFor(draft,checkouts);
+  const rivals=rivalsFor(draft,checkouts);
+  const days=ret?bookingDays(out,ret):0;
+  const stillPending=days>MAX_DAYS_WITHOUT_APPROVAL;
+  const canSave=retDate.trim()&&!blocker&&!badWindow;
+  const timeInputStyle={background:"var(--bg1)",border:"1px solid var(--border)",borderRadius:8,padding:"9px 10px",color:"var(--text)",fontSize:14,outline:"none",width:"100%",fontFamily:"'Roboto',sans-serif",boxSizing:"border-box"};
+  return(
+    <Modal onClose={onClose} title="Edit Request" mw={600}>
+      <div style={{display:"flex",flexDirection:"column",gap:14}}>
+        <div style={{background:"var(--bg2)",border:"1px solid var(--border)",borderRadius:10,padding:"10px 13px"}}>
+          <div style={{fontWeight:700,fontSize:14}}>{co.item}{Number(co.qty)>1&&<span style={{color:"var(--sub)",fontWeight:400,fontFamily:"'IBM Plex Mono',monospace",fontSize:12,marginLeft:6}}>×{Number(co.qty)}</span>}</div>
+          <div style={{color:"var(--dim)",fontSize:11,fontFamily:"'IBM Plex Mono',monospace",marginTop:3}}>for {co.user} · waiting for approval</div>
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+          <Fld label="Checkout Date"><Inp type="date" value={outDate} onChange={e=>setOutDate(e.target.value)}/></Fld>
+          <Fld label="Checkout Time"><input type="time" value={outTime} onChange={e=>setOutTime(e.target.value)} style={timeInputStyle}/></Fld>
+          <Fld label="Return By (date) *"><Inp type="date" value={retDate} onChange={e=>setRetDate(e.target.value)}/></Fld>
+          <Fld label="Return By (time)"><input type="time" value={retTime} onChange={e=>setRetTime(e.target.value)} style={timeInputStyle}/></Fld>
+          <div style={{gridColumn:"1/-1"}}>
+            <Fld label="Group members (optional)" hint={"Others who can also return this — comma-separated "+LAB.signin_hint+" sign-in addresses"}>
+              <Inp placeholder="jdoe1@jh.edu, asmith3@jh.edu" value={groupEmails} onChange={e=>setGroupEmails(e.target.value)}/>
+            </Fld>
+          </div>
+        </div>
+        {askWindow&&(
+          <div style={{background:"var(--bg2)",border:"1px solid var(--border)",borderRadius:10,padding:"12px 14px"}}>
+            <div style={{color:"var(--sub)",fontSize:11,fontWeight:700,letterSpacing:"0.08em",textTransform:"uppercase",fontFamily:"'IBM Plex Mono',monospace",marginBottom:9}}>Shared item — when each day?</div>
+            <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+              <Btn sm v={allDay?"primary":"ghost"} onClick={()=>setAllDay(true)}>All day</Btn>
+              <Btn sm v={allDay?"ghost":"primary"} onClick={()=>setAllDay(false)}>Same hours each day</Btn>
+            </div>
+            {!allDay&&(
+              <div style={{display:"flex",gap:8,alignItems:"center",marginTop:10,flexWrap:"wrap"}}>
+                <input type="time" value={fromTime} onChange={e=>setFromTime(e.target.value)} style={{...timeInputStyle,width:"auto"}}/>
+                <span style={{color:"var(--dim)",fontSize:13}}>to</span>
+                <input type="time" value={toTime} onChange={e=>setToTime(e.target.value)} style={{...timeInputStyle,width:"auto"}}/>
+                <span style={{color:"var(--dim)",fontSize:12}}>every day from {outDate} to {retDate||"…"}</span>
+              </div>
+            )}
+            {badWindow&&<div style={{color:"var(--red)",fontSize:12,marginTop:8}}>The end time has to be later than the start time.</div>}
+          </div>
+        )}
+        {blocker&&(
+          <div style={{background:"var(--red-d)",border:`1px solid ${mix("--red",30)}`,borderRadius:10,padding:"11px 14px",fontSize:13,lineHeight:1.5}}>
+            That slot is taken — {blocker.user}, {windowLabel(blocker)}, {blocker.out} to {blocker.ret}. Pick a time that doesn't overlap.
+          </div>
+        )}
+        {rivals.length>0&&!blocker&&(
+          <div style={{background:"var(--bg2)",border:`1px solid ${mix("--cyan",35)}`,borderRadius:10,padding:"11px 14px",fontSize:13,lineHeight:1.5}}>
+            <div style={{fontWeight:700,marginBottom:5}}>{rivals.length===1?"One other person has asked for this slot":`${rivals.length} other people have asked for this slot`}</div>
+            {rivals.map(r=>(
+              <div key={r.id} style={{color:"var(--sub)",fontSize:12,fontFamily:"'IBM Plex Mono',monospace",marginTop:3}}>{r.user} · {r.out} to {r.ret} · {windowLabel(r)}</div>
+            ))}
+          </div>
+        )}
+        <div style={{background:stillPending?"var(--amber-d)":"var(--green-d)",border:`1px solid ${mix(stillPending?"--amber":"--green",30)}`,borderRadius:10,padding:"11px 14px",fontSize:13,lineHeight:1.5}}>
+          {ret
+            ? stillPending
+              ? `${Math.ceil(days)} days — still over ${MAX_DAYS_WITHOUT_APPROVAL}, so it stays a request.`
+              : `${Math.max(1,Math.ceil(days))} day${Math.ceil(days)>1?"s":""} — under ${MAX_DAYS_WITHOUT_APPROVAL}, so saving this checks the item out straight away. No approval needed.`
+            : "Set a return date."}
+        </div>
+        <div style={{borderTop:"1px solid var(--border)",paddingTop:14,display:"flex",gap:10,justifyContent:"flex-end"}}>
+          <Btn v="ghost" onClick={onClose}>Cancel</Btn>
+          <Btn onClick={()=>{if(canSave){onSave(co.id,{out,ret,...win,groupEmails:groupEmails.trim()});onClose();}}} disabled={!canSave}>
+            <Ico n="check" s={14} col="var(--on-accent)"/>{stillPending?"Save Request":"Save & Check Out"}
+          </Btn>
         </div>
       </div>
     </Modal>
@@ -2170,6 +2296,7 @@ function LabInventory(){
   const [lastBackup,setLastBackup]=useState(null);
   const [backingUp,setBackingUp]=useState(false);
   const [preItem,setPreItem] = useState("");
+  const [editReq,setEditReq] = useState(null);   // the pending request being edited
   const [useItem,setUseItem] = useState(null);        // consumable → Use dialog
   const [notifyItem,setNotifyItem] = useState(null);  // untracked supply → Notify dialog
   const [detail,setDetail] = useState(null);
@@ -2463,6 +2590,12 @@ function LabInventory(){
   const activeOut = checkouts.filter(c=>c.status==="Active");
   const overdues = checkouts.filter(c=>isOverdue(c));
   const pendingCos = checkouts.filter(c=>c.status===CO_PENDING);
+  // Grouped by item so the admin sees the queue for one thing in one place,
+  // which is the only way "pick one of these" reads as a choice rather than as
+  // a list of unrelated rows that happen to share a name.
+  const pendingByItem = pendingCos.reduce((m,c)=>{
+    const k=String(c.itemId||c.item); (m[k]=m[k]||[]).push(c); return m;
+  },{});
 
   // handlers
   const postAction = (action, payload) => {
@@ -2536,6 +2669,24 @@ function LabInventory(){
       const heldElsewhere=checkouts.some(x=>x.status==="Active"&&x.user===checkout.user&&String(x.itemId||"")===String(checkout.itemId||""));
       setCheckouts(p=>p.filter(x=>x.id!==checkout.id));
       if(!pending&&!heldElsewhere) setItems(prev=>prev.map(i=>isCheckoutTarget(i,checkout)?{...i,status:"Available",usedBy:toArr(i.usedBy).filter(u=>u!==checkout.user)}:i));
+      addToast("error",res.detail||res.error);
+    }
+  };
+
+  const handleUpdateRequest=async(coId,patch)=>{
+    const co=checkouts.find(c=>c.id===coId); if(!co)return;
+    // Editing re-runs the rules: shorten it under the limit and the reason it
+    // needed an admin is gone, so it becomes a plain checkout.
+    const merged={...co,...patch};
+    const nowActive=!needsApproval(merged);
+    const next={...merged,status:nowActive?"Active":CO_PENDING};
+    setCheckouts(p=>p.map(c=>c.id===coId?next:c));
+    if(nowActive) markInUse(next);
+    addToast("success",nowActive?`${co.item} — request shortened, checked out`:`${co.item} request updated`);
+    const res=await postAction("updateCheckout",{checkoutId:coId,checkout:patch});
+    if(res&&res.error){
+      setCheckouts(p=>p.map(c=>c.id===coId?co:c));
+      if(nowActive) setItems(prev=>prev.map(i=>isCheckoutTarget(i,co)?{...i,status:"Available",usedBy:toArr(i.usedBy).filter(u=>u!==co.user)}:i));
       addToast("error",res.detail||res.error);
     }
   };
@@ -3461,27 +3612,54 @@ function LabInventory(){
                 <div style={{padding:"13px 18px",borderBottom:"1px solid var(--border)",display:"flex",alignItems:"center",gap:9,flexWrap:"wrap"}}>
                   <Ico n="clock" s={15} col="var(--amber)"/>
                   <span style={{fontWeight:700,fontFamily:"'Roboto',sans-serif",fontSize:15}}>Waiting for approval</span>
-                  <span style={{color:"var(--dim)",fontSize:12}}>Held longer than {MAX_DAYS_WITHOUT_APPROVAL} days · the item stays available until approved</span>
+                  <span style={{color:"var(--dim)",fontSize:12}}>Held longer than {MAX_DAYS_WITHOUT_APPROVAL} days · nothing is reserved until approved, so more than one person may ask</span>
                 </div>
-                {pendingCos.map((c,i)=>(
-                  <div key={c.id} style={{padding:"12px 18px",borderTop:i?"1px solid var(--border)":"none",display:"flex",gap:12,alignItems:"center",flexWrap:"wrap"}}>
-                    <MemberAvatar name={c.user} sz={30}/>
-                    <div style={{flex:1,minWidth:190}}>
-                      <div style={{fontWeight:600,fontSize:13}}>{c.item}{Number(c.qty)>1&&<span style={{color:"var(--sub)",fontWeight:400,fontFamily:"'IBM Plex Mono',monospace",fontSize:12,marginLeft:6}}>×{Number(c.qty)}</span>}</div>
-                      <div style={{color:"var(--dim)",fontSize:11,fontFamily:"'IBM Plex Mono',monospace",marginTop:3}}>
-                        {c.user} · {c.out} → {c.ret} · {Math.ceil(bookingDays(c.out,c.ret))} days · {windowLabel(c)}
-                      </div>
+                {Object.entries(pendingByItem).map(([k,reqs],gi)=>{
+                  const contested=reqs.length>1&&reqs.some(a=>reqs.some(b=>a.id!==b.id&&bookingsClash(a,b)));
+                  return(
+                  <div key={k} style={{borderTop:gi?"1px solid var(--border)":"none"}}>
+                    <div style={{padding:"10px 18px 2px",display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+                      <span style={{fontWeight:700,fontSize:13}}>{reqs[0].item}</span>
+                      {contested&&(
+                        <span style={{background:"var(--amber-d)",border:`1px solid ${mix("--amber",35)}`,color:"var(--amber)",borderRadius:20,padding:"1px 9px",fontSize:10,fontWeight:700,letterSpacing:"0.06em",textTransform:"uppercase",fontFamily:"'IBM Plex Mono',monospace"}}>
+                          {reqs.length} requests · overlapping
+                        </span>
+                      )}
                     </div>
-                    {effectiveRole==="admin"?(
-                      <div style={{display:"flex",gap:8}}>
-                        <Btn sm v="success" onClick={()=>setConfirm({msg:`Approve "${c.item}" for ${c.user}, ${Math.ceil(bookingDays(c.out,c.ret))} days?`,onConfirm:()=>handleDecideCheckout(c.id,true)})}><Ico n="check" s={12} col="var(--green)"/>Approve</Btn>
-                        <Btn sm v="danger" onClick={()=>setConfirm({msg:`Reject the request for "${c.item}" from ${c.user}?`,onConfirm:()=>handleDecideCheckout(c.id,false)})}><Ico n="x" s={12} col="var(--red)"/>Reject</Btn>
-                      </div>
-                    ):(
-                      <span style={{color:"var(--amber)",fontSize:12,fontWeight:600}}>Waiting on an admin</span>
-                    )}
-                  </div>
-                ))}
+                    {reqs.map(c=>{
+                      const blocker=blockerFor(c,checkouts);
+                      const mine=user?.email&&c.checkedOutByEmail===user.email;
+                      return(
+                      <div key={c.id} style={{padding:"8px 18px 12px",display:"flex",gap:12,alignItems:"center",flexWrap:"wrap"}}>
+                        <MemberAvatar name={c.user} sz={30}/>
+                        <div style={{flex:1,minWidth:190}}>
+                          <div style={{color:"var(--sub)",fontSize:12,fontWeight:600}}>{c.user}{Number(c.qty)>1&&<span style={{fontWeight:400,fontFamily:"'IBM Plex Mono',monospace",marginLeft:6}}>×{Number(c.qty)}</span>}</div>
+                          <div style={{color:"var(--dim)",fontSize:11,fontFamily:"'IBM Plex Mono',monospace",marginTop:3}}>
+                            {c.out} → {c.ret} · {Math.ceil(bookingDays(c.out,c.ret))} days · {windowLabel(c)}
+                          </div>
+                          {blocker&&(
+                            <div style={{color:"var(--red)",fontSize:11,marginTop:4}}>
+                              Conflicts with {blocker.user}'s approved booking ({blocker.out} to {blocker.ret}) — reject it, or edit the dates
+                            </div>
+                          )}
+                        </div>
+                        <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                          {(effectiveRole==="admin"||mine)&&(
+                            <Btn sm v="ghost" onClick={()=>setEditReq(c)}><Ico n="edit" s={12}/>Edit</Btn>
+                          )}
+                          {effectiveRole==="admin"?(
+                            <>
+                              <Btn sm v="success" disabled={!!blocker} onClick={()=>setConfirm({msg:`Approve "${c.item}" for ${c.user}, ${Math.ceil(bookingDays(c.out,c.ret))} days?`+(contested?` The other ${reqs.length-1} request${reqs.length>2?"s":""} for this slot will no longer be approvable — reject ${reqs.length>2?"them":"it"} afterwards.`:""),onConfirm:()=>handleDecideCheckout(c.id,true)})}><Ico n="check" s={12} col="var(--green)"/>Approve</Btn>
+                              <Btn sm v="danger" onClick={()=>setConfirm({msg:`Reject the request for "${c.item}" from ${c.user}?`,onConfirm:()=>handleDecideCheckout(c.id,false)})}><Ico n="x" s={12} col="var(--red)"/>Reject</Btn>
+                            </>
+                          ):(
+                            <span style={{color:"var(--amber)",fontSize:12,fontWeight:600}}>Waiting on an admin</span>
+                          )}
+                        </div>
+                      </div>);
+                    })}
+                  </div>);
+                })}
               </div>
             )}
 
@@ -3555,7 +3733,8 @@ function LabInventory(){
       {modal==="delivery" && <DeliveryModal onClose={()=>setModal(null)} onAdd={handleDelivery} userName={user?.name||""}/>}
       {useItem && <UseModal item={useItem} onClose={()=>setUseItem(null)} onUse={handleUseConsumable}/>}
       {notifyItem && <NotifyModal item={notifyItem} onClose={()=>setNotifyItem(null)} onNotify={handleNotifyLowStock}/>}
-      {modal==="checkout" && <CheckoutModal items={items} onClose={()=>setModal(null)} onAdd={handleCheckout} preItem={preItem} userName={user?.name||""} userEmail={user?.email||""} categories={categories} checkouts={checkouts}/>}
+      {editReq && <EditRequestModal co={editReq} items={items} checkouts={checkouts} onClose={()=>setEditReq(null)} onSave={handleUpdateRequest}/>}
+        {modal==="checkout" && <CheckoutModal items={items} onClose={()=>setModal(null)} onAdd={handleCheckout} preItem={preItem} userName={user?.name||""} userEmail={user?.email||""} categories={categories} checkouts={checkouts}/>}
       {modal==="addItem" && <AddItemModal onClose={()=>setModal(null)} onAdd={handleAddItem} categories={categories} allItems={items} onShowLabel={setLabelItem}/>}
       {labelItem&&<LabelModal item={labelItem} onClose={()=>setLabelItem(null)} onAddAnother={()=>{setLabelItem(null);setModal("addItem");}}/>}
       {modal==="order" && <OrderModal onClose={()=>setModal(null)} onAddMany={handleAddOrderMany} userName={user?.name||""} userEmail={user?.email||""} categories={categories}/>}

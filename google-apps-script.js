@@ -120,19 +120,51 @@ function bookingsClash_(a, b) {
  * it the slot may be gone. ignoreId skips the row being approved, which is in the
  * table by then and would otherwise clash with itself.
  */
-function bookingConflict_(c, ignoreId) {
-  const target = findRow("Items", c.itemId ? c.itemId : function (r) { return r.name === c.item; });
-  const shared = !!target && (target.shared === true || String(target.shared).toLowerCase() === "true");
-  if (!shared) return "";   // sole-use items are gated by availability, not by the hour
-  const clash = readTable("Checkouts").filter(function (x) {
+function overlapping_(c, ignoreId, status, sharedOnly) {
+  if (sharedOnly) {
+    // Blocking is only ever asked about shared items — a sole-use item is kept
+    // exclusive by its availability, not by the hour.
+    const target = findRow("Items", c.itemId ? c.itemId : function (r) { return r.name === c.item; });
+    const shared = !!target && (target.shared === true || String(target.shared).toLowerCase() === "true");
+    if (!shared) return [];
+  }
+  return readTable("Checkouts").filter(function (x) {
     if (ignoreId != null && String(x.id) === String(ignoreId)) return false;
-    if (x.status !== "Active" && x.status !== CHECKOUT_PENDING) return false;
+    if (x.status !== status) return false;
     var same = x.itemId ? String(x.itemId) === String(c.itemId) : x.item === c.item;
     return same && bookingsClash_(x, c);
-  })[0];
+  });
+}
+
+/**
+ * Why a booking can't stand, or "" if it can.
+ *
+ * Only an *Active* booking blocks. A pending request reserves nothing — that is
+ * the whole point of it being pending — so several people may ask for the same
+ * week and an admin picks between them. See competing_().
+ *
+ * Called twice: when the booking is made, and again when a long hold is approved,
+ * because the slot may have been taken while the request sat in the queue.
+ * ignoreId skips the row being approved or edited, which is in the table by then
+ * and would otherwise clash with itself.
+ */
+function bookingConflict_(c, ignoreId) {
+  const clash = overlapping_(c, ignoreId, "Active", true)[0];
   if (!clash) return "";
   return "Already booked by " + clash.user + " (" + clash.out + " \u2192 " + clash.ret +
          (clash.fromTime ? ", " + clash.fromTime + "\u2013" + clash.toTime : "") + ")";
+}
+
+// Other people waiting on the same slot. Not an error — the admin needs to see
+// them side by side, so they are reported and rendered, never used to refuse.
+//
+// Unlike blocking, this covers sole-use items too, and matters most there: a
+// pending request doesn't mark the item In Use, so the availability filter that
+// normally keeps a sole-use item exclusive cannot see the queue at all.
+function competing_(c, ignoreId) {
+  return overlapping_(c, ignoreId, CHECKOUT_PENDING, false).map(function (x) {
+    return { id: x.id, user: x.user, out: x.out, ret: x.ret, fromTime: x.fromTime, toTime: x.toTime };
+  });
 }
 
 // Lazy prefix so a prefix containing a hyphen still parses; the sub group is
@@ -1057,10 +1089,15 @@ function doPost(e) {
     appendRow("Checkouts", c);
 
     if (pending) {
-      sendSlack("⏳", "Approval Needed: " + c.item, "Longer than " + MAX_DAYS_WITHOUT_APPROVAL + " days",
+      // Other people waiting on the same slot. Reported, never used to refuse —
+      // the admin is the one who picks.
+      const rivals = competing_(c, c.id);
+      sendSlack("⏳", "Approval Needed: " + c.item, "Longer than " + MAX_DAYS_WITHOUT_APPROVAL + " days" +
+        (rivals.length ? " — " + rivals.length + " other request" + (rivals.length>1?"s":"") + " for the same slot" : ""),
         ["*Person*\n" + c.user, "*From*\n" + (c.out||"—"), "*Until*\n" + (c.ret||"—")], "high");
-      logAudit(userName, userEmail, "CheckoutPending", c.item + " → " + c.user + " | until:" + (c.ret||"—"));
-      return jsonResponse({ ok: true, pending: true });
+      logAudit(userName, userEmail, "CheckoutPending", c.item + " → " + c.user + " | until:" + (c.ret||"—") +
+        (rivals.length ? " | competing:" + rivals.length : ""));
+      return jsonResponse({ ok: true, pending: true, competing: rivals });
     }
 
     updateItemStatus(c.itemId, c.item, "In Use", c.user, "add");
@@ -1096,6 +1133,48 @@ function doPost(e) {
       logAudit(userName, userEmail, "CheckoutRejected", co.item + " → " + co.user);
     }
     return jsonResponse({ ok: true });
+  }
+
+  // ── Edit a request that is still waiting ─────────────────────────────────
+  // The usual reason to edit is that the app has just told you your slot collides
+  // with someone else's. Making you cancel and retype the whole thing to move it
+  // by two hours would be silly.
+  if (action === "updateCheckout") {
+    const co = findRow("Checkouts", body.checkoutId);
+    if (!co) return jsonResponse({ error: "Checkout not found" });
+    if (co.status !== CHECKOUT_PENDING) {
+      return jsonResponse({ error: "Not pending", detail: "Only a request still waiting for approval can be edited — this one is " + co.status });
+    }
+    const coEmail = String(co.checkedOutByEmail || "").trim().toLowerCase();
+    if (!admin && coEmail && userEmail !== coEmail) {
+      return jsonResponse({ error: "Forbidden", detail: "Only the person who asked for this, or an admin, can change it" });
+    }
+
+    // Whitelisted: everything a requester is allowed to move. Taking body.checkout
+    // wholesale would let a member patch status:"Active" and approve themselves.
+    const patch = {};
+    ["out", "ret", "fromTime", "toTime", "groupEmails"].forEach(function (k) {
+      if (body.checkout && body.checkout[k] !== undefined) patch[k] = body.checkout[k];
+    });
+    const merged = Object.assign({}, co, patch);
+
+    const blocked = bookingConflict_(merged, co.id);
+    if (blocked) return jsonResponse({ error: "Clash", detail: blocked });
+
+    // Editing re-runs the same rules. Shorten it under the limit and the reason it
+    // needed an admin is gone, so it just becomes a checkout.
+    const stillPending = needsApproval_(merged);
+    patch.status = stillPending ? CHECKOUT_PENDING : "Active";
+    updateRow("Checkouts", co.id, patch);
+
+    if (!stillPending) {
+      updateItemStatus(co.itemId, co.item, "In Use", co.user, "add");
+      sendSlack("🔑", "Request Shortened — Now Active: " + co.item, "No longer needs approval",
+        ["*Person*\n" + co.user, "*From*\n" + (merged.out||"—"), "*Return by*\n" + (merged.ret||"—")]);
+    }
+    logAudit(userName, userEmail, "CheckoutEdited", co.item + " → " + co.user +
+      " | " + (merged.out||"—") + " to " + (merged.ret||"—") + " | " + patch.status);
+    return jsonResponse({ ok: true, pending: stillPending, competing: stillPending ? competing_(merged, co.id) : [] });
   }
 
   // ── Return Item ───────────────────────────────────────────────────────────
