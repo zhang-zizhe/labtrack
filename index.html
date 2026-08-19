@@ -1926,35 +1926,6 @@ const Stat=({label,val,icon,ac,sub,warn})=>(
 );
 
 // ─── PAGINATION ──────────────────────────────────────────────────────────────
-const Pagination = ({total, page, setPage}) => {
-  const totalPages = Math.ceil(total / ITEMS_PER_PAGE);
-  if (totalPages <= 1) return null;
-  const start = page * ITEMS_PER_PAGE + 1;
-  const end = Math.min((page+1) * ITEMS_PER_PAGE, total);
-  const pages = [];
-  for (let i = 0; i < totalPages; i++) {
-    if (i === 0 || i === totalPages-1 || Math.abs(i - page) <= 1) pages.push(i);
-    else if (pages[pages.length-1] !== "...") pages.push("...");
-  }
-  return (
-    <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginTop:20,flexWrap:"wrap",gap:10}}>
-      <span style={{color:"var(--dim)",fontSize:12}}>Showing {start}–{end} of {total} items</span>
-      <div style={{display:"flex",gap:4,alignItems:"center"}}>
-        <button onClick={()=>setPage(Math.max(0,page-1))} disabled={page===0} style={{background:"var(--bg3)",border:"1px solid var(--border)",color:page===0?"var(--dim)":"var(--text)",borderRadius:6,padding:"5px 10px",cursor:page===0?"default":"pointer",fontSize:13}}>
-          <Ico n="chevL" s={14}/>
-        </button>
-        {pages.map((p,i)=>p==="..." ? (
-          <span key={`d${i}`} style={{color:"var(--dim)",padding:"0 4px"}}>...</span>
-        ) : (
-          <button key={p} onClick={()=>setPage(p)} style={{background:p===page?"var(--cyan)":"var(--bg3)",color:p===page?"var(--on-accent)":"var(--sub)",border:`1px solid ${p===page?"var(--cyan)":"var(--border)"}`,borderRadius:6,padding:"5px 10px",cursor:"pointer",fontSize:12,fontWeight:p===page?700:400,minWidth:32}}>{p+1}</button>
-        ))}
-        <button onClick={()=>setPage(Math.min(totalPages-1,page+1))} disabled={page===totalPages-1} style={{background:"var(--bg3)",border:"1px solid var(--border)",color:page===totalPages-1?"var(--dim)":"var(--text)",borderRadius:6,padding:"5px 10px",cursor:page===totalPages-1?"default":"pointer",fontSize:13}}>
-          <Ico n="chevR" s={14}/>
-        </button>
-      </div>
-    </div>
-  );
-};
 
 // ─── CALENDAR ────────────────────────────────────────────────────────────────
 // Delivery is Spirit Blue rather than green: beside the red of "overdue", green
@@ -4095,9 +4066,11 @@ function LabInventory(){
             {icon:"box",title:"Inventory Tab",color:"var(--cyan)",items:["Add items with the + button. Fill in name, category, location, and quantity.","Set Min Stock to get a red Low Stock badge when qty drops to or below that number.","Shared items (e.g. toolboxes) stay Available when checked out — multiple people can use them simultaneously.","Consumable items (e.g. stickers, reagents) show a Use button on the card — enter the quantity used and it is deducted, no checkout involved. Consumables get no Label ID; nothing is stickered.","Each tracked item gets a Label ID (e.g. RM-001), numbered per category. Print it on a sticker and attach it to the item. Configure prefixes in Settings → Manage Categories.","Supplies you don\u2019t count (zip ties, tape) can be added with \u2018Quantity not tracked\u2019 — they show a Notify button instead, which pings whoever restocks.","When adding multiple cameras, laptops, or robots, check 'Track each unit individually' to create separate items with sub-IDs (e.g. CE-042-01, CE-042-002), each with its own serial number.","Click any item card to see full details, checkout history, and quick actions."]},
             {icon:"tag",title:"Usage / Checkout Tab",color:"var(--blue)",items:["Use Check Out to assign a non-consumable, non-shared item to a person. Enter qty, dates, and optional notes.","Shared items can be checked out by multiple people at the same time and remain Available.","Consumable items do not appear in the checkout list — use the Use button on the card instead.","Mark items Returned when done. Overdue checkouts are highlighted in red.","Only the person who created the checkout, listed group members, or admins can return an item.","Group members: when checking out, optionally add teammates' emails (comma-separated) so they can also return the item.","Bulk Return lets you return multiple items at once."]},
             {icon:"cart",title:"Order Requests Tab",color:"var(--amber)",items:["Submit purchase requests with store, item, link, qty, and price.","Only the person who submitted an order (or an admin) can edit it.","Select multiple orders with checkboxes → Copy Text generates a bullet-list (qty · item · link · price) with grand total — ready to paste into an email or message. Save to Sheet writes the same summary as a table to your Google Sheet.","Admins can move orders through: Pending → Approved → Ordered → Received.","When marked Received, a staging form opens — fill in location, label ID, and serial number before it is added to inventory.","Deliveries are automatically logged when an order is marked Received."]},
-            {icon:"calendar",title:"Calendar Tab",color:"var(--purple)",items:["Visual monthly calendar showing deliveries, active checkouts, and return due dates.","Color-coded: green = delivery, blue = checkout start, amber = return due.","Click any day to see all events on that date."]},
+            {icon:"calendar",title:"Calendar Tab",color:"var(--purple)",items:["Month and week views. A booking draws as a bar across every day it covers, not two marks at its ends.","Colours: Spirit Blue = delivery, blue = in use, amber = awaiting approval, red = overdue, grey = returned.","A daily window (13:00–16:00) is drawn at those hours on every day of the hold; an all-day hold across several days sits in the week view's all-day strip.","Active bookings are visible to everyone. Requests still waiting show only to the person who asked and to admins.","Click any day to see everything on it. Today returns you to now; switching between Month and Week keeps your place."]},
             {icon:"layers",title:"Item Statuses",color:"var(--sub)",items:["🟢 Available — ready to use","🔵 In Use — checked out by one or more people","🟡 Maintenance — temporarily out of service","🔴 Broken — damaged or needs repair","⚠️ Low Stock — qty is at or below the Min Stock threshold (shown as a badge)"]},
-            {icon:"settings",title:"Settings (Admin only)",color:"var(--orange)",items:["Manage Categories — add, remove, or rename categories; set label ID prefix per category (e.g. RM for Robots & Motors).","Admins list — edit in the Settings tab of the Google Sheet (JSON array of @jh.edu sign-in addresses, not @jhu.edu).","Slack notifications — set slack_mode in Settings tab: all | important | digest | off.","Your Microsoft token expires after ~1 hour and renews silently in the background. If you see a red banner at the top, click Sign In Again."]},
+            {icon:"lock",title:"The Edit Lock",color:"var(--red)",items:["The lab starts read-only. Click the 🔒 in the header, or Unlock in the red banner, to make changes — it guards against fat fingers, not against people.","Everyone can add and edit items; the lock is per-browser and resets on reload.","When a non-admin unlocks, it is recorded in the AuditLog tab."]},
+            {icon:"clock",title:"Booking Rules",color:"var(--cyan)",items:["A shared item is booked either all day or for the same window every day; a sole-use item is held for the whole span.","An active booking owns its slot — you cannot book across one.","A hold longer than 7 days needs an admin's approval, and so does one that overlaps a request already waiting, so a short booking cannot jump the queue.","Asking reserves nothing: several people may queue for the same slot and an admin picks. You can edit or withdraw your own request while it waits.","A booking may not start more than 31 days from now, and the return date has to be after the checkout date."]},
+            {icon:"settings",title:"Settings (Admin only)",color:"var(--orange)",items:["Manage Categories — add, remove, or rename categories; set label ID prefix per category (e.g. RM for Robots & Motors). There is no Settings tab in the app; everything else lives in the Google Sheet.","Admins and members lists — edit the Settings tab of the Google Sheet (a JSON array of @jh.edu sign-in addresses, not @jhu.edu). An admin is always a member.","Slack notifications — set slack_mode in that same tab: all | important | digest | off.","Your Microsoft token expires after ~1 hour and renews silently in the background. If you see a red banner at the top, click Sign In Again."]},
           ].map(s=>(
             <div key={s.title}>
               <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}><Ico n={s.icon} s={16} col={s.color}/><strong style={{color:s.color,fontFamily:"'Roboto',sans-serif"}}>{s.title}</strong></div>

