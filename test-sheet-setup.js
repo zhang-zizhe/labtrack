@@ -242,6 +242,7 @@ console.log("shared items book by the hour; long holds wait for an admin");
     item("p6","Solo Rig",       false, "RM-006"),   // rule 2 on a sole-use item
     item("p7","Range Rig",      false, "RM-007"),   // dates that do not make sense
     item("p8","Group Rig",      false, "RM-008"),   // who is allowed to return it
+    item("p9","Long Rig",       false, "RM-009"),   // how long a hold may run
   ]);
   const c6 = load(ss6);
   const asAdmin  = () => { c6.verifyToken = () => ({ email:"zzhan409@jh.edu", name:"Z", oid:"a" }); };
@@ -501,6 +502,22 @@ console.log("shared items book by the hour; long holds wait for an admin");
         ["b1","b2","b3","b4","b5","b6","b7"].every(id => row(id) === undefined));
   check("an ordinary range still books",
         bad("b8","2026-09-10 09:00","2026-09-11 17:00").ok === true);
+  // Rule 3's queue is transitive, so a booking running to next June puts every
+  // overlapping one behind an admin. The cap sits past any real hold, to catch a
+  // mistyped year rather than to shorten a genuine semester.
+  check("a hold longer than the cap is refused",
+        bad("b10","2026-09-01 09:00","2027-09-01 09:00").error === "Bad dates");
+  check("with a message pointing at the likely cause",
+        /check the return date's year/.test(bad("b11","2026-09-01 09:00","2027-09-01 09:00").detail));
+  // Its own rig: Range Rig is busy from the checks above, and a clash would refuse
+  // these for the wrong reason.
+  check("a long-but-plausible hold still goes in",
+        book("b12","Wes","2026-09-01 09:00","2026-11-01 09:00","","","Long Rig","p9").pending === true);
+  check("and a request cannot be edited into one", (() => {
+    const q = book("b13","Yun","2026-09-02 09:00","2026-09-25 09:00","","","Long Rig","p9");
+    return q.pending === true &&
+      post({ action:"updateCheckout", checkoutId:"b13", checkout:{ ret:"2028-01-01 09:00" } }).error === "Bad dates";
+  })());
   check("an editor cannot move a request onto a backwards range", (() => {
     const q = book("b9","Xan","2026-09-12 09:00","2026-10-01 09:00","","","Range Rig","p7");
     return q.pending === true &&
@@ -604,6 +621,112 @@ console.log("purchase approval is the admin's, whichever door you knock on");
   asMember();
   check("the requester can no longer touch it once it is decided",
         /already/.test(post({ action:"updateOrder", order:{ id:"o1", qty:9 } }).detail || ""));
+}
+
+console.log("what an item IS is an admin's; what it is LIKE is anyone's");
+{
+  const ssB = fresh();
+  const cB = load(ssB);
+  cB.setupNewLab();
+  cB.writeSetting("admins", JSON.stringify(["zzhan409@jh.edu"]));
+  const asAdmin  = () => { cB.verifyToken = () => ({ email:"zzhan409@jh.edu", name:"Z", oid:"a" }); };
+  const asMember = () => { cB.verifyToken = () => ({ email:"member@jh.edu", name:"Member", oid:"m" }); };
+  const post = p => JSON.parse(cB.doPost({ postData:{ contents: JSON.stringify(Object.assign({token:"t"}, p)) } }).__text);
+  const it = () => cB.readTable("Items")[0];
+
+  asAdmin();
+  post({ action:"addItem", item:{ id:"x1", name:"Scope", cat:"Compute & Electronics", qty:4, unit:"units",
+    loc:"H306", minQty:0, img:"", desc:"", status:"Available", usedBy:[], serial:"SN-1",
+    displayId:"CE-001", shared:true, consumable:false } });
+
+  asMember();
+  const whole = () => ({ id:"x1", name:it().name, cat:it().cat, qty:it().qty, unit:it().unit, loc:it().loc,
+    minQty:it().minQty, img:it().img, desc:it().desc, serial:it().serial,
+    status:it().status, displayId:it().displayId, shared:it().shared, consumable:it().consumable });
+
+  const r1 = post({ action:"updateItem", item: Object.assign(whole(), { loc:"H310", qty:3, name:"Bench Scope" }) });
+  check("a member may correct the ordinary fields",
+        r1.ok === true && it().loc === "H310" && Number(it().qty) === 3 && it().name === "Bench Scope");
+  check("and resending the rest untouched is not flagged", r1.ignored.length === 0);
+
+  const r2 = post({ action:"updateItem", item: Object.assign(whole(), {
+    status:"In Use", shared:false, consumable:true, displayId:"XX-999" }) });
+  check("but the four structural fields do not move",
+        it().status === "Available" && it().shared === true &&
+        it().consumable === false && it().displayId === "CE-001");
+  check("and the response names what it dropped",
+        ["status","shared","consumable","displayId"].every(f => r2.ignored.indexOf(f) >= 0));
+  check("the audit line names them too",
+        cB.readTable("AuditLog").some(a => a.action === "UpdateItem" && /ignored \(admin only\)/.test(a.details)));
+
+  asAdmin();
+  post({ action:"updateItem", item: Object.assign(whole(), {
+    status:"Maintenance", shared:false, consumable:false, displayId:"CE-042" }) });
+  check("an admin may move all four",
+        it().status === "Maintenance" && it().shared === false && it().displayId === "CE-042");
+}
+
+console.log("the roster is not lab-wide reading");
+{
+  const ssC = fresh();
+  const cC = load(ssC);
+  cC.setupNewLab();
+  cC.writeSetting("admins", JSON.stringify(["zzhan409@jh.edu"]));
+  cC.writeSetting("cat_prefixes", JSON.stringify({ "Robots & Motors":"RM" }));
+  const get = () => JSON.parse(cC.doGet({ parameter:{ token:"t" } }).__text);
+
+  cC.verifyToken = () => ({ email:"member@jh.edu", name:"Member", oid:"m" });
+  const asMember = get().settings;
+  check("a member gets what the app needs to draw itself",
+        asMember.categories !== undefined && asMember.slack_mode !== undefined &&
+        asMember.cat_prefixes !== undefined);
+  check("and not the roster",
+        asMember.admins === undefined && asMember.members === undefined);
+
+  cC.verifyToken = () => ({ email:"zzhan409@jh.edu", name:"Z", oid:"a" });
+  const asAdmin = get().settings;
+  check("an admin gets the tab", asAdmin.admins !== undefined && asAdmin.categories !== undefined);
+  // A key nobody has thought of yet must not be public by default.
+  cC.writeSetting("some_future_key", "secret");
+  cC.verifyToken = () => ({ email:"member@jh.edu", name:"Member", oid:"m" });
+  check("and a key added later is admin-only until somebody says otherwise",
+        get().settings.some_future_key === undefined);
+}
+
+console.log("using a consumable is a subtraction, not an assignment");
+{
+  const ssD = fresh();
+  const cD = load(ssD);
+  cD.setupNewLab();
+  cD.writeSetting("admins", JSON.stringify(["zzhan409@jh.edu"]));
+  cD.verifyToken = () => ({ email:"member@jh.edu", name:"Member", oid:"m" });
+  const post = p => JSON.parse(cD.doPost({ postData:{ contents: JSON.stringify(Object.assign({token:"t"}, p)) } }).__text);
+  const qty = id => cD.readTable("Items").find(i => i.id === id).qty;
+  const add = (id,name,extra) => post({ action:"addItem", item: Object.assign({ id, name,
+    cat:"Consumables & Supplies", qty:20, unit:"boxes", loc:"H306", minQty:0, img:"", desc:"",
+    status:"Available", usedBy:[], serial:"", displayId:"", shared:false, consumable:true }, extra||{}) });
+
+  add("c1","Gloves"); add("c2","Zip Ties",{ qty:"" });
+
+  check("taking three leaves seventeen",
+        post({ action:"useConsumable", itemId:"c1", used:3 }).qty === 17 && Number(qty("c1")) === 17);
+  // The point of the whole change: the second caller subtracts from what is on the
+  // sheet, not from the twenty its browser was still showing.
+  check("and taking three more leaves fourteen",
+        post({ action:"useConsumable", itemId:"c1", used:3 }).qty === 14);
+  check("it never goes below zero",
+        post({ action:"useConsumable", itemId:"c1", used:99 }).qty === 0 && Number(qty("c1")) === 0);
+  check("a negative is refused", post({ action:"useConsumable", itemId:"c1", used:-5 }).error === "Bad quantity");
+  check("zero is refused",       post({ action:"useConsumable", itemId:"c1", used:0 }).error === "Bad quantity");
+  check("nonsense is refused",   post({ action:"useConsumable", itemId:"c1", used:"lots" }).error === "Bad quantity");
+  check("and none of those moved it", Number(qty("c1")) === 0);
+  check("a supply with no count has nothing to deduct",
+        post({ action:"useConsumable", itemId:"c2", used:1 }).error === "Not tracked");
+  check("and is left alone", qty("c2") === "");
+  check("an unknown item is refused",
+        post({ action:"useConsumable", itemId:"nope", used:1 }).error === "Item not found");
+  check("what was taken is logged",
+        cD.readTable("AuditLog").some(a => a.action === "UseConsumable" && /used:3/.test(a.details)));
 }
 
 console.log("In Use means somebody has it now, not that somebody booked it");

@@ -1304,13 +1304,19 @@ function doPost(e) {
     const fields = ["name", "cat", "qty", "unit", "loc", "minQty", "img", "desc", "serial"];
     const adminFields = ["status", "displayId", "shared", "consumable"];
     if (admin) Array.prototype.push.apply(fields, adminFields);
-    const refused = adminFields.filter(function (f) { return !admin && it[f] !== undefined; });
     const patch = {};
     fields.forEach(f => { if (it[f] !== undefined) patch[f] = it[f]; });
 
-    if (!updateRow("Items", it.id, patch)) {
+    const prev = updateRow("Items", it.id, patch);
+    if (!prev) {
       return jsonResponse({ error: "Item not found", detail: "No item with id " + it.id });
     }
+    // Only what they actually tried to change. The form sends the whole item back,
+    // so a member fixing a location resends `shared` and `displayId` untouched;
+    // naming those every time would bury a real attempt in noise.
+    const refused = admin ? [] : adminFields.filter(function (f) {
+      return it[f] !== undefined && String(it[f]) !== String(prev[f]);
+    });
     logAudit(userName, userEmail, "UpdateItem", (it.name||"") + " | id:" + (it.displayId||it.id||"") +
       (refused.length ? " | ignored (admin only): " + refused.join(",") : ""));
     // Reported rather than refused: the browser sends the whole item back, so a

@@ -658,7 +658,7 @@ changed**; these are only the record of *why*.
 
 ```bash
 node --check google-apps-script.js       # backend syntax
-node test-sheet-setup.js                 # 182 assertions: setup, labels, per-unit
+node test-sheet-setup.js                 # 207 assertions: setup, labels, per-unit
                                          # targeting, order approval, booking rules
 node test-sheets-coercion.js             # 25 assertions: the ones that only fail live
 node test-storage-layer.js > after.json  # behaviour snapshot — see below
