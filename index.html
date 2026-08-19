@@ -2071,16 +2071,32 @@ const CalView=({checkouts,deliveries,user,effectiveRole})=>{
     else{const d=new Date(py,pm,1);d.setDate(d.getDate()-d.getDay());d.setHours(0,0,0,0);setWkStart(d);}
     setShowPicker(false);
   };
+  // Switching view keeps your place. Week follows the day you had open, or the
+  // month you were looking at; month follows the week. Without this the two kept
+  // independent positions and flipping between them silently jumped the date.
+  const weekOf=d=>{const n=new Date(d);n.setDate(n.getDate()-n.getDay());n.setHours(0,0,0,0);return n;};
   const switchToWeek=()=>{
-    if(selDay){const[sy,sm,sd]=selDay.split("-").map(Number);const d=new Date(sy,sm-1,sd);d.setDate(d.getDate()-d.getDay());d.setHours(0,0,0,0);setWkStart(d);}
+    if(selDay){const[sy,sm,sd]=selDay.split("-").map(Number);setWkStart(weekOf(new Date(sy,sm-1,sd)));}
+    else{const t=new Date();
+         setWkStart(weekOf(yr===t.getFullYear()&&mo===t.getMonth()?t:new Date(yr,mo,1)));}
     setCalMode("week");
   };
+  // A week that straddles two months belongs to whichever holds most of it, so go
+  // by midweek — otherwise the week of Aug 30 – Sep 5 sends you back to August.
+  const switchToMonth=()=>{ const m=new Date(wkStart); m.setDate(m.getDate()+3);
+    setYr(m.getFullYear()); setMo(m.getMonth()); setCalMode("month"); };
+  // The Today view is gone, so this is the only way back to now.
+  const goToday=()=>{const t=new Date();
+    if(calMode==="month"){setYr(t.getFullYear());setMo(t.getMonth());}else{setWkStart(weekOf(t));}
+    setSelDay(null);};
+  const onToday=calMode==="month"
+    ? (yr===new Date().getFullYear()&&mo===new Date().getMonth())
+    : (()=>{const w=weekOf(new Date());return w.getTime()===weekOf(wkStart).getTime();})();
   const evtsFor=ds=>byDay[ds]||[];
   const wkDays=Array.from({length:7},(_,i)=>{const d=new Date(wkStart);d.setDate(d.getDate()+i);return d;});
   const wkStrs=wkDays.map(d=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`);
   const wkLabel=()=>{const s=wkDays[0],e=wkDays[6];return s.getMonth()===e.getMonth()?`${MNS[s.getMonth()].slice(0,3)} ${s.getDate()}–${e.getDate()}, ${s.getFullYear()}`:`${MNS[s.getMonth()].slice(0,3)} ${s.getDate()} – ${MNS[e.getMonth()].slice(0,3)} ${e.getDate()}, ${e.getFullYear()}`;};
-  // All-day strip: deliveries and holds with no hours to place on the grid.
-  const allDayByDay=wkStrs.map(ds=>evtsFor(ds).filter(e=>e.allDay));
+
   // Duration blocks for week view: checkout→return block within a single day column
   const toH=t=>{if(!t)return null;const h=parseInt(t);return isNaN(h)?null:h;}; // parse hour from "HH:MM"
   const toM=t=>{if(!t)return 0;const m=parseInt((t.split(":")[1]||"0"));return isNaN(m)?0:m;};
@@ -2090,20 +2106,28 @@ const CalView=({checkouts,deliveries,user,effectiveRole})=>{
     if(fh===null||th===null)return null;
     const sh=Math.max(fh,FHOUR),sm=fh<FHOUR?0:fm;
     const eh=Math.min(th,LHOUR),em=th<LHOUR?tm:0;
-    if(sh>=LHOUR||eh<=FHOUR||(eh*60+em)<=(sh*60+sm))return null;
+    if(sh>=LHOUR||(eh*60+em)<=FHOUR*60||(eh*60+em)<=(sh*60+sm))return null;
     return {sh,sm,eh,em};
   };
+  // Events that turn out to have no hours to place land here and are shown in the
+  // all-day strip instead of being dropped on the floor.
+  const strayByDay={};
   const wkBlocks=wkStrs.map(ds=>{
-    const evs=[];
+    const evs=[]; const strayAllDay=strayByDay[ds]=[];
     evtsFor(ds).forEach(e=>{
       if(e.allDay||e.t==="pkg")return;                 // handled by the strip
       const c=e.co;
       // A daily window repeats on every day of the hold — that is the whole point
       // of choosing one, and it used to be invisible here.
+      // Without a window, the block is the hold's own start and end — but only if
+      // it actually has both. Inventing 09:00–17:00 for a row that carries no
+      // clock time draws hours nobody chose, and where the real start fell after
+      // the invented end it drew nothing at all. Those belong in the all-day strip.
       const b=hasWindow(c)
         ? clampBlock(c.fromTime,c.toTime)
-        : clampBlock(getTimePart(c.out)||"09:00",getTimePart(c.ret)||"17:00");
+        : (getTimePart(c.out)&&getTimePart(c.ret) ? clampBlock(getTimePart(c.out),getTimePart(c.ret)) : null);
       if(b)evs.push({t:e.t,l:e.l,user:e.user,...b,continues:!e.last,id:e.id+ds});
+      else strayAllDay.push({...e,allDay:true});
     });
     // Greedy lane assignment for overlapping events
     const MAX_LANES=3;
@@ -2118,6 +2142,10 @@ const CalView=({checkouts,deliveries,user,effectiveRole})=>{
     vis.forEach(e=>{e.nln=Math.min(totalLns,MAX_LANES);});
     return {vis,ovf:sorted.filter(e=>e.ln>=MAX_LANES)};
   });
+  // All-day strip: deliveries, multi-day holds, and anything wkBlocks could not
+  // place on the grid because it carries no clock time. Built after wkBlocks so
+  // those strays are included rather than dropped.
+  const allDayByDay=wkStrs.map(ds=>[...evtsFor(ds).filter(e=>e.allDay),...(strayByDay[ds]||[])]);
   const evTop=e=>(e.sh-FHOUR)*ROW_H+(e.sm/60)*ROW_H;
   const evH=e=>Math.max((e.eh-e.sh)*ROW_H+((e.em-e.sm)/60)*ROW_H,24);
   const first=new Date(yr,mo,1).getDay(),total=new Date(yr,mo+1,0).getDate();
@@ -2155,7 +2183,8 @@ const CalView=({checkouts,deliveries,user,effectiveRole})=>{
           <button onClick={next} style={NB}>→</button>
         </div>
         <div style={{display:"flex",gap:6}}>
-          <button onClick={()=>setCalMode("month")} style={MB(calMode==="month")}>Month</button>
+          <button onClick={goToday} disabled={onToday} style={{...MB(false),opacity:onToday?0.4:1,cursor:onToday?"default":"pointer"}}>Today</button>
+          <button onClick={switchToMonth} style={MB(calMode==="month")}>Month</button>
           <button onClick={switchToWeek} style={MB(calMode==="week")}>Week</button>
         </div>
       </div>
@@ -3678,9 +3707,11 @@ function LabInventory(){
                   }}>
                     <Ico n="mail" s={14} col="var(--amber)"/>Copy Text ({selectedOrders.size})
                   </Btn>
-                  {/* Writes a formatted tab in the Sheet, so it needs the backend —
-                      hidden without one, like the Digest and Backup buttons. */}
-                  {APP_CONFIG.apps_script_url && <Btn v="ghost" onClick={async()=>{
+                  {/* Rebuilds a shared tab in the Sheet, deleting what was there —
+                      an admin's artifact, and it needs the backend, so it is hidden
+                      without one, like the Digest and Backup buttons. The server
+                      refuses a member independently. */}
+                  {APP_CONFIG.apps_script_url && effectiveRole==="admin" && <Btn v="ghost" onClick={async()=>{
                     const sel=activeOrders.filter(o=>selectedOrders.has(String(o.id)));
                     addToast("info","Creating sheet summary…");
                     const r=await postAction("generatePurchaseSummary",{orders:sel});
