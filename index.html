@@ -1574,7 +1574,14 @@ const EditItemModal = ({item,onClose,onSave,onDelete,onAdd,categories,isAdmin}) 
         <div style={{gridColumn:"1/-1"}}><Fld label="Item Name"><Inp value={f.name} onChange={s("name")}/></Fld></div>
         <Fld label="Category"><Sel value={f.cat} onChange={onCatChange}>{categories.map(c=><option key={c}>{c}</option>)}</Sel></Fld>
         {isAdmin
-          ? <Fld label="Status (Admin only)"><Sel value={f.status} onChange={s("status")}>{["Available","In Use","Maintenance","Broken"].map(st=><option key={st}>{st}</option>)}</Sel></Fld>
+          ? <Fld label="Status (Admin only)" hint={item.status==="In Use"?"Someone has it — Return is what frees it":"In Use is set by checking out, not here"}>
+              <Sel value={f.status} onChange={s("status")}>
+                {/* In Use is derived from the bookings that are live right now, and
+                    syncItemStatuses() would put it back the next morning — so it is
+                    not offered as a choice. Maintenance and Broken are the real
+                    overrides, and an item can go into either while somebody has it. */}
+                {(item.status==="In Use"?["In Use","Maintenance","Broken"]:["Available","Maintenance","Broken"]).map(st=><option key={st}>{st}</option>)}
+              </Sel></Fld>
           : <Fld label="Status" hint="Set by checking out and returning; an admin can override it"><Inp value={f.status} disabled style={{opacity:.55,cursor:"not-allowed"}}/></Fld>}
         <Fld label="Quantity" hint={isSubItem(f.displayId)?"one tracked unit":undefined}>
           {isSubItem(f.displayId)
