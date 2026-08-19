@@ -285,7 +285,17 @@ function getSlackMode() {
   return "all";
 }
 
-function sendSlack(emoji, title, details, fields, priority) {
+// Slack's mrkdwn reads <...> as a control sequence: <!channel> pings everybody in
+// the channel and <https://evil.example|Click here> renders as a link wearing a
+// label of the sender's choosing. Item names, notes and person names all end up
+// inside a message, and all of them are typed by whoever is using the app. These
+// three characters are the ones Slack asks you to escape; * and _ stay live, so
+// the labels the callers build still render bold.
+function slackEsc_(v) {
+  return String(v == null ? "" : v).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function sendSlack(emoji, title, details, fields, priority, link) {
   if (!SLACK_WEBHOOK_URL || SLACK_WEBHOOK_URL === "YOUR_SLACK_WEBHOOK_URL_HERE" || SLACK_WEBHOOK_URL === "") return;
   var mode = getSlackMode();
   if (mode === "off") return;
@@ -302,16 +312,19 @@ function sendSlack(emoji, title, details, fields, priority) {
   }
   try {
     var blocks = [
-      { type: "section", text: { type: "mrkdwn", text: emoji + " *" + title + "*" } }
+      { type: "section", text: { type: "mrkdwn", text: emoji + " *" + slackEsc_(title) + "*" } }
     ];
-    if (details) blocks.push({ type: "section", text: { type: "mrkdwn", text: details } });
+    if (details) blocks.push({ type: "section", text: { type: "mrkdwn", text: slackEsc_(details) } });
+    // The one place a real link is wanted. Built here, after escaping, so a URL
+    // carrying a "|" cannot relabel itself.
+    if (link) blocks.push({ type: "section", text: { type: "mrkdwn", text: "<" + slackEsc_(link) + "|Purchase link>" } });
     if (fields && fields.length > 0) {
-      blocks.push({ type: "section", fields: fields.map(function(f) { return { type: "mrkdwn", text: f }; }) });
+      blocks.push({ type: "section", fields: fields.map(function(f) { return { type: "mrkdwn", text: slackEsc_(f) }; }) });
     }
     blocks.push({ type: "context", elements: [{ type: "mrkdwn", text: "LabTrack · " + new Date().toLocaleString() }] });
     UrlFetchApp.fetch(SLACK_WEBHOOK_URL, {
       method: "post", contentType: "application/json",
-      payload: JSON.stringify({ text: emoji + " " + title, blocks: blocks }),
+      payload: JSON.stringify({ text: emoji + " " + slackEsc_(title), blocks: blocks }),
       muteHttpExceptions: true,
     });
   } catch (e) {
@@ -1415,11 +1428,13 @@ function doPost(e) {
       o.requestedByEmail = userEmail;
     }
     appendRow("Orders", o);
-    var linkText = o.link ? " | <" + o.link + "|Purchase Link>" : "";
+    // The link goes through sendSlack's `link` parameter rather than being pasted
+    // into the text: a URL containing a "|" could otherwise relabel itself.
     sendSlack("🛒", "New Order Request: " + o.item,
-      "*Store:* " + (o.store||"—") + linkText,
+      "*Store:* " + (o.store||"—"),
       ["*Qty*\n" + o.qty + " " + o.unit, "*Urgency*\n" + (o.urgency||"Normal"), "*Price*\n" + (o.price||"—"), "*Requested by*\n" + userName],
-      (o.urgency==="Urgent"||o.urgency==="High")?"high":"normal");
+      (o.urgency==="Urgent"||o.urgency==="High")?"high":"normal",
+      o.link || "");
     logAudit(userName, userEmail, "AddOrder", o.item + " | " + (o.store||"—") + " | qty:" + o.qty + " | urgency:" + (o.urgency||"Normal"));
     return jsonResponse({ ok: true });
   }

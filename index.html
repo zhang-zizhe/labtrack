@@ -520,7 +520,14 @@ const API = {
         method: "POST", body: body, redirect: "follow",
       });
       const text = await r.text();
-      try { return JSON.parse(text); } catch { return { ok: true }; }
+      try { return JSON.parse(text); }
+      catch {
+        // Apps Script answers a thrown script, a quota refusal or a bad deployment
+        // with an HTML page. Treating that as success reported writes as saved
+        // that never reached the sheet.
+        console.error("[API] Not JSON:", text.slice(0, 500));
+        return { error: "Bad response", detail: "The lab sheet answered with something that wasn't a result — the write may not have been saved. Reload to see what actually landed." };
+      }
     } catch(e) { console.error("[API] post error:", e); return null; }
   }
 };
@@ -1833,7 +1840,6 @@ const ItemDetail = ({item,checkouts,onClose,onReturn,onQuickCheckout,onUse,onNot
   const [confirmId,setConfirmId]=useState(null);
   const hist=checkouts.filter(c=>c.item===item.name);
   const ac=getCatAccent(item.cat,categories);
-  const isLow=isLowStock(item)||isOutOfStock(item);
   return(
     <>
     <Modal onClose={onClose} title="" mw={640}>
@@ -1844,7 +1850,7 @@ const ItemDetail = ({item,checkouts,onClose,onReturn,onQuickCheckout,onUse,onNot
         <div style={{flex:1,minWidth:200}}>
           <h3 style={{margin:"0 0 8px",fontSize:19,fontFamily:"'Roboto',sans-serif",fontWeight:800}}>{item.name}</h3>
           <div style={{display:"flex",gap:8,marginBottom:12,flexWrap:"wrap"}}>
-            <Badge status={isLow?"Low Stock":item.status}/>
+            <Badge status={stockStatus(item)||item.status}/>
             <span style={{background:"var(--bg3)",color:ac,border:`1px solid ${ac}30`,borderRadius:20,padding:"2px 9px",fontSize:10,fontWeight:700,letterSpacing:"0.08em",textTransform:"uppercase",fontFamily:"'IBM Plex Mono',monospace"}}>{item.cat}</span>
           </div>
           <div style={{marginBottom:14}}><DescChips desc={item.desc}/></div>
@@ -2801,9 +2807,18 @@ function LabInventory(){
   };
 
   const handleSaveCategories = async (newCats) => {
+    const prev = categories;
     setCategories(newCats);
     if (APP_CONFIG.apps_script_url && user?.token !== "local") {
-      await API.post(await getFreshToken(), "saveSettings", { key: "categories", value: JSON.stringify(newCats) });
+      // This was the one write that went round postAction, so it never surfaced a
+      // refusal — an admin removed from the list since sign-in saw "Categories
+      // updated" on a change that was refused, and kept seeing it until reload.
+      const res = await postAction("saveSettings", { key: "categories", value: JSON.stringify(newCats) });
+      if (!res || res.error) {
+        setCategories(prev);
+        addToast("error", (res && (res.detail || res.error)) || "Could not save categories — nothing was changed");
+        return;
+      }
     }
     addToast("success", "Categories updated");
   };
@@ -3510,7 +3525,7 @@ function LabInventory(){
                 <div style={{marginTop:16,fontSize:16,color:"var(--sub)"}}>{items.length===0?"No items in inventory yet":"No items found"}</div>
                 <div style={{fontSize:13,marginTop:4}}>{items.length===0?"Add your first item to get started":"Try a different search or category"}</div>
                 {items.length===0 ? (
-                  <Btn style={{marginTop:16}} onClick={()=>setModal("addItem")}><Ico n="plus" s={14} col="var(--on-accent)"/>Add First Item</Btn>
+                  <Btn style={{marginTop:16}} onClick={()=>{if(editLocked){addToast("error","Editing is locked — click 🔒 in the header to unlock");return;}setModal("addItem");}}><Ico n="plus" s={14} col="var(--on-accent)"/>Add First Item</Btn>
                 ) : (
                   <button onClick={()=>{setSearch("");setCatF("All");}} style={{marginTop:16,background:"none",border:"1px solid var(--border)",color:"var(--cyan)",borderRadius:8,padding:"7px 16px",cursor:"pointer",fontSize:13}}>Clear filters</button>
                 )}
