@@ -1166,7 +1166,27 @@ function doPost(e) {
       } else {
         // Split unit: next free suffix under this base, chosen inside the lock so
         // concurrent "Add Unit" calls can't land on the same number.
-        const baseId = mainId_(parsed.prefix, parsed.num);
+        //
+        // The base number itself comes from the browser, which picked it by reading
+        // its own copy of the item list — up to a poll old, and per-browser if the
+        // admin has edited category prefixes locally. Two people adding different
+        // models at the same time both got told CE-004, and ended up printing that
+        // base on two unrelated shelves. If the base is already spoken for by an
+        // item of another name, take the next free one instead.
+        var baseId = mainId_(parsed.prefix, parsed.num);
+        var baseOwner = "";
+        allItems.forEach(function (i) {
+          var p = parseDisplayId_(i.displayId);
+          if (p && mainId_(p.prefix, p.num) === baseId && !baseOwner) baseOwner = String(i.name || "");
+        });
+        if (baseOwner && baseOwner !== String(it.name || "")) {
+          var nextNum = 0;
+          allItems.forEach(function (i) {
+            var p = parseDisplayId_(i.displayId);
+            if (p && p.prefix === parsed.prefix && p.num > nextNum) nextNum = p.num;
+          });
+          baseId = mainId_(parsed.prefix, nextNum + 1);
+        }
         var maxSub = 0;
         allItems.forEach(function (i) {
           var p = parseDisplayId_(i.displayId);

@@ -436,18 +436,26 @@ const STATUS_C = {
 };
 
 // ─── IMAGE COMPRESSION ──────────────────────────────────────────────────────
+// Resolves to a data URL, or to "" if the file cannot be read or decoded — a HEIC
+// straight off a phone, a renamed .txt, a truncated download. Without the error
+// paths the promise simply never settled and the upload sat there forever with
+// nothing on screen to say why.
 const compressImage = (file) => new Promise((resolve) => {
   const reader = new FileReader();
+  reader.onerror = () => resolve("");
   reader.onload = (e) => {
     const img = new Image();
+    img.onerror = () => resolve("");
     img.onload = () => {
-      const canvas = document.createElement("canvas");
-      let w = img.width, h = img.height;
-      if (w > 400) { h = Math.round(h * 400 / w); w = 400; }
-      canvas.width = w; canvas.height = h;
-      const ctx = canvas.getContext("2d");
-      ctx.drawImage(img, 0, 0, w, h);
-      resolve(canvas.toDataURL("image/jpeg", 0.7));
+      try {
+        const canvas = document.createElement("canvas");
+        let w = img.width, h = img.height;
+        if (w > 400) { h = Math.round(h * 400 / w); w = 400; }
+        canvas.width = w; canvas.height = h;
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0, w, h);
+        resolve(canvas.toDataURL("image/jpeg", 0.7));
+      } catch { resolve(""); }
     };
     img.src = e.target.result;
   };
@@ -705,16 +713,20 @@ const ImageUpload = ({value, onChange}) => {
   const [urlVal, setUrlVal] = useState(value && !value.startsWith("data:") ? value : "");
   const preview = value || "";
 
+  const [imgErr, setImgErr] = useState("");
   const handleFile = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    setImgErr("");
     const compressed = await compressImage(file);
+    if (!compressed) { setImgErr("That file couldn't be read as an image — try a JPEG or PNG."); return; }
     onChange(compressed);
   };
 
   return (
     <div>
       <input ref={fileRef} type="file" accept="image/*" style={{display:"none"}} onChange={handleFile}/>
+      {imgErr&&<div style={{color:"var(--red)",fontSize:12,marginBottom:6}}>{imgErr}</div>}
       <input ref={cameraRef} type="file" accept="image/*" capture="environment" style={{display:"none"}} onChange={handleFile}/>
       <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
         {preview && <img src={preview} alt="Preview" style={{width:80,height:80,objectFit:"cover",borderRadius:10,border:"1px solid var(--border)"}}/>}
@@ -1026,7 +1038,7 @@ const CheckoutModal = ({items,onClose,onAdd,preItem="",userName="",userEmail="",
   };
   const timeInputStyle={background:"var(--bg1)",border:"1px solid var(--border)",borderRadius:8,padding:"9px 10px",color:"var(--text)",fontSize:14,outline:"none",width:"100%",fontFamily:"'Roboto',sans-serif",boxSizing:"border-box"};
   return(
-    <Modal onClose={onClose} title="Check Out Items" mw={660}>
+    <Modal onClose={onClose} title="Check Out Items" mw={660} dirty={valid.length>0||retDate.trim()!==""||notes.trim()!==""||groupEmails.trim()!==""}>
       <div style={{display:"flex",flexDirection:"column",gap:14}}>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
           <Fld label="Person *"><Inp placeholder="Your name" value={coUser} onChange={e=>setCoUser(e.target.value)}/></Fld>
@@ -1600,7 +1612,7 @@ const PendingItemModal = ({order,allItems,categories,onClose,onConfirm}) => {
   const chk=k=>e=>setF(p=>({...p,[k]:e.target.checked}));
   const onCatChange=e=>{setF(p=>({...p,cat:e.target.value}));setDisplayId(genDisplayId(e.target.value,allItems));};
   return(
-    <Modal onClose={onClose} title="📦 Add Received Item to Inventory" mw={560}>
+    <Modal onClose={onClose} title="📦 Add Received Item to Inventory" mw={560} dirty={true}>
       <p style={{color:"var(--sub)",fontSize:13,marginBottom:10}}>Order received! Fill in the missing details before it goes into inventory.</p>
       <div style={{background:"var(--amber-d)",border:"1px solid color-mix(in srgb, var(--amber) 30%, transparent)",borderRadius:8,padding:"9px 12px",marginBottom:14,fontSize:12,color:"var(--amber)"}}>
         <strong>Order qty:</strong> {order.qty} {order.unit} — adjust Qty &amp; Unit below to reflect what's actually going into inventory.
@@ -1642,7 +1654,11 @@ const OrderModal = ({onClose,onAddMany,userName="",userEmail="",categories}) => 
   const removeItem = i => setItems(p=>p.filter((_,j)=>j!==i));
   const upd = (i,field,val) => setItems(p=>p.map((it,j)=>j===i?{...it,[field]:val}:it));
 
-  const validItems = items.filter(it=>it.name.trim()&&it.qty&&it.link.trim());
+  // safeUrl, not just non-empty: the row already shows "must start with https://"
+  // in red, but the item still counted as valid and Submit stayed enabled — and
+  // the order list renders the link through safeUrl too, so a rejected one simply
+  // disappeared and the order arrived with no link at all.
+  const validItems = items.filter(it=>it.name.trim()&&it.qty&&safeUrl(it.link));
   const canSubmit  = store.trim() && validItems.length>0;
 
   const submit = () => {
@@ -1954,6 +1970,9 @@ const dayList=(a,b)=>{
   const e=b?(()=>{const[by,bm,bd]=b.split("-").map(Number);return new Date(by,bm-1,bd);})():new Date(ay,am-1,ad);
   const out=[]; let guard=0;
   while(d<=e&&guard++<400){out.push(dsOf(d));d.setDate(d.getDate()+1);}
+  // Truncated. The caller marks the final entry `last` and prints the return time
+  // beside it, which would be a lie about a day more than a year short of the end.
+  if(d<=e) out.truncated=true;
   return out;
 };
 // What to print on one day of a booking. A daily window says the same thing every
@@ -2003,13 +2022,21 @@ const CalView=({checkouts,deliveries,user,effectiveRole})=>{
     visibleCos.forEach(c=>{
       const days=dayList(getDatePart(c.out),getDatePart(c.ret)||getDatePart(c.out));
       days.forEach((ds,i)=>{
-        const first=i===0,last=i===days.length-1;
+        const first=i===0,last=i===days.length-1&&!days.truncated;
         // A windowed booking has real hours every day; a multi-day all-day hold
         // has none, so it belongs in the all-day strip like any calendar puts it.
         const allDay=!hasWindow(c)&&days.length>1;
         (m[ds]=m[ds]||[]).push({t:calKind(c),l:c.item,user:c.user,time:spanTime(c,first,last),first,last,allDay,co:c,id:c.id});
       });
     });
+    // A month cell shows the first two and hides the rest behind "+N". Insertion
+    // order put every delivery first, so an OVERDUE hold could sit in the overflow
+    // while a package that arrived took the visible slot. Order by what matters:
+    // overdue, then in use, then awaiting approval, then deliveries, then returned;
+    // within a kind, by when it starts.
+    const RANK={odd:0,act:1,pend:2,pkg:3,done:4};
+    Object.keys(m).forEach(ds=>m[ds].sort((a,b)=>
+      (RANK[a.t]-RANK[b.t]) || String(a.time||"").localeCompare(String(b.time||"")) || String(a.l).localeCompare(String(b.l))));
     return m;
   },[visibleCos,deliveries]);
   const now=new Date();

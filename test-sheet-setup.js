@@ -582,6 +582,27 @@ console.log("purchase approval is the admin's, whichever door you knock on");
         /already/.test(post({ action:"updateOrder", order:{ id:"o1", qty:9 } }).detail || ""));
 }
 
+console.log("a printed base label belongs to one thing");
+{
+  const ss9 = fresh();
+  const c9 = load(ss9);
+  c9.setupNewLab();
+  c9.writeSetting("admins", JSON.stringify(["zzhan409@jh.edu"]));
+  c9.verifyToken = () => ({ email:"zzhan409@jh.edu", name:"Z", oid:"a" });
+  const post = p => JSON.parse(c9.doPost({ postData:{ contents: JSON.stringify(Object.assign({token:"t"}, p)) } }).__text);
+  const add = (name, displayId) => post({ action:"addItem", item:{ id:name+displayId, name, cat:"Sensors & Vision",
+    qty:1, unit:"units", loc:"H306", minQty:0, img:"", desc:"", status:"Available", usedBy:[], serial:"",
+    displayId, shared:false, consumable:false } });
+
+  check("first split unit takes the base it asked for", add("RealSense D435","SV-001-01").displayId === "SV-001-01");
+  check("a second unit of the same model joins it",     add("RealSense D435","SV-001-01").displayId === "SV-001-02");
+  // Two browsers, each reading a list a poll old, both compute SV-001 for
+  // different models. They must not both print it.
+  const other = add("Jetson Orin","SV-001-01");
+  check("a different model asking for the same base is moved off it", other.displayId === "SV-002-01");
+  check("and its own second unit follows it there", add("Jetson Orin","SV-002-01").displayId === "SV-002-02");
+}
+
 console.log("an admin is a member of their own lab");
 {
   const ss8 = fresh();

@@ -180,8 +180,11 @@ function run(scriptPath, slackMode, asAdmin) {
     loc: "Hackerman 306", minQty: 1, img: "", desc: "", status: "Available",
     usedBy: [], serial: "", displayId: "SV-000", shared: true, consumable: false } });
 
+  // Same name as i2 on purpose: a split unit belongs to the group it is named
+  // after, and addItem now moves a differently-named item off a base another item
+  // already holds, so that a printed base label means one thing on the shelf.
   step("addItem/subId", { action: "addItem", item: {
-    id: "i3", name: "RealSense D435 #2", cat: "Sensors & Vision", qty: 1, unit: "unit",
+    id: "i3", name: "RealSense D435", cat: "Sensors & Vision", qty: 1, unit: "unit",
     loc: "Hackerman 306", minQty: 0, img: "", desc: "", status: "Available",
     usedBy: [], serial: "", displayId: "SV-001-01", shared: false, consumable: false } });
 
