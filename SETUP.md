@@ -51,6 +51,7 @@ The backend uses a Google Sheet with these tabs:
 | `categories` | `["Robots & Motors","Sensors & Vision","Compute & Electronics","Wiring & Networking","Tools & Hardware","Consumables & Supplies","Safety & Facility","Other"]` |
 | `admins` | `["jdoe12@jh.edu"]` — use the **sign-in name** (`<JHED>@jh.edu`), not the `@jhu.edu` mail alias. Compared case-insensitively. Must be valid JSON: `isAdmin` treats a value it cannot parse as "nobody is an admin", and only the Settings tab itself can then put you back. Saving it through the app is checked for exactly that, and refuses a list that leaves you out. |
 | `members` | `["jdoe12@jh.edu","asmith3@jh.edu"]` — if present and non-empty, only these accounts can sign in; all other JHU accounts are rejected. Omit the key (or leave it as `[]`) to allow anyone in the JHU tenant. **Anyone in `admins` is a member whether or not they are listed here** — otherwise filling this in and forgetting yourself would lock you out of your own lab, settings included. |
+| `cat_prefixes` | `{"Robots & Motors":"RM","Sensors & Vision":"SV"}` — the label prefix per category, set from **Manage Categories** in the app. Written here as well as cached per-browser, because it decides what gets printed on a sticker: when it lived only in `localStorage`, the admin's machine and everyone else's produced two label series for one category, and clearing site data started a third |
 | `slack_mode` | `all` or `important` or `digest` or `off` |
 
 **DeleteLog** (auto-created) — `date | type | name | details | deletedBy`

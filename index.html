@@ -840,7 +840,9 @@ const ManageCategoriesModal = ({categories, onSave, onClose}) => {
   const autoP = c => {const words=c.split(/[\s&\/\-_]+/).filter(Boolean);return(words.length===1?words[0].slice(0,4):words.map(w=>w[0]).join("")).toUpperCase()||"GEN";};
   const addCat = () => {const t=newCat.trim();if(t&&!cats.includes(t)){setCats([...cats,t]);setNewCat("");}};
   const removeCat = (c) => setCats(cats.filter(x=>x!==c));
-  const saveAll = () => {localStorage.setItem("labtrack_catprefixes",JSON.stringify(prefixes));onSave(cats);onClose();};
+  // Prefixes decide what gets printed on a sticker, so they belong to the lab, not
+  // to this browser. localStorage is only the cache catPrefix() reads.
+  const saveAll = () => {localStorage.setItem("labtrack_catprefixes",JSON.stringify(prefixes));onSave(cats,prefixes);onClose();};
   return (
     <Modal onClose={onClose} title="Manage Categories" mw={460}>
       <div style={{color:"var(--dim)",fontSize:12,marginBottom:10}}>Optionally set a custom prefix per category — auto-generated from initials if left blank. Label IDs look like <span style={{color:"var(--cyan)",fontFamily:"'IBM Plex Mono',monospace"}}>RM-001</span>, <span style={{color:"var(--cyan)",fontFamily:"'IBM Plex Mono',monospace"}}>SV-042</span>.</div>
@@ -2710,6 +2712,13 @@ function LabInventory(){
             }
           } catch {}
         }
+        // catPrefix() reads this cache; the lab's copy is authoritative.
+        if (data.settings && data.settings.cat_prefixes) {
+          try {
+            const p = JSON.parse(data.settings.cat_prefixes);
+            if (p && typeof p === "object") localStorage.setItem("labtrack_catprefixes", JSON.stringify(p));
+          } catch {}
+        }
         if (data.userRole) setUserRole(data.userRole);
         if (data.settings && data.settings.last_backup) setLastBackup(data.settings.last_backup);
       }
@@ -2833,10 +2842,14 @@ function LabInventory(){
     }
   };
 
-  const handleSaveCategories = async (newCats) => {
+  const handleSaveCategories = async (newCats, newPrefixes) => {
     const prev = categories;
     setCategories(newCats);
     if (APP_CONFIG.apps_script_url && user?.token !== "local") {
+      // The prefixes go with them. They were saved to localStorage alone, so the
+      // admin's own machine and everyone else's produced two label series for one
+      // category — and clearing site data started a third.
+      if (newPrefixes) await postAction("saveSettings", { key: "cat_prefixes", value: JSON.stringify(newPrefixes) });
       // This was the one write that went round postAction, so it never surfaced a
       // refusal — an admin removed from the list since sign-in saw "Categories
       // updated" on a change that was refused, and kept seeing it until reload.
