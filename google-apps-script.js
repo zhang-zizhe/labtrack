@@ -109,6 +109,50 @@ function leadTooFar_(c) {
 }
 
 /**
+ * Why a booking's dates can't stand, or "" if they can.
+ *
+ * Every rule in this file is a comparison between two instants, and a comparison
+ * against something unparseable is false — so a blank, garbled or backwards range
+ * doesn't break the rules loudly, it slips past all of them. A return date before
+ * the checkout date is the one a person actually hits, by typing the wrong month
+ * into the second date box: the hold measures as negative days so it never needs
+ * approval, it clashes with nothing so it never blocks, and it draws on no
+ * calendar day at all, while sitting in the list as an active, overdue loan.
+ */
+function badRange_(c) {
+  const start = bookingMs_(c.out), end = bookingMs_(c.ret);
+  if (start === null) return "Checkout date is missing or not a date";
+  if (end === null) return "Return date is missing or not a date";
+  if (end <= start) return "Return date must be after the checkout date";
+  const from = minutes_(c.fromTime), to = minutes_(c.toTime);
+  // Blank is all day; one of the pair without the other is half a window.
+  const hasFrom = String(c.fromTime || "") !== "", hasTo = String(c.toTime || "") !== "";
+  if (hasFrom !== hasTo) return "A daily window needs both a start and an end time";
+  if (hasFrom && (from === null || to === null)) return "Daily window times must look like HH:MM";
+  if (hasFrom && to <= from) return "The daily window must end after it starts";
+  return "";
+}
+
+/**
+ * Who is holding a sole-use item right now, or "" if it is on the shelf.
+ *
+ * Sole-use items are never clash-checked by date — bookingConflict_ deliberately
+ * skips them — so the only thing keeping one exclusive is the In Use flag. That
+ * makes this the whole of rule 2 for them, and it has to be tested server-side:
+ * the picker that hides In Use items from the form is working off a copy of the
+ * item list that is up to a poll old.
+ */
+function soleUseHeldBy_(c) {
+  const item = findRow("Items", c.itemId ? c.itemId : function (r) { return r.name === c.item; });
+  if (!item) return "";
+  const shared = item.shared === true || String(item.shared).toLowerCase() === "true";
+  if (shared || item.status !== "In Use") return "";
+  const holders = Array.isArray(item.usedBy) ? item.usedBy : [];
+  if (holders.indexOf(c.user) >= 0) return "";   // already theirs
+  return holders.length ? holders.join(", ") : "someone else";
+}
+
+/**
  * Why a booking has to wait for an admin, or "" if it can go straight through.
  *
  * Two reasons. Being long is the obvious one. The other is that somebody is
@@ -155,14 +199,7 @@ function bookingsClash_(a, b) {
  * it the slot may be gone. ignoreId skips the row being approved, which is in the
  * table by then and would otherwise clash with itself.
  */
-function overlapping_(c, ignoreId, status, sharedOnly) {
-  if (sharedOnly) {
-    // Blocking is only ever asked about shared items — a sole-use item is kept
-    // exclusive by its availability, not by the hour.
-    const target = findRow("Items", c.itemId ? c.itemId : function (r) { return r.name === c.item; });
-    const shared = !!target && (target.shared === true || String(target.shared).toLowerCase() === "true");
-    if (!shared) return [];
-  }
+function overlapping_(c, ignoreId, status) {
   return readTable("Checkouts").filter(function (x) {
     if (ignoreId != null && String(x.id) === String(ignoreId)) return false;
     if (x.status !== status) return false;
@@ -182,9 +219,18 @@ function overlapping_(c, ignoreId, status, sharedOnly) {
  * because the slot may have been taken while the request sat in the queue.
  * ignoreId skips the row being approved or edited, which is in the table by then
  * and would otherwise clash with itself.
+ *
+ * This used to skip sole-use items on the grounds that they are kept exclusive by
+ * their availability rather than by the hour. They are not: the In Use flag is set
+ * by the browser's copy of the item list, which is up to a poll old, so two people
+ * who pressed Check Out inside the same thirty seconds both got the arm. And the
+ * flag knows nothing about dates, so it could not tell a booking for next week
+ * from one for right now. A date range is the honest test for both kinds of item —
+ * a sole-use item simply has no daily window, which reads as all day and clashes
+ * with anything inside the range, which is what exclusive means.
  */
 function bookingConflict_(c, ignoreId) {
-  const clash = overlapping_(c, ignoreId, "Active", true)[0];
+  const clash = overlapping_(c, ignoreId, "Active")[0];
   if (!clash) return "";
   return "Already booked by " + clash.user + " (" + clash.out + " \u2192 " + clash.ret +
          (clash.fromTime ? ", " + clash.fromTime + "\u2013" + clash.toTime : "") + ")";
@@ -197,7 +243,7 @@ function bookingConflict_(c, ignoreId) {
 // pending request doesn't mark the item In Use, so the availability filter that
 // normally keeps a sole-use item exclusive cannot see the queue at all.
 function competing_(c, ignoreId) {
-  return overlapping_(c, ignoreId, CHECKOUT_PENDING, false).map(function (x) {
+  return overlapping_(c, ignoreId, CHECKOUT_PENDING).map(function (x) {
     return { id: x.id, user: x.user, out: x.out, ret: x.ret, fromTime: x.fromTime, toTime: x.toTime };
   });
 }
@@ -679,6 +725,11 @@ function normalizeEmails_(list) {
 // names can access the system. If the key is absent or empty, any account in the
 // JHU tenant is allowed (backward compatible).
 function isMember(email) {
+  // An admin is a member by definition. Without this, filling in the allowlist and
+  // forgetting your own address locks you out of your own lab — including out of
+  // the Settings that would let you undo it, since doGet checks this too. The only
+  // way back would be editing the sheet by hand.
+  if (isAdmin(email)) return true;
   var raw = readSettings()["members"];
   if (raw === undefined) return true; // key not set → allow anyone in the JHU tenant
   try {
@@ -806,49 +857,71 @@ function getOrCreateSheet(name, headers) {
   return sheet;
 }
 
+// Turn one raw sheet row into the object the rest of the backend expects.
+//
+// A Sheet is not a store of strings: it parses what you write. "2026-08-18 09:00"
+// comes back a Date, "09:00" comes back a Date in 1899, a serial number that
+// happens to be all digits comes back a Number, "TRUE" comes back a boolean.
+// Every rule in this file is written against strings, so the coercion has to be
+// undone in exactly one place — here — and every reader has to go through it.
+// test-sheets-coercion.js is the file that keeps that honest.
+function normalizeRow_(headers, row) {
+  var pad = function (n) { return String(n).padStart(2, "0"); };
+  var ymd = function (d) { return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()); };
+  var hm  = function (d) { return pad(d.getHours()) + ":" + pad(d.getMinutes()); };
+  var obj = {};
+  headers.forEach(function (h, i) {
+    var val = row[i];
+    if (h === "usedBy") {
+      if (typeof val === "string") {
+        try { val = JSON.parse(val); } catch(e) { val = []; }
+      }
+      // Always ensure usedBy is a clean array of non-empty strings
+      if (!Array.isArray(val)) val = [];
+      else val = val.filter(function(x){ return x != null && x !== ""; });
+    }
+    if (["qty", "minQty"].indexOf(h) >= 0 && val !== "") {
+      val = Number(val);
+    }
+    // itemId is a foreign key to Items.id, so it has to be the same type as the
+    // key it points at. Coercing it to a Number turned any non-numeric id into
+    // NaN, and NaN is falsy, so every "same item?" test quietly fell through to
+    // comparing item *names* instead.
+    if (h === "id" || h === "itemId") { val = val === "" || val == null ? (h === "itemId" ? "" : String(val)) : String(val); }
+    // Ensure text fields are strings — Sheets auto-detects numbers in text cells
+    // (e.g. a serial number "12345678" returns as the JS number 12345678)
+    var textFields = ["name","loc","cat","desc","serial","unit","status","displayId","tags","item","store","requestedBy","reason","link","from","receivedBy","tracking","user","checkedOutByEmail","groupEmails","requestedByEmail"];
+    if (textFields.indexOf(h) >= 0 && typeof val !== "string") {
+      val = val == null ? "" : String(val);
+    }
+    // Datetime fields — Sheets turns "YYYY-MM-DD HH:MM" into a Date object
+    if (["out", "ret"].indexOf(h) >= 0) {
+      if (val instanceof Date) val = ymd(val) + " " + hm(val);
+      else if (val != null && typeof val !== "string") val = String(val);
+    }
+    if (h === "date") {
+      if (val instanceof Date) val = ymd(val);
+      else if (val != null && typeof val !== "string") val = String(val);
+    }
+    // A bare "09:00" is a time of day to Sheets, and comes back as a Date on
+    // 1899-12-30. Left alone it fails minutes_()'s HH:MM match, which reads as
+    // "no window" — and every daily booking window silently becomes all day.
+    if (["fromTime", "toTime"].indexOf(h) >= 0) {
+      if (val instanceof Date) val = hm(val);
+      else if (val == null) val = "";
+      else if (typeof val !== "string") val = String(val);
+    }
+    obj[h] = val;
+  });
+  return obj;
+}
+
 function sheetToJson(sheet) {
   if (!sheet) return [];
   const data = sheet.getDataRange().getValues();
   if (data.length < 2) return [];
   const headers = data[0];
-  return data.slice(1).map(row => {
-    const obj = {};
-    headers.forEach((h, i) => {
-      let val = row[i];
-      if (h === "usedBy") {
-        if (typeof val === "string") {
-          try { val = JSON.parse(val); } catch(e) { val = []; }
-        }
-        // Always ensure usedBy is a clean array of non-empty strings
-        if (!Array.isArray(val)) val = [];
-        else val = val.filter(function(x){ return x != null && x !== ""; });
-      }
-      if (["qty", "minQty", "itemId"].includes(h) && val !== "") {
-        val = Number(val);
-      }
-      if (h === "id") { val = String(val); }
-      // Ensure text fields are strings — Sheets auto-detects numbers in text cells
-      // (e.g. a serial number "12345678" returns as the JS number 12345678)
-      var textFields = ["name","loc","cat","desc","serial","unit","status","displayId","tags","item","store","requestedBy","reason","link","from","receivedBy","tracking"];
-      if (textFields.indexOf(h) >= 0 && typeof val !== "string") {
-        val = val == null ? "" : String(val);
-      }
-      // Normalize datetime fields — Sheets auto-converts "YYYY-MM-DD HH:MM" strings to Date objects
-      if (["out","ret"].includes(h)) {
-        if (val instanceof Date) {
-          val = val.getFullYear()+"-"+String(val.getMonth()+1).padStart(2,"0")+"-"+String(val.getDate()).padStart(2,"0")
-               +" "+String(val.getHours()).padStart(2,"0")+":"+String(val.getMinutes()).padStart(2,"0");
-        } else if (val != null && typeof val !== "string") { val = String(val); }
-      }
-      if (h === "date") {
-        if (val instanceof Date) {
-          val = val.getFullYear()+"-"+String(val.getMonth()+1).padStart(2,"0")+"-"+String(val.getDate()).padStart(2,"0");
-        } else if (val != null && typeof val !== "string") { val = String(val); }
-      }
-      obj[h] = val;
-    });
-    return obj;
-  });
+  return data.slice(1).map(function (row) { return normalizeRow_(headers, row); });
 }
 
 // Read every row of a table as plain objects.
@@ -866,8 +939,10 @@ function locateRow_(name, match) {
   var headers = data[0];
   var idCol = headers.indexOf("id");
   for (var i = 1; i < data.length; i++) {
-    var obj = {};
-    for (var c = 0; c < headers.length; c++) obj[headers[c]] = data[i][c];
+    // Normalized, not raw: callers hand this row straight to the booking rules,
+    // which are written against strings. A raw row gives them Sheets' Date objects
+    // and every rule quietly evaluates to "no conflict". See normalizeRow_().
+    var obj = normalizeRow_(headers, data[i]);
     var hit = (typeof match === "function")
       ? match(obj)
       : (idCol >= 0 && idsMatch(data[i][idCol], match));
@@ -1112,6 +1187,20 @@ function doPost(e) {
   if (action === "addCheckout") {
     const c = body.checkout;
 
+    // The row says who is on the hook for returning it and who may edit or
+    // withdraw it, so it has to be the person who actually asked. Admins log
+    // checkouts on other people's behalf; members only ever book for themselves.
+    if (!admin) {
+      c.checkedOutByEmail = userEmail;
+      c.user = userName;
+    }
+    // Asking is not deciding: a request is written Pending or Active by
+    // waitReason_ below, never by whatever the browser put in the field.
+    c.status = "Active";
+
+    const bad = badRange_(c);
+    if (bad) return jsonResponse({ error: "Bad dates", detail: bad });
+
     if (leadTooFar_(c)) {
       return jsonResponse({ error: "Too far ahead",
         detail: "Bookings can start at most " + MAX_LEAD_DAYS + " days from now" });
@@ -1130,6 +1219,7 @@ function doPost(e) {
     // reserved by asking, or a rejected request would quietly take it away.
     const reason = waitReason_(c, c.id);
     if (reason) c.status = CHECKOUT_PENDING;
+
     appendRow("Checkouts", c);
 
     if (reason) {
@@ -1164,7 +1254,8 @@ function doPost(e) {
       if (gone) return jsonResponse({ error: "Clash", detail: "Taken while this was waiting \u2014 " + gone });
       const item = findRow("Items", co.itemId ? co.itemId : function (r) { return r.name === co.item; });
       const shared = !!item && (item.shared === true || String(item.shared).toLowerCase() === "true");
-      if (item && !shared && item.status === "In Use" && String(item.usedBy || "").indexOf(co.user) < 0) {
+      const holders = Array.isArray(item && item.usedBy) ? item.usedBy : [];
+      if (item && !shared && item.status === "In Use" && holders.indexOf(co.user) < 0) {
         return jsonResponse({ error: "Clash", detail: "Someone checked out " + co.item + " while this was waiting" });
       }
       updateRow("Checkouts", body.checkoutId, { status: "Active" });
@@ -1201,6 +1292,9 @@ function doPost(e) {
       if (body.checkout && body.checkout[k] !== undefined) patch[k] = body.checkout[k];
     });
     const merged = Object.assign({}, co, patch);
+
+    const badEdit = badRange_(merged);
+    if (badEdit) return jsonResponse({ error: "Bad dates", detail: badEdit });
 
     if (leadTooFar_(merged)) {
       return jsonResponse({ error: "Too far ahead",
@@ -1276,6 +1370,13 @@ function doPost(e) {
   // ── Add Order ─────────────────────────────────────────────────────────────
   if (action === "addOrder") {
     const o = body.order;
+    // Purchasing approval is the admin's, so a request cannot be born approved and
+    // the requester cannot be someone else. Only updateOrderStatus moves it on.
+    if (!admin) {
+      o.status = "Pending";
+      o.requestedBy = userName;
+      o.requestedByEmail = userEmail;
+    }
     appendRow("Orders", o);
     var linkText = o.link ? " | <" + o.link + "|Purchase Link>" : "";
     sendSlack("🛒", "New Order Request: " + o.item,
@@ -1303,7 +1404,12 @@ function doPost(e) {
     if (!admin && String(existing.status || "") !== "Pending") {
       return jsonResponse({ error: "Forbidden", detail: "This order has already been " + String(existing.status).toLowerCase() + " — ask an admin to change it." });
     }
-    const fields = ["store","item","link","qty","unit","price","cat","requestedBy","reason","urgency","date","status"];
+    // `status` is admin-only, and deliberately so: updateOrderStatus refuses a
+    // member outright, and without this line the same member could reach straight
+    // past it and set their own request to "Approved" through this branch. The
+    // form hides the dropdown from members, but the form is not the boundary.
+    const fields = ["store","item","link","qty","unit","price","cat","reason","urgency","date"];
+    if (admin) fields.push("status", "requestedBy");
     const patch = {};
     fields.forEach(f => { if (o[f] !== undefined) patch[f] = o[f]; });
     updateRow("Orders", o.id, patch);
@@ -1501,9 +1607,12 @@ function updateItemStatus(itemId, itemName, newStatus, userName, mode) {
   const isShared = item.shared === true || String(item.shared).toLowerCase() === "true";
   if (!(newStatus === "In Use" && isShared)) patch.status = newStatus;
 
-  let usedBy = [];
-  try { usedBy = JSON.parse(item.usedBy) || []; } catch(e) {}
+  // The storage layer already hands usedBy over as an array; the string branch is
+  // for a row written before it did.
+  let usedBy = item.usedBy;
+  if (typeof usedBy === "string") { try { usedBy = JSON.parse(usedBy); } catch(e) { usedBy = []; } }
   if (!Array.isArray(usedBy)) usedBy = [];
+  else usedBy = usedBy.slice();
   if (mode === "add" && !usedBy.includes(userName)) usedBy.push(userName);
   else if (mode === "remove") usedBy = usedBy.filter(u => u !== userName);
   patch.usedBy = usedBy;   // serialized on write by the storage layer

@@ -231,6 +231,9 @@ console.log("shared items book by the hour; long holds wait for an admin");
     item("p2","Spare Arm",      false, "RM-002"),   // sole-use competition
     item("p3","Queue Rig",      false, "RM-003"),   // sole-use queue-jumping
     item("p4","Lead Rig",       false, "RM-004"),   // how far ahead you may book
+    item("p5","Reject Rig",     false, "RM-005"),   // rejecting leaves the item alone
+    item("p6","Solo Rig",       false, "RM-006"),   // rule 2 on a sole-use item
+    item("p7","Range Rig",      false, "RM-007"),   // dates that do not make sense
   ]);
   const c6 = load(ss6);
   const asAdmin  = () => { c6.verifyToken = () => ({ email:"zzhan409@jh.edu", name:"Z", oid:"a" }); };
@@ -313,14 +316,17 @@ console.log("shared items book by the hour; long holds wait for an admin");
         post({ action:"decideCheckout", checkoutId:"k10", approve:false }).ok === true);
 
   // ── rejecting leaves the item alone ──
-  const long3 = book("k12","Lee","2026-09-10 09:00","2026-09-29 09:00","","","Franka Arm","p1");
+  // On its own rig: Franka Arm is held by Hal's approved hold from here on, and
+  // rule 2 now covers sole-use items, so a booking across it would be refused
+  // rather than queued — which is the point of the checks above, not of these.
+  const long3 = book("k12","Lee","2026-09-10 09:00","2026-09-29 09:00","","","Reject Rig","p5");
   check("another long hold is pending", long3.pending === true);
   check("rejecting marks it Rejected",
         post({ action:"decideCheckout", checkoutId:"k12", approve:false }).ok === true &&
         row("k12").status === "Rejected");
-  check("a rejected request never touched the item", used("p1").indexOf("Lee") < 0);
+  check("a rejected request never touched the item", used("p5").indexOf("Lee") < 0);
   check("a rejected slot frees up for someone else",
-        !book("k13","Moe","2026-09-11 09:00","2026-09-12 09:00","","","Franka Arm","p1").pending);
+        !book("k13","Moe","2026-09-11 09:00","2026-09-12 09:00","","","Reject Rig","p5").pending);
 
   // ── two people wanting the same sole-use item is the ordinary case, and the
   // one the availability filter cannot catch: a pending request marks nothing In Use.
@@ -427,6 +433,162 @@ console.log("shared items book by the hour; long holds wait for an admin");
   check("moving it onto Ned's active slot is refused",
         post({ action:"updateCheckout", checkoutId:"k15", checkout:{ out:"2026-09-05 09:00", ret:"2026-09-07 09:00", fromTime:"14:00", toTime:"16:00" } }).error === "Clash");
   check("so it stays where it was", row("k15").out === "2026-09-08 09:00");
+
+  // ── rule 2 covers sole-use items too ──
+  // It used to skip them, on the grounds that the In Use flag kept them exclusive.
+  // The flag is set from a browser copy that is a poll old, and it knows nothing
+  // about dates, so it did neither job.
+  check("a sole-use booking goes in",
+        book("u1","Sam","2026-09-01 09:00","2026-09-03 17:00","","","Solo Rig","p6").ok === true);
+  check("a second one across the same days is refused",
+        book("u2","Tam","2026-09-02 09:00","2026-09-04 17:00","","","Solo Rig","p6").error === "Clash");
+  check("and nothing was written", row("u2") === undefined);
+  check("one after it ends is fine",
+        book("u3","Uma","2026-09-03 17:00","2026-09-05 17:00","","","Solo Rig","p6").ok === true);
+  check("the item is not handed to two people at once",
+        used("p6").length === 2 && used("p6").indexOf("Tam") < 0);
+  // Rule 2 refuses before rule 3 decides, so an active booking is not something
+  // you may queue behind — only a *pending* one is (rule 4).
+  check("a long request across an active booking is refused, not queued",
+        book("u4","Vic","2026-09-01 09:00","2026-09-25 09:00","","","Solo Rig","p6").error === "Clash");
+  check("a long request in a clear stretch still queues",
+        book("u5","Wyn","2026-09-08 09:00","2026-09-28 09:00","","","Solo Rig","p6").pending === true);
+  check("and someone else may queue behind it",
+        book("u6","Zed","2026-09-10 09:00","2026-09-12 09:00","","","Solo Rig","p6").reason === "queue");
+
+  // ── dates that do not make sense ──
+  // Every rule is a comparison, and a comparison against a non-date is false, so
+  // these used to slip past all five at once rather than being refused by one.
+  const bad = (id,out,ret,from,to) => book(id,"Wes",out,ret,from,to,"Range Rig","p7");
+  check("a return before the checkout is refused",
+        bad("b1","2026-09-10 09:00","2026-09-08 09:00").error === "Bad dates");
+  check("with a message a person can act on",
+        /after the checkout date/.test(bad("b2","2026-09-10 09:00","2026-09-08 09:00").detail));
+  check("a return equal to the checkout is refused",
+        bad("b3","2026-09-10 09:00","2026-09-10 09:00").error === "Bad dates");
+  check("a missing return date is refused", bad("b4","2026-09-10 09:00","").error === "Bad dates");
+  check("an unparseable date is refused", bad("b5","2026-09-10 09:00","banana").error === "Bad dates");
+  check("a window with only one end is refused",
+        bad("b6","2026-09-10 09:00","2026-09-11 09:00","09:00","").error === "Bad dates");
+  check("a window that ends before it starts is refused",
+        bad("b7","2026-09-10 09:00","2026-09-11 09:00","18:00","09:00").error === "Bad dates");
+  check("and none of them were written",
+        ["b1","b2","b3","b4","b5","b6","b7"].every(id => row(id) === undefined));
+  check("an ordinary range still books",
+        bad("b8","2026-09-10 09:00","2026-09-11 17:00").ok === true);
+  check("an editor cannot move a request onto a backwards range", (() => {
+    const q = book("b9","Xan","2026-09-12 09:00","2026-10-01 09:00","","","Range Rig","p7");
+    return q.pending === true &&
+      post({ action:"updateCheckout", checkoutId:"b9", checkout:{ ret:"2026-09-11 09:00" } }).error === "Bad dates";
+  })());
+
+  // ── the row says who actually asked ──
+  asMember();
+  check("a member's booking is filed under their own name", (() => {
+    post({ action:"addCheckout", checkout:{ id:"f1", itemId:"p7", item:"Range Rig", user:"Somebody Else",
+      out:"2026-09-15 09:00", ret:"2026-09-16 09:00", status:"Active",
+      checkedOutByEmail:"victim@jh.edu", groupEmails:"", qty:1, fromTime:"", toTime:"" } });
+    const r = row("f1");
+    return r.checkedOutByEmail === "member@jh.edu" && r.user === "Member";
+  })());
+  check("and a member cannot post themselves an approved booking", (() => {
+    // Inside the 31-day lead window, on a rig nothing else is holding.
+    post({ action:"addCheckout", checkout:{ id:"f2", itemId:"p5", item:"Reject Rig", user:"Member",
+      out:"2026-09-13 09:00", ret:"2026-10-13 09:00", status:"Active",
+      checkedOutByEmail:"member@jh.edu", groupEmails:"", qty:1, fromTime:"", toTime:"" } });
+    return row("f2").status === "Pending Approval";
+  })());
+  // Returning is the checkout owner's, their listed group, or an admin's. This
+  // used to be covered only by test-storage-layer.js's non-admin run, which could
+  // exercise it only because addCheckout let the caller forge whose row it was.
+  asAdmin();
+  post({ action:"addCheckout", checkout:{ id:"g1", itemId:"p6", item:"Solo Rig", user:"Yara",
+    out:"2026-09-08 09:00", ret:"2026-09-09 09:00", status:"Active",
+    checkedOutByEmail:"yara@jh.edu", groupEmails:"pal@jh.edu", qty:1, fromTime:"", toTime:"" } });
+  asMember();
+  check("a stranger cannot return someone else's checkout",
+        post({ action:"returnItem", checkoutId:"g1" }).error === "Forbidden");
+  check("someone on the group list can",
+        (() => { c6.verifyToken = () => ({ email:"pal@jh.edu", name:"Pal", oid:"p" });
+                 return post({ action:"returnItem", checkoutId:"g1" }).ok === true; })());
+  check("and the row says Returned", row("g1").status === "Returned");
+
+  asAdmin();
+  check("an admin may still log a checkout for someone else", (() => {
+    post({ action:"addCheckout", checkout:{ id:"f3", itemId:"p6", item:"Solo Rig", user:"Yara",
+      out:"2026-09-06 09:00", ret:"2026-09-07 09:00", status:"Active",
+      checkedOutByEmail:"yara@jh.edu", groupEmails:"", qty:1, fromTime:"", toTime:"" } });
+    const r = row("f3");
+    return r.user === "Yara" && r.checkedOutByEmail === "yara@jh.edu";
+  })());
+}
+
+console.log("purchase approval is the admin's, whichever door you knock on");
+{
+  const ss7 = fresh();
+  const c7 = load(ss7);
+  c7.setupNewLab();
+  c7.writeSetting("admins", JSON.stringify(["zzhan409@jh.edu"]));
+  const asAdmin  = () => { c7.verifyToken = () => ({ email:"zzhan409@jh.edu", name:"Z", oid:"a" }); };
+  const asMember = () => { c7.verifyToken = () => ({ email:"member@jh.edu", name:"Member", oid:"m" }); };
+  const post = p => JSON.parse(c7.doPost({ postData:{ contents: JSON.stringify(Object.assign({token:"t"}, p)) } }).__text);
+  const ord  = id => c7.readTable("Orders").find(o => o.id === id);
+  const mkOrder = (id, extra) => Object.assign({ id, store:"Amazon", item:"GPU", link:"", qty:1, unit:"ea",
+    price:"$2400", cat:"Tools & Hardware", requestedBy:"Member", reason:"research", date:"2026-08-16",
+    urgency:"Normal", status:"Pending", requestedByEmail:"member@jh.edu" }, extra || {});
+
+  asMember();
+  check("the guarded door refuses a member",
+        post({ action:"addOrder", order:mkOrder("o1") }).ok === true &&
+        post({ action:"updateOrderStatus", orderId:"o1", status:"Approved" }).error === "Forbidden");
+  // updateOrderStatus is admin-only and says so. updateOrder used to carry `status`
+  // in its whitelist, so the same member could walk round the back and set it.
+  post({ action:"updateOrder", order:{ id:"o1", status:"Approved" } });
+  check("and so does the side door", ord("o1").status === "Pending");
+  check("a member may still fix the details of their own request",
+        post({ action:"updateOrder", order:{ id:"o1", qty:2, price:"$4800" } }).ok === true &&
+        ord("o1").qty === 2 && ord("o1").price === "$4800");
+  check("an order cannot be born approved",
+        post({ action:"addOrder", order:mkOrder("o2", { status:"Approved" }) }).ok === true &&
+        ord("o2").status === "Pending");
+  check("nor filed under someone else's name",
+        post({ action:"addOrder", order:mkOrder("o3", { requestedByEmail:"pi@jh.edu", requestedBy:"The PI" }) }).ok === true &&
+        ord("o3").requestedByEmail === "member@jh.edu" && ord("o3").requestedBy === "Member");
+
+  asAdmin();
+  check("an admin approves through the front door",
+        post({ action:"updateOrderStatus", orderId:"o1", status:"Approved" }).ok === true &&
+        ord("o1").status === "Approved");
+  check("and may still edit an approved order",
+        post({ action:"updateOrder", order:{ id:"o1", status:"Ordered" } }).ok === true &&
+        ord("o1").status === "Ordered");
+  asMember();
+  check("the requester can no longer touch it once it is decided",
+        /already/.test(post({ action:"updateOrder", order:{ id:"o1", qty:9 } }).detail || ""));
+}
+
+console.log("an admin is a member of their own lab");
+{
+  const ss8 = fresh();
+  const c8 = load(ss8);
+  c8.setupNewLab();
+  c8.writeSetting("admins", JSON.stringify(["zzhan409@jh.edu"]));
+  const post = p => JSON.parse(c8.doPost({ postData:{ contents: JSON.stringify(Object.assign({token:"t"}, p)) } }).__text);
+  c8.verifyToken = () => ({ email:"zzhan409@jh.edu", name:"Z", oid:"a" });
+
+  // Filling in the allowlist and forgetting yourself used to lock you out of your
+  // own lab — including out of the settings that would let you undo it.
+  post({ action:"saveSettings", key:"members", value: JSON.stringify(["member@jh.edu"]) });
+  check("an admin left off the allowlist is still let in", c8.isMember("zzhan409@jh.edu") === true);
+  check("and can still write",
+        post({ action:"addItem", item:{ name:"Scope", cat:"Compute & Electronics", qty:1, unit:"units" } }).ok === true);
+  check("and can still put themselves back",
+        post({ action:"saveSettings", key:"members", value:"[]" }).ok === true);
+  c8.writeSetting("members", JSON.stringify(["member@jh.edu"]));
+  c8.verifyToken = () => ({ email:"stranger@jh.edu", name:"S", oid:"s" });
+  check("a stranger is still kept out", c8.isMember("stranger@jh.edu") === false);
+  check("and gets the door closed on them",
+        post({ action:"addItem", item:{ name:"X", cat:"C", qty:1, unit:"u" } }).error === "NotMember");
 }
 
 console.log("\n" + pass + " passed, " + fail + " failed");

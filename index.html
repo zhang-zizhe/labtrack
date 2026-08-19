@@ -372,6 +372,25 @@ const rivalsFor = (c, all) => all.filter(x=>String(x.id)!==String(c.id)&&isPendi
 // Mirrors waitReason_() in google-apps-script.js — keep the two in step.
 const waitReason = (c, all) => needsApproval(c) ? "long" : (rivalsFor(c,all).length ? "queue" : "");
 const blockerFor = (c, all) => all.find(x=>String(x.id)!==String(c.id)&&blocksSlot(x)&&sameBooked(x,c)&&bookingsClash(x,c));
+// Why a booking's dates don't make sense, or "" if they do. Every rule above is a
+// comparison between two instants, and comparing against a non-date is false — so
+// a backwards range doesn't trip the rules, it slips past all of them at once: it
+// measures as negative days so it never needs approval, it clashes with nothing so
+// it never blocks, and it covers no calendar day so it draws nowhere, while
+// sitting in the list as an active, already-overdue loan. Typing the wrong month
+// into the second date box is all it takes.
+// Mirrors badRange_() in google-apps-script.js — keep the two in step.
+const badRange = c => {
+  const a=bookingMs(c.out), b=bookingMs(c.ret);
+  if(a===null) return "Pick a checkout date";
+  if(b===null) return "Pick a return date";
+  if(b<=a) return "The return date has to be after the checkout date";
+  const hasFrom=String(c.fromTime||"")!=="", hasTo=String(c.toTime||"")!=="";
+  if(hasFrom!==hasTo) return "A daily window needs both a start and an end time";
+  if(hasFrom&&!(hhmmMins(c.fromTime)!==null&&hhmmMins(c.toTime)!==null&&hhmmMins(c.fromTime)<hhmmMins(c.toTime)))
+    return "The daily window has to end after it starts";
+  return "";
+};
 // Borders are mixed from the same token as the text, so they follow the theme
 // instead of being frozen hex+alpha from the old palette.
 const mix = (v,pct) => `color-mix(in srgb, var(${v}) ${pct}%, transparent)`;
@@ -944,7 +963,11 @@ const CheckoutModal = ({items,onClose,onAdd,preItem="",userName="",userEmail="",
   const sharedSel=valid.filter(sl=>items.find(i=>String(i.id)===String(sl.itemId))?.shared);
   const askWindow=sharedSel.length>0;
   const win=(askWindow&&!allDay)?{fromTime,toTime}:{fromTime:"",toTime:""};
-  const badWindow=askWindow&&!allDay&&!(hhmmMins(fromTime)!==null&&hhmmMins(toTime)!==null&&hhmmMins(fromTime)<hhmmMins(toTime));
+  // Backwards dates and a backwards window are the same class of mistake, so they
+  // are refused by the same test the backend uses. Named for the message it shows.
+  const rangeErr=badRange({out,ret,...win});
+  // Only complain about the return date once the person has actually picked one.
+  const badWindow=retDate.trim()?rangeErr:"";
   // Rule 2 — a shared item can be booked again, but not over someone else's slot.
   const clashes=sharedSel.map(sl=>{
     const hit=checkouts.find(c=>blocksSlot(c)&&String(c.itemId)===String(sl.itemId)&&bookingsClash({out,ret,...win},c));
@@ -1026,7 +1049,11 @@ const CheckoutModal = ({items,onClose,onAdd,preItem="",userName="",userEmail="",
                 <span style={{color:"var(--dim)",fontSize:12}}>every day from {outDate} to {retDate||"…"}</span>
               </div>
             )}
-            {badWindow&&<div style={{color:"var(--red)",fontSize:12,marginTop:8}}>The end time has to be later than the start time.</div>}
+          </div>
+        )}
+        {badWindow&&(
+          <div style={{background:"var(--red-d)",border:`1px solid ${mix("--red",30)}`,borderRadius:10,padding:"11px 14px",fontSize:13,color:"var(--text)",lineHeight:1.5}}>
+            {badWindow}.
           </div>
         )}
         {tooFar&&(
@@ -1093,7 +1120,7 @@ const EditRequestModal = ({co,items,checkouts,onClose,onSave}) => {
   const out=fmtDatetime(outDate,outTime);
   const ret=fmtDatetime(retDate,retTime);
   const draft={...co,out,ret,...win};
-  const badWindow=askWindow&&!allDay&&!(hhmmMins(fromTime)!==null&&hhmmMins(toTime)!==null&&hhmmMins(fromTime)<hhmmMins(toTime));
+  const badWindow=retDate.trim()?badRange({out,ret,...win}):"";
   const blocker=blockerFor(draft,checkouts);
   const rivals=rivalsFor(draft,checkouts);
   const tooFar=leadTooFar(out);
@@ -1135,7 +1162,11 @@ const EditRequestModal = ({co,items,checkouts,onClose,onSave}) => {
                 <span style={{color:"var(--dim)",fontSize:12}}>every day from {outDate} to {retDate||"…"}</span>
               </div>
             )}
-            {badWindow&&<div style={{color:"var(--red)",fontSize:12,marginTop:8}}>The end time has to be later than the start time.</div>}
+          </div>
+        )}
+        {badWindow&&(
+          <div style={{background:"var(--red-d)",border:`1px solid ${mix("--red",30)}`,borderRadius:10,padding:"11px 14px",fontSize:13,color:"var(--text)",lineHeight:1.5}}>
+            {badWindow}.
           </div>
         )}
         {tooFar&&(

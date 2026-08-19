@@ -244,6 +244,10 @@ console.log(JSON.stringify({
   all:      run(target, "all"),
   digest:   run(target, "digest"),
   // Same script as a non-admin: every admin-only action must come back Forbidden
-  // and leave no trace in the sheets.
+  // and leave no trace in the sheets. Note the checkout and order rows in this run
+  // belong to the member, not to the name in the payload — addCheckout and addOrder
+  // stamp the caller's own identity over whatever the body claims, so a member
+  // cannot file a booking or a purchase request under somebody else's name. The
+  // "can't touch someone else's row" cases are asserted in test-sheet-setup.js.
   nonAdmin: run(target, "all", false),
 }, null, 2));
