@@ -72,6 +72,7 @@ const LABEL_SUB_DIGITS = 2;  // split-unit suffix
 // shared or not: a month-long checkout is a transfer, not a loan.
 const MAX_DAYS_WITHOUT_APPROVAL = 7;
 const MAX_LEAD_DAYS = 31;              // how far ahead a booking may start
+const MAX_HOLD_DAYS = 90;              // and how long it may run once it does
 const CHECKOUT_PENDING = "Pending Approval";
 
 // "YYYY-MM-DD HH:MM" → epoch ms. Apps Script's Date parses this reliably enough
@@ -137,6 +138,13 @@ function badRange_(c) {
   if (start === null) return "Checkout date is missing or not a date";
   if (end === null) return "Return date is missing or not a date";
   if (end <= start) return "Return date must be after the checkout date";
+  // A hold that runs to next June puts every overlapping booking until then behind
+  // an admin, because rule 3's queue is transitive. That is the intended shape for
+  // a genuine semester-long hold; it is also what one wrong digit in the year does.
+  // The cap is set well past any real hold so it only ever catches the typo.
+  if (end - start > MAX_HOLD_DAYS * 86400000) {
+    return "A booking can run for at most " + MAX_HOLD_DAYS + " days — check the return date's year";
+  }
   const from = minutes_(c.fromTime), to = minutes_(c.toTime);
   // Blank is all day; one of the pair without the other is half a window.
   const hasFrom = String(c.fromTime || "") !== "", hasTo = String(c.toTime || "") !== "";
@@ -144,6 +152,23 @@ function badRange_(c) {
   if (hasFrom && (from === null || to === null)) return "Daily window times must look like HH:MM";
   if (hasFrom && to <= from) return "The daily window must end after it starts";
   return "";
+}
+
+// True while a booking is actually under way — started, and not yet over.
+//
+// In Use means somebody physically has the thing, so a booking for the tenth of
+// next month should not take it off the shelf today; it did, because that flag used
+// to be the only thing keeping a sole-use item exclusive. Rule 2 does that job now,
+// by date, so the flag is free to mean what it says. The end matters as well as the
+// start: logging a loan after it finished is normal, and should not hand the item
+// to somebody who has already given it back. syncItemStatuses() keeps this true as
+// the days pass.
+function bookingLiveNow_(c) {
+  const now = new Date().getTime();
+  const start = bookingMs_(c.out), end = bookingMs_(c.ret);
+  if (start !== null && start > now) return false;
+  if (end !== null && end <= now) return false;
+  return true;
 }
 
 /**
@@ -479,7 +504,8 @@ function createTriggers() {
   // Remove any existing triggers for these functions to avoid duplicates
   ScriptApp.getProjectTriggers().forEach(function(t) {
     var fn = t.getHandlerFunction();
-    if (fn === "sendDailyDigest" || fn === "checkOverduesAndAlert" || fn === "backupSpreadsheet") {
+    if (fn === "sendDailyDigest" || fn === "checkOverduesAndAlert" ||
+        fn === "backupSpreadsheet" || fn === "syncItemStatuses") {
       ScriptApp.deleteTrigger(t);
     }
   });
@@ -493,6 +519,12 @@ function createTriggers() {
   ScriptApp.newTrigger("checkOverduesAndAlert")
     .timeBased()
     .atHour(8)
+    .everyDays(1)
+    .create();
+  // Bring In Use in line with the day's bookings, first thing
+  ScriptApp.newTrigger("syncItemStatuses")
+    .timeBased()
+    .atHour(6)
     .everyDays(1)
     .create();
   // Weekly backup every Sunday at 3am
@@ -567,7 +599,51 @@ function backupSpreadsheet() {
 }
 
 // ─── OVERDUE ALERT (Trigger: checkOverduesAndAlert → Day timer → 8am–9am) ────
+/**
+ * Bring every item's In Use flag in line with the bookings that are live today.
+ *
+ * A booking no longer takes its item off the shelf the moment it is made — it does
+ * so when its start arrives. Something has to notice that the day has come, and
+ * this is it: a daily pass that adds a holder for every Active booking now under
+ * way, and drops one for every booking that has ended without being returned.
+ *
+ * Written to be safe to run at any time and any number of times — it derives the
+ * flag from the Checkouts table rather than toggling it, so a missed run costs a
+ * day of staleness and nothing else. Also called from checkOverduesAndAlert(), so
+ * a lab that only ever sets up one trigger still gets it.
+ */
+function syncItemStatuses() {
+  const live = {};            // itemKey -> [names holding it right now]
+  readTable("Checkouts").forEach(function (c) {
+    if (c.status !== "Active" || !bookingLiveNow_(c)) return;
+    const key = c.itemId ? "id:" + c.itemId : "name:" + c.item;
+    (live[key] = live[key] || []).push(c.user);
+  });
+
+  var changed = 0;
+  readTable("Items").forEach(function (it) {
+    if (it.consumable === true || String(it.consumable).toLowerCase() === "true") return;
+    // Maintenance and Broken are somebody's deliberate call about the object, not a
+    // consequence of who booked it. Leave them alone.
+    if (it.status === "Maintenance" || it.status === "Broken") return;
+    const shared = it.shared === true || String(it.shared).toLowerCase() === "true";
+    const holders = live["id:" + it.id] || live["name:" + it.name] || [];
+    const want = holders.slice().sort();
+    const have = (Array.isArray(it.usedBy) ? it.usedBy : []).slice().sort();
+    // A shared item stays Available however many people have it — same rule as
+    // updateItemStatus, which is the only other place this is decided.
+    const wantStatus = (!shared && want.length) ? "In Use" : "Available";
+    if (wantStatus === it.status && want.join("\u0000") === have.join("\u0000")) return;
+    updateRow("Items", it.id ? it.id : function (r) { return r.name === it.name; },
+              { status: wantStatus, usedBy: want });
+    changed++;
+  });
+  return changed;
+}
+
 function checkOverduesAndAlert() {
+  // Yesterday's bookings ended and today's began while nobody was looking.
+  try { syncItemStatuses(); } catch (e) { console.log("syncItemStatuses failed (non-fatal): " + e.message); }
   var overdues = getOverdueCheckouts_();
   if (overdues.length === 0) return;
   var text = overdues.map(function(o){
@@ -1061,6 +1137,18 @@ function clearTable(name) {
 }
 
 // Settings is key/value rather than a record table, so it gets its own pair.
+// Settings keys the frontend needs in order to draw itself. Everything else —
+// admins, members, and whatever gets added later — is an admin's to read.
+var MEMBER_SETTINGS_ = ["categories", "slack_mode", "cat_prefixes", "last_backup"];
+
+function visibleSettings_(admin) {
+  var all = readSettings();
+  if (admin) return all;
+  var out = {};
+  MEMBER_SETTINGS_.forEach(function (k) { if (all[k] !== undefined) out[k] = all[k]; });
+  return out;
+}
+
 function readSettings() {
   var out = {};
   var sheet = getSheet("Settings");
@@ -1114,7 +1202,10 @@ function doGet(e) {
       deliveries: readTable("Deliveries"),
       checkouts: readTable("Checkouts"),
       orders: readTable("Orders"),
-      settings: readSettings(),
+      // The roster is not lab-wide reading. A member gets the keys the app itself
+      // needs to render; an admin gets the tab. Nothing sensitive lives here today,
+      // and this is so that stays true after the first person parks a key in it.
+      settings: visibleSettings_(isAdmin(user.email)),
       userRole: isAdmin(user.email) ? "admin" : "member",
     });
   } catch (err) {
@@ -1206,15 +1297,58 @@ function doPost(e) {
   // ── Update Item ───────────────────────────────────────────────────────────
   if (action === "updateItem") {
     const it = body.item;
-    const fields = ["name", "cat", "qty", "unit", "loc", "minQty", "img", "desc", "status", "serial", "displayId", "shared", "consumable"];
+    // Anyone may correct what an item *is like* — where it lives, how many there
+    // are, what it looks like. What an item *is* — whether it is shared, whether it
+    // is a consumable, what number is printed on its sticker, and whether it counts
+    // as on the shelf — changes how every rule treats it, so that is an admin's.
+    const fields = ["name", "cat", "qty", "unit", "loc", "minQty", "img", "desc", "serial"];
+    const adminFields = ["status", "displayId", "shared", "consumable"];
+    if (admin) Array.prototype.push.apply(fields, adminFields);
+    const refused = adminFields.filter(function (f) { return !admin && it[f] !== undefined; });
     const patch = {};
     fields.forEach(f => { if (it[f] !== undefined) patch[f] = it[f]; });
 
     if (!updateRow("Items", it.id, patch)) {
       return jsonResponse({ error: "Item not found", detail: "No item with id " + it.id });
     }
-    logAudit(userName, userEmail, "UpdateItem", (it.name||"") + " | id:" + (it.displayId||it.id||""));
-    return jsonResponse({ ok: true });
+    logAudit(userName, userEmail, "UpdateItem", (it.name||"") + " | id:" + (it.displayId||it.id||"") +
+      (refused.length ? " | ignored (admin only): " + refused.join(",") : ""));
+    // Reported rather than refused: the browser sends the whole item back, so a
+    // member editing the location of a shared item would otherwise be told off for
+    // a field they never touched. The fields simply do not move.
+    return jsonResponse({ ok: true, ignored: refused });
+  }
+
+  // ── Use some of a consumable ──────────────────────────────────────────────
+  // The one write that has to be arithmetic rather than an assignment. Everywhere
+  // else the browser sends the value it wants; here it sends what it *took*, and
+  // the subtraction happens inside the lock against the number actually on the
+  // sheet. Two people helping themselves from the same box of gloves at the same
+  // time used to both read 20, both write 17, and three pairs left no trace.
+  if (action === "useConsumable") {
+    var useLock = LockService.getScriptLock();
+    useLock.waitLock(10000);
+    try {
+      const used = Number(body.used);
+      if (!isFinite(used) || used <= 0) {
+        return jsonResponse({ error: "Bad quantity", detail: "How many were used has to be a number above zero" });
+      }
+      const item = findRow("Items", body.itemId);
+      if (!item) return jsonResponse({ error: "Item not found", detail: "No item with id " + body.itemId });
+      // A supply with no count has nothing to deduct — that is what Notify is for.
+      if (item.qty === "" || item.qty === null || item.qty === undefined) {
+        return jsonResponse({ error: "Not tracked", detail: item.name + " has no quantity to deduct — report it as running low instead" });
+      }
+      const before = Number(item.qty) || 0;
+      const after = Math.max(0, before - used);
+      updateRow("Items", body.itemId, { qty: after });
+      logAudit(userName, userEmail, "UseConsumable", item.name + " | used:" + (before - after) + " " + (item.unit||"") + " | left:" + after);
+      // Reported back so the browser can correct its own arithmetic rather than
+      // keep the number it guessed from a list that was a poll old.
+      return jsonResponse({ ok: true, qty: after, used: before - after, name: item.name });
+    } finally {
+      useLock.releaseLock();
+    }
   }
 
   // ── Delete Item (admin only) ──────────────────────────────────────────────
@@ -1296,7 +1430,9 @@ function doPost(e) {
       return jsonResponse({ ok: true, pending: true, reason: reason, competing: rivals });
     }
 
-    updateItemStatus(c.itemId, c.item, "In Use", c.user, "add");
+    // Only if it starts now. A booking for a fortnight's time is on the calendar,
+    // not off the shelf — syncItemStatuses() marks it when the day arrives.
+    if (bookingLiveNow_(c)) updateItemStatus(c.itemId, c.item, "In Use", c.user, "add");
     sendSlack("🔑", "Item Checked Out: " + c.item, null, ["*Person*\n" + c.user, "*Date*\n" + (c.out||"—"), "*Return by*\n" + (c.ret||"—")]);
     logAudit(userName, userEmail, "Checkout", c.item + " → " + c.user + " | return by:" + (c.ret||"—"));
     return jsonResponse({ ok: true });
@@ -1321,7 +1457,7 @@ function doPost(e) {
         return jsonResponse({ error: "Clash", detail: "Someone checked out " + co.item + " while this was waiting" });
       }
       updateRow("Checkouts", body.checkoutId, { status: "Active" });
-      updateItemStatus(co.itemId, co.item, "In Use", co.user, "add");
+      if (bookingLiveNow_(co)) updateItemStatus(co.itemId, co.item, "In Use", co.user, "add");
       sendSlack("✅", "Long Checkout Approved: " + co.item, null, ["*Person*\n" + co.user, "*Until*\n" + (co.ret||"—"), "*By*\n" + userName]);
       logAudit(userName, userEmail, "CheckoutApproved", co.item + " → " + co.user);
     } else {
@@ -1374,7 +1510,7 @@ function doPost(e) {
     updateRow("Checkouts", co.id, patch);
 
     if (!stillPending) {
-      updateItemStatus(co.itemId, co.item, "In Use", co.user, "add");
+      if (bookingLiveNow_(merged)) updateItemStatus(co.itemId, co.item, "In Use", co.user, "add");
       sendSlack("🔑", "Request Shortened — Now Active: " + co.item, "No longer needs approval",
         ["*Person*\n" + co.user, "*From*\n" + (merged.out||"—"), "*Return by*\n" + (merged.ret||"—")]);
     }

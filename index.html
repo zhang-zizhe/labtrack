@@ -319,8 +319,15 @@ const stockStatus = i => isOutOfStock(i) ? "Out of Stock" : isLowStock(i) ? "Low
 // Whether an item can be checked out at all. The picker filtered on this, but
 // Quick Check Out went straight to the modal with a pre-filled item and skipped
 // it — which is how a single non-shared arm ended up with two active checkouts.
-const canCheckOut = i => !!i && !i.consumable && i.status!=="Maintenance" && i.status!=="Broken"
-  && !(i.status==="In Use" && !i.shared);
+// What may be offered in the checkout picker. Consumables are used, not borrowed;
+// Maintenance and Broken are somebody's deliberate call about the object.
+//
+// In Use is deliberately *not* here any more. It used to hide any sole-use item
+// somebody had booked — including a booking for three weeks' time, which took the
+// arm off the shelf for everyone today, and including a booking that ends on
+// Tuesday when you want it on Wednesday. Rule 2 checks the dates you actually
+// asked for, so the form can offer the item and refuse the collision.
+const canCheckOut = i => !!i && !i.consumable && i.status!=="Maintenance" && i.status!=="Broken";
 const ITEMS_PER_PAGE = 24;
 
 // Category tint. The category name is always rendered as text beside it, so this
@@ -343,6 +350,7 @@ const isOverdue = (co) => co.status === "Active" && co.ret && getDatePart(co.ret
 // before the round trip instead of after it. Keep the two in step.
 const MAX_DAYS_WITHOUT_APPROVAL = 7;
 const MAX_LEAD_DAYS = 31;              // how far ahead a booking may start
+const MAX_HOLD_DAYS = 90;              // and how long it may run once it does
 const CO_PENDING = "Pending Approval";
 // A booking's two ends have to be read off the same clock. new Date("2026-08-25")
 // is UTC midnight but new Date("2026-08-25T09:00") is local, and the form lets you
@@ -381,6 +389,16 @@ const windowLabel = c => hasWindow(c) ? `${c.fromTime}–${c.toTime} daily` : "A
 // that is the whole point of it being pending — so several people may ask for the
 // same week and an admin picks between them.
 const blocksSlot = c => c.status==="Active";
+// Under way right now — started, and not yet over. Only then does a booking take
+// the item off the shelf; a hold for next month is on the calendar, not in
+// somebody's hands, and a loan logged after it finished is already back.
+// Mirrors bookingLiveNow_() in google-apps-script.js.
+const bookingLiveNow = c => {
+  const now=Date.now(), a=bookingMs(c.out), b=bookingMs(c.ret);
+  if(a!==null&&a>now) return false;
+  if(b!==null&&b<=now) return false;
+  return true;
+};
 const isPending  = c => c.status===CO_PENDING;
 // Bookings written before itemId was populated have only the name to go on.
 const sameBooked = (a,b) => (a.itemId&&b.itemId) ? String(a.itemId)===String(b.itemId) : a.item===b.item;
@@ -407,6 +425,9 @@ const badRange = c => {
   if(a===null) return "Pick a checkout date";
   if(b===null) return "Pick a return date";
   if(b<=a) return "The return date has to be after the checkout date";
+  // Rule 3's queue is transitive, so a hold running to next June puts every booking
+  // until then behind an admin. Set well past any real hold, to catch the typo.
+  if(b-a > MAX_HOLD_DAYS*86400000) return `A booking can run for at most ${MAX_HOLD_DAYS} days — check the return date's year`;
   const hasFrom=String(c.fromTime||"")!=="", hasTo=String(c.toTime||"")!=="";
   if(hasFrom!==hasTo) return "A daily window needs both a start and an end time";
   if(hasFrom&&!(hhmmMins(c.fromTime)!==null&&hhmmMins(c.toTime)!==null&&hhmmMins(c.fromTime)<hhmmMins(c.toTime)))
@@ -1012,8 +1033,14 @@ const CheckoutModal = ({items,onClose,onAdd,preItem="",userName="",userEmail="",
   // Only complain about the return date once the person has actually picked one.
   const badWindow=retDate.trim()?rangeErr:"";
   // Rule 2 — a shared item can be booked again, but not over someone else's slot.
-  const clashes=sharedSel.map(sl=>{
-    const hit=checkouts.find(c=>blocksSlot(c)&&String(c.itemId)===String(sl.itemId)&&bookingsClash({out,ret,...win},c));
+  // Rule 2 — an active booking owns its slot, whether or not the item is shared.
+  // This used to cover only shared items, mirroring a backend rule that has since
+  // been widened: a sole-use item was kept exclusive by being hidden from the
+  // picker, which could not tell one date from another.
+  const clashes=valid.map(sl=>{
+    const sel=items.find(i=>String(i.id)===String(sl.itemId));
+    const mine={out,ret,...(sel?.shared?win:{fromTime:"",toTime:""})};
+    const hit=checkouts.find(c=>blocksSlot(c)&&String(c.itemId)===String(sl.itemId)&&bookingsClash(mine,c));
     return hit?{item:sl.item,hit}:null;
   }).filter(Boolean);
   // Pending requests don't block, they just mean you are not the only one asking.
@@ -1033,7 +1060,7 @@ const CheckoutModal = ({items,onClose,onAdd,preItem="",userName="",userEmail="",
     const ts=uid();
     valid.forEach((sl,i)=>{
       const sel=items.find(it=>String(it.id)===String(sl.itemId));
-      onAdd({id:ts+i,itemId:sl.itemId,item:sl.item,user:coUser.trim(),out,ret,qty:Math.min(sl.qty,sel?.qty||1),notes,groupEmails:groupEmails.trim(),
+      onAdd({id:ts+i,itemId:sl.itemId,item:sl.item,user:coUser.trim(),out,ret,qty:sel?.shared?1:Math.min(sl.qty,sel?.qty||1),notes,groupEmails:groupEmails.trim(),
              status:willWait?CO_PENDING:"Active",...(sel?.shared?win:{fromTime:"",toTime:""})});
     });
     onClose();
@@ -1067,9 +1094,16 @@ const CheckoutModal = ({items,onClose,onAdd,preItem="",userName="",userEmail="",
             return(
               <div key={i} style={{display:"flex",gap:8,alignItems:"center",marginBottom:8}}>
                 <div style={{flex:1}}><ItemPicker items={items} value={sl.itemId} exclude={slots.filter((_,j)=>j!==i).map(s=>s.itemId)} onChange={it=>updSlot(i,{itemId:it.id,item:it.name})} categories={categories}/></div>
+                {/* No quantity on a shared item. Several people hold one at once by
+                    booking different hours, so a number here reads as capacity —
+                    "3 of them are free" — which is not what it means and not what
+                    rule 2 counts. A thing you can lend is one row with one label;
+                    that is what Track each unit individually is for. */}
                 {outOfStock
                   ?<span style={{fontSize:11,color:"var(--red)",fontWeight:700,whiteSpace:"nowrap"}}>Out of stock</span>
-                  :<input type="number" min={1} max={maxQ} value={sl.qty} title={`Max ${maxQ}`} onChange={e=>updSlot(i,{qty:Math.min(maxQ,Math.max(1,parseInt(e.target.value)||1))})} style={{width:60,background:"var(--bg1)",border:"1px solid var(--border)",borderRadius:8,padding:"9px 8px",textAlign:"center",fontFamily:"'Roboto',sans-serif",fontWeight:700,fontSize:15,color:"var(--text)",outline:"none"}}/>}
+                  :sel?.shared
+                    ?<span style={{fontSize:11,color:"var(--dim)",whiteSpace:"nowrap",fontFamily:"'IBM Plex Mono',monospace"}}>shared</span>
+                    :<input type="number" min={1} max={maxQ} value={sl.qty} title={`Max ${maxQ}`} onChange={e=>updSlot(i,{qty:Math.min(maxQ,Math.max(1,parseInt(e.target.value)||1))})} style={{width:60,background:"var(--bg1)",border:"1px solid var(--border)",borderRadius:8,padding:"9px 8px",textAlign:"center",fontFamily:"'Roboto',sans-serif",fontWeight:700,fontSize:15,color:"var(--text)",outline:"none"}}/>}
                 {slots.length>1&&<button onClick={()=>removeSlot(i)} style={{background:"none",border:"none",color:"var(--dim)",cursor:"pointer",padding:4,display:"flex",flexShrink:0}}><Ico n="x" s={14}/></button>}
               </div>
             );
@@ -1536,7 +1570,9 @@ const EditItemModal = ({item,onClose,onSave,onDelete,onAdd,categories,isAdmin}) 
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
         <div style={{gridColumn:"1/-1"}}><Fld label="Item Name"><Inp value={f.name} onChange={s("name")}/></Fld></div>
         <Fld label="Category"><Sel value={f.cat} onChange={onCatChange}>{categories.map(c=><option key={c}>{c}</option>)}</Sel></Fld>
-        <Fld label="Status"><Sel value={f.status} onChange={s("status")}>{["Available","In Use","Maintenance","Broken"].map(st=><option key={st}>{st}</option>)}</Sel></Fld>
+        {isAdmin
+          ? <Fld label="Status (Admin only)"><Sel value={f.status} onChange={s("status")}>{["Available","In Use","Maintenance","Broken"].map(st=><option key={st}>{st}</option>)}</Sel></Fld>
+          : <Fld label="Status" hint="Set by checking out and returning; an admin can override it"><Inp value={f.status} disabled style={{opacity:.55,cursor:"not-allowed"}}/></Fld>}
         <Fld label="Quantity" hint={isSubItem(f.displayId)?"one tracked unit":undefined}>
           {isSubItem(f.displayId)
             ? <Inp value="1" disabled style={{color:"var(--dim)",cursor:"not-allowed"}}/>
@@ -1547,10 +1583,16 @@ const EditItemModal = ({item,onClose,onSave,onDelete,onAdd,categories,isAdmin}) 
         <Fld label="Unit"><Sel value={f.unit} onChange={s("unit")}>{["units","pcs","boxes","bottles","sets","racks","rolls","kg","L","m"].map(u=><option key={u}>{u}</option>)}</Sel></Fld>
         <Fld label="Min Stock Alert"><Inp type="number" min="0" value={f.minQty} onChange={s("minQty")}/></Fld>
         <Fld label="Location"><Inp value={f.loc} onChange={s("loc")}/></Fld>
-        {!f.consumable&&<Fld label="Label ID" hint="ID on physical sticker"><Inp value={f.displayId} onChange={s("displayId")}/></Fld>}
+        {!f.consumable&&(isAdmin
+          ? <Fld label="Label ID (Admin only)" hint="ID on physical sticker"><Inp value={f.displayId} onChange={s("displayId")}/></Fld>
+          : <Fld label="Label ID" hint="Printed on the sticker — ask an admin to change it"><Inp value={f.displayId} disabled style={{opacity:.55,cursor:"not-allowed"}}/></Fld>)}
         <div style={{gridColumn:"1/-1"}}><Fld label="Serial/Product No."><Inp placeholder="e.g. SN-2024-001 or product number" value={f.serial} onChange={s("serial")}/></Fld></div>
         <div style={{gridColumn:"1/-1"}}><Fld label="Tags / Specs" hint="Press Enter or , to add — e.g. M3×8, stainless, pack of 50"><TagInput tags={f.desc?f.desc.split(",").map(t=>t.trim()).filter(Boolean):[]} onChange={ts=>{setF(p=>({...p,desc:ts.join(", ")}));setChanged(true);}}/></Fld></div>
-        <div style={{gridColumn:"1/-1",display:"flex",gap:20,flexWrap:"wrap",padding:"4px 0"}}>{isConsumableCat(f.cat)?(<>{CHKBOX("Consumable — deduct qty, no checkout needed","consumable")}<label style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer",fontSize:13,color:"var(--sub)"}}><input type="checkbox" checked={!!f.untracked} onChange={e=>{const on=e.target.checked;setF(p=>({...p,untracked:on,consumable:on?true:p.consumable,qty:on?"":p.qty}));}} style={{accentColor:"var(--cyan)",width:14,height:14}}/>Quantity not tracked — just notify when it runs low</label></>):CHKBOX("Shared — multiple users simultaneously","shared")}</div>
+        {/* Shared and Consumable change how every booking rule treats the item, so
+            they are an admin's to set. A member sees what it is, not a control. */}
+        <div style={{gridColumn:"1/-1",display:"flex",gap:20,flexWrap:"wrap",padding:"4px 0"}}>{isAdmin
+          ? (isConsumableCat(f.cat)?(<>{CHKBOX("Consumable — deduct qty, no checkout needed","consumable")}<label style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer",fontSize:13,color:"var(--sub)"}}><input type="checkbox" checked={!!f.untracked} onChange={e=>{const on=e.target.checked;setF(p=>({...p,untracked:on,consumable:on?true:p.consumable,qty:on?"":p.qty}));}} style={{accentColor:"var(--cyan)",width:14,height:14}}/>Quantity not tracked — just notify when it runs low</label></>):CHKBOX("Shared — multiple users simultaneously","shared"))
+          : <span style={{fontSize:12,color:"var(--dim)"}}>{isConsumableCat(f.cat)?(f.consumable?"Consumable — an admin sets this":"Not a consumable — an admin sets this"):(f.shared?"Shared — an admin sets this":"Sole use — an admin sets this")}</span>}</div>
         {canSplit&&(
           <div style={{gridColumn:"1/-1",background:"var(--cyan-d)",border:"1px solid var(--cyan-m)",borderRadius:8,padding:"10px 14px"}}>
             <label style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer",fontSize:13,color:"var(--cyan)"}}>
@@ -2008,15 +2050,13 @@ const CalChip=({e,full=false})=>{
     </div>
   );
 };
-const CalView=({checkouts,deliveries,user,effectiveRole})=>{
-  // An active hold is lab business — everyone needs to know the arm is out. A
-  // request nobody has decided yet is the asker's own affair until it becomes one,
-  // so it shows to them and to the admins who have to act on it.
-  const visibleCos=useMemo(()=>checkouts.filter(c=>
-    c.status===CO_PENDING
-      ? (effectiveRole==="admin"||(!!user?.email&&c.checkedOutByEmail===user.email))
-      : true
-  ),[checkouts,user,effectiveRole]);
+const CalView=({checkouts,deliveries})=>{
+  // Requests waiting for an admin are drawn for everyone, the same as the Usage
+  // tab lists them for everyone. Hiding them here was the odd one out, and it hid
+  // them on the one screen you would use to plan around other people — you found
+  // out you had collided only after asking. Nothing is reserved by a request, so
+  // seeing the queue is exactly what lets someone pick a slot nobody wants.
+  const visibleCos=checkouts;
   // ds -> events, built once instead of re-filtering every booking per cell.
   const byDay=useMemo(()=>{
     const m={};
@@ -2896,7 +2936,7 @@ function LabInventory(){
   const postAction = (action, payload) => {
     // Mark data type as locally modified → suppress poll override for 60s
     const now = Date.now();
-    if (/item/i.test(action)) lastModified.current.items = now;
+    if (/item|consumable/i.test(action)) lastModified.current.items = now;
     if (/checkout|return/i.test(action)) { lastModified.current.checkouts = now; lastModified.current.items = now; }
     if (/order/i.test(action)) lastModified.current.orders = now;
     if (/delivery/i.test(action)) lastModified.current.deliveries = now;
@@ -2944,7 +2984,13 @@ function LabInventory(){
       ? String(item.id)===String(co.itemId)
       : item.name===co.item;
 
-  const markInUse=(co)=>setItems(prev=>prev.map(i=>isCheckoutTarget(i,co)?{...i,status:i.shared?"Available":"In Use",usedBy:toArr(i.usedBy).includes(co.user)?toArr(i.usedBy):[...toArr(i.usedBy),co.user]}:i));
+  // Only a booking that is under way right now moves the item. The backend applies
+  // the same test, and its daily sweep is what hands the item over on the morning a
+  // future booking starts.
+  const markInUse=(co)=>{
+    if(!bookingLiveNow(co)) return;
+    setItems(prev=>prev.map(i=>isCheckoutTarget(i,co)?{...i,status:i.shared?"Available":"In Use",usedBy:toArr(i.usedBy).includes(co.user)?toArr(i.usedBy):[...toArr(i.usedBy),co.user]}:i));
+  };
 
   const handleCheckout=async(c)=>{
     // itemId comes from the picker now. It used to be left unset, so the column
@@ -2963,7 +3009,10 @@ function LabInventory(){
       // `checkouts` is the list from before this one was added — i.e. the rest.
       const heldElsewhere=checkouts.some(x=>x.status==="Active"&&x.user===checkout.user&&String(x.itemId||"")===String(checkout.itemId||""));
       setCheckouts(p=>p.filter(x=>x.id!==checkout.id));
-      if(!pending&&!heldElsewhere) setItems(prev=>prev.map(i=>isCheckoutTarget(i,checkout)?{...i,status:"Available",usedBy:toArr(i.usedBy).filter(u=>u!==checkout.user)}:i));
+      // Only undo what markInUse actually did — a booking that had not started
+      // moved nothing, and stripping the holder here would free an item somebody
+      // else is really holding.
+      if(!pending&&!heldElsewhere&&bookingLiveNow(checkout)) setItems(prev=>prev.map(i=>isCheckoutTarget(i,checkout)?{...i,status:"Available",usedBy:toArr(i.usedBy).filter(u=>u!==checkout.user)}:i));
       addToast("error",res.detail||res.error);
       return;
     }
@@ -2975,7 +3024,7 @@ function LabInventory(){
     if(res&&res.pending&&!pending){
       setCheckouts(p=>p.map(x=>x.id===checkout.id?{...x,status:CO_PENDING}:x));
       if(!checkouts.some(x=>x.status==="Active"&&x.user===checkout.user&&String(x.itemId||"")===String(checkout.itemId||"")))
-        setItems(prev=>prev.map(i=>isCheckoutTarget(i,checkout)?{...i,status:"Available",usedBy:toArr(i.usedBy).filter(u=>u!==checkout.user)}:i));
+        if(bookingLiveNow(checkout)) setItems(prev=>prev.map(i=>isCheckoutTarget(i,checkout)?{...i,status:"Available",usedBy:toArr(i.usedBy).filter(u=>u!==checkout.user)}:i));
       addToast("info",res.reason==="queue"
         ? `Someone else asked for this slot first — ${checkout.item} is waiting on an admin`
         : `${checkout.item} needs an admin's approval`);
@@ -2995,7 +3044,7 @@ function LabInventory(){
     const res=await postAction("updateCheckout",{checkoutId:coId,checkout:patch});
     if(res&&res.error){
       setCheckouts(p=>p.map(c=>c.id===coId?co:c));
-      if(nowActive) setItems(prev=>prev.map(i=>isCheckoutTarget(i,co)?{...i,status:"Available",usedBy:toArr(i.usedBy).filter(u=>u!==co.user)}:i));
+      if(nowActive&&bookingLiveNow(co)) setItems(prev=>prev.map(i=>isCheckoutTarget(i,co)?{...i,status:"Available",usedBy:toArr(i.usedBy).filter(u=>u!==co.user)}:i));
       addToast("error",res.detail||res.error);
     }
   };
@@ -3019,7 +3068,7 @@ function LabInventory(){
     // reading Active would tell the admin they granted something they did not.
     if(!res||res.error){
       setCheckouts(p=>p.map(c=>c.id===coId?{...c,status:co.status}:c));
-      if(approve&&!wasHeld) setItems(prev=>prev.map(i=>isCheckoutTarget(i,co)?{...i,status:i.shared?i.status:"Available",usedBy:toArr(i.usedBy).filter(u=>u!==co.user)}:i));
+      if(approve&&!wasHeld&&bookingLiveNow(co)) setItems(prev=>prev.map(i=>isCheckoutTarget(i,co)?{...i,status:i.shared?i.status:"Available",usedBy:toArr(i.usedBy).filter(u=>u!==co.user)}:i));
       addToast("error",(res&&(res.detail||res.error))||"Could not reach the lab sheet — nothing was changed");
     }
   };
@@ -3032,10 +3081,21 @@ function LabInventory(){
   const handleUseConsumable = async (itemId, qty) => {
     if(editLocked){addToast("error","Editing is locked — click 🔒 in the header to unlock");return;}
     const item = items.find(i=>i.id===itemId); if(!item) return;
-    const updated = {...item, qty: Math.max(0, item.qty - qty)};
-    setItems(p=>p.map(i=>i.id===itemId?updated:i));
+    // Send what was taken, not what the number should become. Two people helping
+    // themselves from the same box at once both computed the same "new total" from
+    // the same stale count, and one of the deductions vanished.
+    setItems(p=>p.map(i=>i.id===itemId?{...i,qty:Math.max(0,Number(i.qty||0)-qty)}:i));
     addToast("success",`Used ${qty} ${item.unit} of ${item.name}`);
-    await postAction("updateItem", {item: updated});
+    const res = await postAction("useConsumable", {itemId, used: qty});
+    if(!res||res.error){
+      setItems(p=>p.map(i=>i.id===itemId?{...i,qty:item.qty}:i));   // put it back
+      addToast("error",(res&&(res.detail||res.error))||"Could not record that — nothing was changed");
+      return;
+    }
+    // The server subtracted from the number actually on the sheet, which may not be
+    // the one this browser was showing. Take its answer.
+    if(!res.offline && typeof res.qty === "number")
+      setItems(p=>p.map(i=>i.id===itemId?{...i,qty:res.qty}:i));
   };
 
   const handleReturn=async(coId)=>{
@@ -4088,7 +4148,7 @@ function LabInventory(){
           <div style={{animation:"fadeUp .3s ease"}}>
             <h2 style={{margin:"0 0 20px",fontFamily:"'Roboto',sans-serif",fontSize:18,fontWeight:700}}>Activity Calendar</h2>
             <div style={{background:"var(--bg1)",border:"1px solid var(--border)",borderRadius:14,padding:24}}>
-              <CalView checkouts={checkouts} deliveries={deliveries} user={user} effectiveRole={effectiveRole}/>
+              <CalView checkouts={checkouts} deliveries={deliveries}/>
             </div>
           </div>
         )}

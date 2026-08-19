@@ -79,6 +79,7 @@ The backend uses a Google Sheet with these tabs:
 | `NotifyLowStock` | everyone | item, note |
 | `PurchaseSummary` | admins only | how many orders |
 | `SaveSetting` | admins only | key = value (first 200 chars) |
+| `UseConsumable` | everyone | item, how many used, how many are left |
 
 **SlackQueue** (auto-created, used by digest mode) — `time | emoji | title | details | fields`
 
@@ -205,8 +206,8 @@ login could only ever show one side of it:
 |---|---|---|---|
 | Overdue banner | "You have 1 overdue item" | none — it isn't theirs | "1 item overdue in the lab" |
 | Low-stock banner & chip | hidden | hidden | shown |
-| Pending requests on the calendar | only their own | only their own | everyone's |
-| Pending requests in the Usage list | everyone's, by name | everyone's, by name | everyone's |
+| Requests on the calendar and in Usage | everyone's | everyone's | everyone's |
+| Approve / Reject on a request | — | — | shown |
 | Edit / Withdraw on a request | only their own | only their own | anyone's |
 
 Nothing reaches the backend: every API call is short-circuited client-side, and
@@ -290,8 +291,14 @@ Set `slack_mode` in the Settings tab:
 ### Setting Up Triggers
 
 Easiest: run **`createTriggers()`** once from the Apps Script editor. It removes any
-existing triggers for these three functions first, so it is safe to re-run, and
-creates all three at the right times.
+existing triggers for these four functions first, so it is safe to re-run, and
+creates all four at the right times.
+
+`syncItemStatuses` is the one to set up even in a lab that wants no Slack at all —
+it is what marks an item In Use on the morning its booking starts. It is also
+called from `checkOverduesAndAlert`, so either trigger alone will do; and because
+it derives every flag from the bookings rather than toggling them, a missed run
+costs a day of staleness and nothing else.
 
 By hand instead — **Apps Script → Triggers → Add Trigger**:
 
@@ -299,6 +306,7 @@ By hand instead — **Apps Script → Triggers → Add Trigger**:
 |----------|-----------|------|------------|
 | `sendDailyDigest` | Time-driven → Day timer | **5pm – 6pm** | digest mode |
 | `checkOverduesAndAlert` | Time-driven → Day timer | 8am – 9am | overdue nags, any mode |
+| `syncItemStatuses` | Time-driven → Day timer | 6am – 7am | handing items over on the morning a booking starts, and releasing them when one ends |
 | `backupSpreadsheet` | Time-driven → Week timer, Sunday | 3am – 4am | the weekly Drive copy |
 
 > Make sure the script timezone is **America/New_York** so 5pm ET is correct.
@@ -330,7 +338,9 @@ Use the `@jh.edu` UPN, not the `@jhu.edu` mail alias:
 
 **Admins can**: delete items/orders, manage categories, change settings, send digest manually, change order status (Approve/Reject/etc.), approve or reject a booking that is waiting, edit any order request, return any checked-out item, write the Purchase Summary sheet, run a backup
 
-**All users can**: add/edit items, check out items, log deliveries, submit order requests, report a supply as running low
+**All users can**: add items, check out items, log deliveries, submit order requests, report a supply as running low, use up a consumable, and edit an item's name, category, quantity, unit, location, min stock, photo, description and serial number
+
+**Admins only, on an item**: `status`, the **Shared** and **Consumable** flags, and the **Label ID**. Everything else about an item is a correction anyone should be able to make without waiting; these four change what the item *is* — how every booking rule treats it, and what is printed on the sticker on the shelf. A member's edit simply leaves them where they were and says so in the audit line; it is not refused, because the browser sends the whole item back and a member fixing a location should not be told off for a field they never touched
 
 **Requester** (or admin): edit their own order request — but only while it is still `Pending`. Once an admin approves it, editing the quantity or price would quietly change what was approved, so it becomes admin-only. Enforced in Apps Script, not just hidden in the UI
 
@@ -352,11 +362,19 @@ few fields are overwritten server-side rather than trusted:
 | `Checkouts.user` / `checkedOutByEmail` | Stamped with the caller on create unless the caller is an admin, who legitimately logs checkouts on other people's behalf. These fields decide who is nagged for an overdue return and who may edit or withdraw the row, so they have to be the person who actually asked |
 | `Checkouts.status` | Set by `waitReason_()`, never by the browser. A member cannot post themselves an already-approved booking |
 | `Settings.admins` | Refused if it is not a JSON array, or if it leaves the caller out — there would be nobody left in the app to put them back |
+| `Items.status`, `shared`, `consumable`, `displayId` | Dropped from a member's `updateItem` patch and named in the audit line |
+
+`doGet` is scoped the same way: a member receives `categories`, `slack_mode`,
+`cat_prefixes` and `last_backup`, an admin receives the Settings tab. The roster
+was going out to everyone, which was harmless in itself and the wrong shape to
+leave in place — the first person to park an API key in Settings would have
+published it to the lab with nothing to tell them.
 
 ---
 
 ## Features
 
+- **Consumables**: the **Use** button sends how many you *took*, not what the total should become, and the server subtracts it from the number on the sheet inside the script lock. Everywhere else the browser sends the value it wants; here it cannot, because two people helping themselves from the same box at the same time both read 20, both wrote 17, and three pairs of gloves left no trace
 - **Inventory**: Add/edit items with serial numbers, label IDs (`PREFIX-NNN`, counted per category; split units add `-NN`), image upload (camera/file/URL), customizable categories (admin only); mark items as Shared (multi-user checkout) or Consumable (qty deduction without checkout). Consumables get no label ID — nothing is stickered — and a supply can be added with no quantity at all, which swaps its Use button for Notify: one click tells whoever restocks that it is running low
 - **Order Requests**: Submit orders (store, item, link, qty, price, etc.); only the requester or an admin can edit; admins can change status (Pending/Approved/Ordered/Received/Rejected); "Mark Received" opens a staging form to set location/label/serial before adding to inventory; generate copy-pasteable email text with per-item totals and grand total
 - **Usage Tracking**: Check out/return items with overdue alerts and bulk return; only the checkout creator, listed group members, or admins can return an item; consumables use a "Use" button instead of checkout
@@ -364,7 +382,7 @@ few fields are overwritten server-side rather than trusted:
 - **Low stock is an admin signal**: the running list — banner and header chip — shows only to admins, because restocking is their job and a banner you cannot act on is noise. Members still get the Low Stock badge on the card, and the Notify button on untracked supplies, which is how they say something is running out
 - **Group Checkout**: When checking out, optionally list teammates' emails as group members — they can then return the item too
 - **Booking rules**: shared items are booked by the hour and long holds need an admin — see below
-- **Calendar**: Month and week views. A booking draws as a **span across every day it covers**, not two marks at its ends, coloured by what it is — blue in use, amber awaiting approval, red overdue, grey returned. A daily window (`13:00–16:00`) renders as a block at those hours on **every** day of the hold; an all-day multi-day hold goes in the week view's all-day strip instead, the way a calendar normally splits them. Active holds are visible to everyone; **pending requests only to the person who asked and to admins**, since an undecided request is nobody else's business yet
+- **Calendar**: Month and week views. A booking draws as a **span across every day it covers**, not two marks at its ends, coloured by what it is — blue in use, amber awaiting approval, red overdue, grey returned. A daily window (`13:00–16:00`) renders as a block at those hours on **every** day of the hold; an all-day multi-day hold goes in the week view's all-day strip instead, the way a calendar normally splits them. **Every booking is visible to everyone, requests included** — a request waiting for an admin draws in amber, so you can see the slot somebody has asked for before you ask for it too. The calendar used to hide other people's requests while the Usage tab listed them all by name, which meant the one screen you would use to plan around other people was the one that hid the queue, and you found out you had collided only after asking. Nothing is reserved by a request, so seeing the queue is exactly what lets someone pick a slot nobody wants
 - **Live Sync**: Auto-polls every 30s so all users see changes without refreshing
 - **Sort & paging**: the inventory loads 24 at a time and grows with a *Show more* button — it does not paginate; sort by name, date or quantity. The Order Requests tab does paginate, 15 per page, with search, filter and shift-click range select
 - **Slack**: Rich Block Kit notifications; daily 5pm ET digest with compact PI-friendly summary; `important` mode for urgent orders + overdues only
@@ -382,7 +400,7 @@ re-implements them so it can refuse before a round trip instead of after one. Th
 two halves have to be kept in step — the constants carry the same names on both
 sides (`MAX_DAYS_WITHOUT_APPROVAL`, `MAX_LEAD_DAYS`, `bookingsClash_`/`bookingsClash`,
 `waitReason_`/`waitReason`, `leadTooFar_`/`leadTooFar`, `badRange_`/`badRange`,
-`bookingMs_`/`bookingMs`).
+`bookingMs_`/`bookingMs`, `bookingLiveNow_`/`bookingLiveNow`, `MAX_HOLD_DAYS`).
 
 **1. Shared items are booked by the hour.** Checking out an item marked *Shared*
 asks whether the hold is all day or the same window every day (`fromTime`,
@@ -405,6 +423,22 @@ handing something over at 12:00 is fine. Only `Active` blocks — see rule 4.
 > for right now. A date range is the honest test for both kinds of item. A sole-use
 > item simply has no daily window, which reads as all day and clashes with anything
 > inside the range — which is what exclusive means.
+
+> **In Use now means somebody has it, not that somebody booked it.**
+> `bookingLiveNow_()` decides: a booking marks its item In Use only once its start
+> has arrived and while its end has not, so a hold for the tenth of next month sits
+> on the calendar rather than taking the arm off the shelf today, and a loan logged
+> after it finished does not hand the item to someone who has already given it back.
+> `syncItemStatuses()` runs each morning and derives every item's flag from the
+> bookings that are live at that moment — safe to run at any time and any number of
+> times, so a missed run costs a day of staleness and nothing else.
+>
+> This is why the checkout picker no longer hides an item because it is In Use. It
+> used to, and that was the *only* thing keeping a sole-use item exclusive; it also
+> meant a booking three weeks out made the item unbookable for everyone in between,
+> and that an item coming back on Tuesday could not be booked for Wednesday. Rule 2
+> checks the dates you actually asked for, so the form offers the item and refuses
+> the collision.
 
 **3. A booking waits for an admin for either of two reasons.** `waitReason_()`
 is the single place that decides, and returns `"long"`, `"queue"` or `""`:
@@ -429,6 +463,14 @@ which posts `decideCheckout`; members see "Waiting on an admin".
 > long-range request can put every overlapping booking behind an admin until it is
 > decided. In a lab this size that is a feature — it forces the decision. Rule 5
 > is what keeps its blast radius finite.
+
+> **Rule 2 counts bookings, not units.** A shared item entered as one row with
+> quantity 3 still admits one booking per slot — the rule has no notion of stock.
+> That is deliberate: one row per physical thing is what makes a printed label mean
+> anything, and *Track each unit individually* on the add form is how you get three
+> multimeters as three labelled rows. The checkout form no longer shows a quantity
+> box for a shared item, because a number there read as capacity, which is not what
+> it meant and not what the rule counts.
 
 **4. A pending request reserves nothing, so several people may ask for the same
 slot.** This is the point of it being pending: `Pending Approval` rows are reported
@@ -457,8 +499,16 @@ Start dates in the **past** stay legal — logging a checkout after the fact is
 normal, and nothing about it can block a future booking that isn't already there.
 
 **6. The dates have to make sense.** `badRange_()` refuses a booking whose return
-date is missing, unparseable, or on or before the checkout date, and a daily window
-that is half-filled or ends before it starts. This is not fussiness: every rule
+date is missing, unparseable, on or before the checkout date, or more than
+`MAX_HOLD_DAYS` (90) after it; and a daily window that is half-filled or ends
+before it starts.
+
+The 90-day cap is not a policy about how long you may borrow something — it sits
+well past any real hold. It exists because rule 3's queue is transitive, so a
+booking running to next June puts every overlapping booking until then behind an
+admin. That is the right behaviour for a genuine semester-long hold and also
+exactly what one wrong digit in the year does, and the two are indistinguishable
+without a limit. This is not fussiness: every rule
 above is a comparison between two instants, and a comparison against something
 unparseable is false, so a backwards range did not trip the rules — it slipped past
 all five at once. It measured as a negative number of days, so it was never long
@@ -608,7 +658,7 @@ changed**; these are only the record of *why*.
 
 ```bash
 node --check google-apps-script.js       # backend syntax
-node test-sheet-setup.js                 # 158 assertions: setup, labels, per-unit
+node test-sheet-setup.js                 # 182 assertions: setup, labels, per-unit
                                          # targeting, order approval, booking rules
 node test-sheets-coercion.js             # 25 assertions: the ones that only fail live
 node test-storage-layer.js > after.json  # behaviour snapshot — see below
@@ -678,9 +728,16 @@ none of them share an API for.
 `test-storage-layer.js` stubs the Apps Script globals with an in-memory
 spreadsheet and runs most actions, `doGet`, and the digest under both
 `slack_mode=all` and `slack_mode=digest`. Not every action: `decideCheckout`,
-`updateCheckout`, `cancelCheckout`, `notifyLowStock`, `generatePurchaseSummary`,
-`backupNow` and the `sendDigest` wrapper are never posted, so the whole
-booking-approval write path is covered by `test-sheet-setup.js` instead. It is a
+`updateCheckout`, `cancelCheckout`, `notifyLowStock`, `useConsumable`,
+`generatePurchaseSummary`, `backupNow` and the `sendDigest` wrapper are never
+posted, so the whole booking-approval write path is covered by
+`test-sheet-setup.js` instead.
+
+All three test files pin `TZ=America/New_York` before anything reads the clock.
+The backend reads dates on the local clock, and whether a booking counts as under
+way now depends on it — so without the pin a fixture written `2026-08-16 11:00`
+means a different instant on a laptop in Baltimore than on a CI box in UTC, and
+the snapshot stops being comparable between them. It is a
 differential test — the output only means something compared against another run:
 
 ```bash

@@ -10,6 +10,13 @@
  * expected schema is written out independently below, so a wrong TABLE_HEADERS
  * is caught instead of being compared against itself.
  */
+// The backend reads dates on the local clock and the Apps Script project runs in
+// America/New_York, so the tests have to as well — otherwise a booking fixture
+// written as "2026-08-16 11:00" means a different instant on a laptop in Baltimore
+// than on a CI box in UTC, and whether it counts as under way changes with it.
+// Set before any Date is constructed; Node reads TZ once.
+process.env.TZ = "America/New_York";
+
 const fs = require("fs");
 const vm = require("vm");
 // Reuse the in-memory sheet stub from the behaviour snapshot test.
@@ -263,9 +270,12 @@ console.log("shared items book by the hour; long holds wait for an admin");
   check("touching endpoints do not clash",
         book("k6","Fay","2026-09-01 09:00","2026-09-03 12:00","12:00","13:00").ok === true);
 
-  // A plain item is kept exclusive by the availability filter, not by this check.
-  check("non-shared item is not clash-checked",
+  // A sole-use item is clash-checked by date like any other, and a booking that
+  // ends before another begins is not a conflict — the two can both stand.
+  check("a sole-use booking goes in",
         book("k7","Gil","2026-09-01 09:00","2026-09-02 12:00","","","Franka Arm","p1").ok === true);
+  check("and asking for it in a later, clear stretch is not refused",
+        book("k7b","Gwen","2026-09-03 09:00","2026-09-04 12:00","","","Franka Arm","p1").ok === true);
 
   // ── over a week: recorded, but the item stays free until someone agrees ──
   const long = book("k8","Hal","2026-09-05 09:00","2026-09-24 09:00","","","Franka Arm","p1");
@@ -278,19 +288,29 @@ console.log("shared items book by the hour; long holds wait for an admin");
   check("a member cannot approve it",
         post({ action:"decideCheckout", checkoutId:"k8", approve:true }).error === "Forbidden");
 
-  // Gil (k7) still has the arm. Nothing was reserved by asking, so approving now
-  // would hand one item to two people.
   asAdmin();
-  check("approving what someone else took is refused",
-        post({ action:"decideCheckout", checkoutId:"k8", approve:true }).error === "Clash");
-  check("and it stays pending", row("k8").status === "Pending Approval");
-
-  post({ action:"returnItem", checkoutId:"k7" });
-  check("an admin can once it is back", post({ action:"decideCheckout", checkoutId:"k8", approve:true }).ok === true);
+  check("an admin can approve a hold nothing overlaps",
+        post({ action:"decideCheckout", checkoutId:"k8", approve:true }).ok === true);
   check("which makes it Active", row("k8").status === "Active");
-  check("and hands the item over", used("p1").indexOf("Hal") >= 0);
+  // Approving a booking that starts on the 5th does not take the arm off the shelf
+  // on the 16th of August. syncItemStatuses() hands it over when the day comes.
+  check("but the arm is not handed over three weeks early", used("p1").indexOf("Hal") < 0);
+  check("and the item is still Available today", c6.readTable("Items").find(i=>i.id==="p1").status === "Available");
   check("deciding twice is refused",
         post({ action:"decideCheckout", checkoutId:"k8", approve:true }).error === "Not pending");
+
+  // ── the day arrives ──
+  // The sweep derives the flag from the bookings that are live now, so it is safe
+  // to run at any time and any number of times.
+  const nowBook = book("k8b","Hal","2026-08-15 09:00","2026-08-30 17:00","","","Reject Rig","p5");
+  check("a hold that is already under way waits for approval too", nowBook.pending === true);
+  post({ action:"decideCheckout", checkoutId:"k8b", approve:true });
+  check("approving one that has already started hands it over now",
+        used("p5").indexOf("Hal") >= 0 &&
+        c6.readTable("Items").find(i=>i.id==="p5").status === "In Use");
+  check("the sweep leaves a settled lab alone", c6.syncItemStatuses() === 0);
+  check("and it is still In Use afterwards",
+        c6.readTable("Items").find(i=>i.id==="p5").status === "In Use");
 
   // ── asking reserves nothing, so several people may ask ──
   const long2 = book("k9","Ivy","2026-09-06 09:00","2026-09-25 09:00","13:00","16:00");
@@ -408,7 +428,9 @@ console.log("shared items book by the hour; long holds wait for an admin");
   const shortened = post({ action:"updateCheckout", checkoutId:"k14", checkout:{ out:"2026-09-05 09:00", ret:"2026-09-07 09:00" } });
   check("shortening it clears the approval", shortened.pending === false);
   check("it becomes a plain checkout", row("k14").status === "Active");
-  check("and the item is handed over", used("s3").indexOf("Ned") >= 0);
+  // Active, not in his hands: the shortened booking starts on 5 September and the
+  // clock says 16 August. The sweep hands it over on the day.
+  check("but not handed over until the day it starts", used("s3").indexOf("Ned") < 0);
   check("a decided request can no longer be edited",
         post({ action:"updateCheckout", checkoutId:"k14", checkout:{ ret:"2026-09-08 09:00" } }).error === "Not pending");
 
@@ -446,8 +468,10 @@ console.log("shared items book by the hour; long holds wait for an admin");
   check("and nothing was written", row("u2") === undefined);
   check("one after it ends is fine",
         book("u3","Uma","2026-09-03 17:00","2026-09-05 17:00","","","Solo Rig","p6").ok === true);
-  check("the item is not handed to two people at once",
-        used("p6").length === 2 && used("p6").indexOf("Tam") < 0);
+  // Both bookings start in September and the clock says August, so nobody is
+  // holding it yet — what stops it going to two people is that Tam's was refused.
+  check("nobody is holding it yet, since neither has started", used("p6").length === 0);
+  check("and the refused one left no row behind", row("u2") === undefined);
   // Rule 2 refuses before rule 3 decides, so an active booking is not something
   // you may queue behind — only a *pending* one is (rule 4).
   check("a long request across an active booking is refused, not queued",
@@ -580,6 +604,63 @@ console.log("purchase approval is the admin's, whichever door you knock on");
   asMember();
   check("the requester can no longer touch it once it is decided",
         /already/.test(post({ action:"updateOrder", order:{ id:"o1", qty:9 } }).detail || ""));
+}
+
+console.log("In Use means somebody has it now, not that somebody booked it");
+{
+  const ssA = fresh();
+  const cA = load(ssA);
+  cA.setupNewLab();
+  cA.writeSetting("admins", JSON.stringify(["zzhan409@jh.edu"]));
+  cA.verifyToken = () => ({ email:"zzhan409@jh.edu", name:"Z", oid:"a" });
+  const post = p => JSON.parse(cA.doPost({ postData:{ contents: JSON.stringify(Object.assign({token:"t"}, p)) } }).__text);
+  const item = (id,name,extra) => post({ action:"addItem", item: Object.assign({ id, name, cat:"Robots & Motors",
+    qty:1, unit:"units", loc:"H306", minQty:0, img:"", desc:"", status:"Available", usedBy:[], serial:"",
+    displayId:"", shared:false, consumable:false }, extra||{}) });
+  const book = (id,itemId,name,user,out,ret,extra) => post({ action:"addCheckout", checkout: Object.assign(
+    { id, itemId, item:name, user, out, ret, status:"Active", checkedOutByEmail:user.toLowerCase()+"@jh.edu",
+      groupEmails:"", qty:1, fromTime:"", toTime:"" }, extra||{}) });
+  const it  = id => cA.readTable("Items").find(i => i.id === id);
+
+  item("a1","Arm A"); item("a2","Arm B"); item("a3","Arm C");
+  item("a4","Bench", { shared:true }); item("a5","Gloves", { consumable:true, qty:9 });
+  item("a6","Cracked Arm", { status:"Broken" });
+
+  // now = 2026-08-16 12:00Z
+  book("bk-now","a1","Arm A","Nia","2026-08-15 09:00","2026-08-20 17:00");
+  book("bk-soon","a2","Arm B","Oli","2026-09-01 09:00","2026-09-03 17:00");
+  book("bk-past","a3","Arm C","Pia","2026-08-01 09:00","2026-08-05 17:00");
+
+  check("a booking under way takes the item now", it("a1").status === "In Use" && it("a1").usedBy[0] === "Nia");
+  check("a booking for next month does not", it("a2").status === "Available" && it("a2").usedBy.length === 0);
+  check("nor does one logged after it ended", it("a3").status === "Available");
+
+  // Nothing to correct: the sweep must agree with what addCheckout already did.
+  check("the sweep changes nothing on a settled lab", cA.syncItemStatuses() === 0);
+  check("and leaves the live hold alone", it("a1").status === "In Use");
+
+  // Hand-set the flags wrong, the way a stale browser or an admin override would.
+  cA.updateRow("Items", "a1", { status: "Available", usedBy: [] });
+  cA.updateRow("Items", "a2", { status: "In Use", usedBy: ["Oli"] });
+  cA.updateRow("Items", "a3", { status: "In Use", usedBy: ["Pia"] });
+  check("the sweep corrects all three", cA.syncItemStatuses() === 3);
+  check("the live hold is back", it("a1").status === "In Use" && it("a1").usedBy[0] === "Nia");
+  check("the future one is free again", it("a2").status === "Available" && it("a2").usedBy.length === 0);
+  check("and the finished one is released", it("a3").status === "Available" && it("a3").usedBy.length === 0);
+
+  // A shared item under way stays Available — several people hold it at once.
+  book("bk-shared","a4","Bench","Quin","2026-08-15 09:00","2026-08-20 17:00");
+  cA.syncItemStatuses();
+  check("a shared item stays Available while held", it("a4").status === "Available");
+  check("but records who has it", it("a4").usedBy.indexOf("Quin") >= 0);
+
+  check("consumables are left out of it", it("a5").status === "Available");
+  check("and Broken is not overwritten by the sweep", it("a6").status === "Broken");
+
+  // A returned booking releases the item whether or not the sweep has run.
+  post({ action:"returnItem", checkoutId:"bk-now" });
+  check("returning frees it", it("a1").status === "Available" && it("a1").usedBy.length === 0);
+  check("and the sweep agrees", cA.syncItemStatuses() === 0 && it("a1").status === "Available");
 }
 
 console.log("a printed base label belongs to one thing");

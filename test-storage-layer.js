@@ -20,6 +20,13 @@
  *
  * Usage: node test-storage-layer.js [path-to-backend.js]
  */
+// The backend reads dates on the local clock and the Apps Script project runs in
+// America/New_York, so the tests have to as well — otherwise a booking fixture
+// written as "2026-08-16 11:00" means a different instant on a laptop in Baltimore
+// than on a CI box in UTC, and whether it counts as under way changes with it.
+// Set before any Date is constructed; Node reads TZ once.
+process.env.TZ = "America/New_York";
+
 const fs = require("fs");
 const vm = require("vm");
 
@@ -203,9 +210,12 @@ function run(scriptPath, slackMode, asAdmin) {
     out: "2026-08-16 10:00", ret: "2026-08-20 10:00", status: "Active",
     checkedOutByEmail: "zzhan409@jh.edu", groupEmails: "peer@jh.edu", qty: 2 } });
 
+  // Both checkouts start before the frozen clock (14:30Z = 10:30 in New York) and
+  // end after it, so both are under way — an item is only taken off the shelf
+  // while its booking actually is. 11:00 local was half an hour the wrong side.
   step("addCheckout/shared", { action: "addCheckout", checkout: {
     id: "c2", itemId: "i2", item: "RealSense D435", user: "Zizhe Zhang",
-    out: "2026-08-16 11:00", ret: "2026-08-18 11:00", status: "Active",
+    out: "2026-08-16 09:00", ret: "2026-08-18 11:00", status: "Active",
     checkedOutByEmail: "zzhan409@jh.edu", groupEmails: "" } });
 
   step("returnItem", { action: "returnItem", checkoutId: "c1" });

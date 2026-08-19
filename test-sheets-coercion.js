@@ -15,6 +15,13 @@
  * time windows silently becoming all-day, and every rule evaluated on a findRow()
  * row failing open — and neither was visible to the other two test files.
  */
+// The backend reads dates on the local clock and the Apps Script project runs in
+// America/New_York, so the tests have to as well — otherwise a booking fixture
+// written as "2026-08-16 11:00" means a different instant on a laptop in Baltimore
+// than on a CI box in UTC, and whether it counts as under way changes with it.
+// Set before any Date is constructed; Node reads TZ once.
+process.env.TZ = "America/New_York";
+
 const fs = require("fs");
 const vm = require("vm");
 
