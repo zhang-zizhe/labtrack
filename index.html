@@ -909,7 +909,10 @@ const ItemPicker = ({items, value, onChange, categories, exclude}) => {
   // Addressed by id, not name: split units share a name and differ only by id and
   // label, so a name could never say which physical unit was being taken.
   const selected = items.find(i=>String(i.id)===String(value));
-  // Exclude: consumables (use "Use" button), broken/maintenance, and "In Use" non-shared items
+  // Excluded: consumables (they get a Use button), anything Broken or in
+  // Maintenance, and whatever the other slots of this same checkout already hold.
+  // An item somebody currently has is deliberately still offered — you may be
+  // booking it for after it comes back, and rule 2 refuses the dates that collide.
   const taken = new Set((exclude||[]).filter(Boolean).map(String));
   const avail = items.filter(i=>canCheckOut(i) && !taken.has(String(i.id)));
   const filtered = avail.filter(i=>{
