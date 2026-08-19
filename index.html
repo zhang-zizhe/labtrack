@@ -174,7 +174,12 @@ html.dark .card-item:hover{box-shadow:0 14px 36px rgba(0,0,0,.55),0 0 0 1px rgba
 const { useState, useRef, useEffect, useCallback, useMemo } = React;
 
 // ─── DYNAMIC DATE ────────────────────────────────────────────────────────────
-const getToday = () => new Date().toISOString().slice(0,10);
+// Local, not UTC. toISOString() names tomorrow from 20:00 in Baltimore, and this
+// is not only drawn — it prefills the checkout and delivery date fields, so an
+// evening checkout was *stored* under tomorrow's date. It also decides which
+// calendar cell is ringed as today and, through isOverdue, which loans are late.
+const getToday = () => { const d=new Date();
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; };
 const uid = () => Date.now() + Math.floor(Math.random() * 1e9);
 const toArr = v => Array.isArray(v) ? v.filter(x => x != null && x !== "") : [];
 const getNow = () => { const n=new Date(); return String(n.getHours()).padStart(2,"0")+":"+String(n.getMinutes()).padStart(2,"0"); };
@@ -254,6 +259,13 @@ const demoData = () => {
 
 const isBypassToken = t => t === "local" || String(t||"").indexOf("dev:") === 0;
 
+// Preview data lives under its own key. It used to share the one a real session
+// writes its offline cache to, and both the no-backend branch and the
+// backend-error fallback read that cache — so a person who had clicked "Member
+// One" to look around, then signed in for real, was shown the sample lab as if it
+// were the lab's, and any write went out against those rows.
+const dataKey = u => (u && u.token === "local") ? "labtrack_data_preview" : "labtrack_data";
+
 // ─── MICROSOFT SIGN-IN HELPERS ───────────────────────────────────────────────
 const MSAL_SCOPES = () => (window.ENTRA_CONFIG && window.ENTRA_CONFIG.scopes) || ["openid","profile","email"];
 
@@ -332,7 +344,17 @@ const isOverdue = (co) => co.status === "Active" && co.ret && getDatePart(co.ret
 const MAX_DAYS_WITHOUT_APPROVAL = 7;
 const MAX_LEAD_DAYS = 31;              // how far ahead a booking may start
 const CO_PENDING = "Pending Approval";
-const bookingMs = s => { const d = new Date(String(s||"").trim().replace(" ","T")); return isNaN(d.getTime()) ? null : d.getTime(); };
+// A booking's two ends have to be read off the same clock. new Date("2026-08-25")
+// is UTC midnight but new Date("2026-08-25T09:00") is local, and the form lets you
+// leave the return *time* blank — so the end of a hold landed four hours before
+// the day it names even started. Build it from the parts.
+// Mirrors bookingMs_() in google-apps-script.js.
+const bookingMs = s => {
+  const m = String(s||"").trim().match(/^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{1,2}):(\d{2}))?$/);
+  const d = m ? new Date(+m[1],+m[2]-1,+m[3],m[4]===undefined?0:+m[4],m[5]===undefined?0:+m[5])
+              : new Date(String(s||"").trim().replace(" ","T"));
+  return isNaN(d.getTime()) ? null : d.getTime();
+};
 const bookingDays = (out,ret) => { const a=bookingMs(out), b=bookingMs(ret); return (a===null||b===null) ? 0 : (b-a)/86400000; };
 const needsApproval = c => bookingDays(c.out,c.ret) > MAX_DAYS_WITHOUT_APPROVAL;
 const hhmmMins = t => { const m=String(t||"").match(/^(\d{1,2}):(\d{2})$/); return m ? parseInt(m[1],10)*60+parseInt(m[2],10) : null; };
@@ -573,7 +595,7 @@ const Btn = ({children,onClick,v="primary",style,disabled,sm}) => {
     success:{background:"var(--green-d)",color:"var(--green)",border:"1px solid color-mix(in srgb, var(--green) 30%, transparent)"},
     amber:{background:"var(--amber-d)",color:"var(--amber)",border:"1px solid color-mix(in srgb, var(--amber) 30%, transparent)"},
   };
-  return <button disabled={disabled} onClick={onClick} style={{...VS[v],borderRadius:8,padding:sm?"5px 11px":"9px 18px",fontSize:sm?11:14,fontWeight:600,cursor:disabled?"not-allowed":"pointer",opacity:disabled?.4:1,display:"inline-flex",alignItems:"center",gap:6,fontFamily:"'Outfit',sans-serif",transition:"all .15s",whiteSpace:"nowrap",...style}}>{children}</button>;
+  return <button disabled={disabled} onClick={onClick} style={{...(VS[v]||VS.primary),borderRadius:8,padding:sm?"5px 11px":"9px 18px",fontSize:sm?11:14,fontWeight:600,cursor:disabled?"not-allowed":"pointer",opacity:disabled?.4:1,display:"inline-flex",alignItems:"center",gap:6,fontFamily:"'Outfit',sans-serif",transition:"all .15s",whiteSpace:"nowrap",...style}}>{children}</button>;
 };
 
 // ─── MODAL SHELL ─────────────────────────────────────────────────────────────
@@ -1774,7 +1796,7 @@ const GroupDetail = ({group,checkouts,onClose,onEdit,onQuickCheckout,onReturn,ed
                   <Btn v="ghost" sm onClick={()=>{onReturn(activeCheckout.id);onClose();}}>Return</Btn>
                 )}
                 {!inUse&&(
-                  <Btn v="cyan" sm onClick={()=>{onClose();onQuickCheckout(unit.id);}}>Check Out</Btn>
+                  <Btn sm onClick={()=>{onClose();onQuickCheckout(unit.id);}}>Check Out</Btn>
                 )}
                 <Btn v="ghost" sm onClick={()=>{if(editLocked){return;}onClose();onEdit(unit);}} disabled={editLocked} style={editLocked?{opacity:0.4,cursor:"not-allowed"}:{}}>
                   <Ico n={editLocked?"lock":"edit"} s={13}/>{editLocked?"":"Edit"}
@@ -2265,8 +2287,10 @@ const CalView=({checkouts,deliveries,user,effectiveRole})=>{
 };
 
 // ─── LOGIN PAGE ──────────────────────────────────────────────────────────────
-const LoginPage = ({onSignIn}) => {
-  const [error, setError] = useState("");
+const LoginPage = ({onSignIn, notice=""}) => {
+  // `notice` is why the app signed you out — LabInventory cannot reach this
+  // component's own error state, and used to try.
+  const [error, setError] = useState(notice);
   const [msalReady, setMsalReady] = useState(false);
   const [busy, setBusy] = useState(false);
 
@@ -2526,6 +2550,8 @@ function LabInventory(){
   const [sortBy, setSortBy] = useState("name-az");
   const [darkMode, setDarkMode] = useState(false);   // light is the default; JHU palette is built for it
   const [previewMode, setPreviewMode] = useState(false);
+  // Why the app signed you out, handed to LoginPage so it can say so.
+  const [signedOutBecause, setSignedOutBecause] = useState("");
   const [editLocked, setEditLocked] = useState(true);
   const tid = useRef(0);
   const tokenRef = useRef(null);   // current Entra ID token; refreshed on demand by getFreshToken
@@ -2598,7 +2624,7 @@ function LabInventory(){
     if (!user || dataLoaded) return;
     if (!APP_CONFIG.apps_script_url || user.token === "local") {
       try {
-        const saved = localStorage.getItem("labtrack_data");
+        const saved = localStorage.getItem(dataKey(user));
         const d = saved ? JSON.parse(saved) : null;
         // Nothing stored, or stored-but-empty: hand the previewer a lab to look at
         // rather than an empty grid. Clearing everything gets it back.
@@ -2619,7 +2645,7 @@ function LabInventory(){
       if (data && data.error === "NotMember") {
         setUser(null);
         localStorage.removeItem("labtrack_user");
-        setError("Your account (" + (user.email||"") + ") is not authorized to access this lab's system. Contact a lab admin to be added.");
+        setSignedOutBecause("Your account (" + (user.email||"") + ") is not authorized to access this lab's system. Contact a lab admin to be added.");
         setDataLoaded(true); setFetchingData(false); return;
       }
       if (data && data.error === "Unauthorized") {
@@ -2628,7 +2654,7 @@ function LabInventory(){
       if (data && data.error) {
         console.error("[LabTrack] Backend error:", data.error, data.detail);
         try {
-          const saved = localStorage.getItem("labtrack_data");
+          const saved = localStorage.getItem(dataKey(user));
           if (saved) {
             const d = JSON.parse(saved);
             if (d.items) setItems(d.items);
@@ -2662,8 +2688,8 @@ function LabInventory(){
   // Save data locally as fallback
   useEffect(()=>{
     if (!dataLoaded) return;
-    localStorage.setItem("labtrack_data", JSON.stringify({items, deliveries, checkouts, orders}));
-  },[items, deliveries, checkouts, orders, dataLoaded]);
+    localStorage.setItem(dataKey(user), JSON.stringify({items, deliveries, checkouts, orders}));
+  },[items, deliveries, checkouts, orders, dataLoaded, user]);
 
   // Auto-refresh: poll every 30s for changes from other users
   useEffect(()=>{
@@ -2788,12 +2814,16 @@ function LabInventory(){
     const h=e=>{
       if(e.target.tagName==="INPUT"||e.target.tagName==="TEXTAREA"||e.target.tagName==="SELECT")return;
       if(e.key==="Escape"){setModal(null);setDetail(null);setConfirm(null);setLabelItem(null);}
+      // Only when nothing is open. These swap `modal` outright, so pressing one
+      // over a half-filled form unmounted it and threw the typing away — the
+      // dirty guard never got a say, because nothing was being closed.
+      if(modal||detail||confirm||labelItem||editOrder||useItem||notifyItem||editReq||pendingItem||editItem)return;
       if(e.key==="n"||e.key==="N") setModal("delivery");
       if(e.key==="c"||e.key==="C"){setPreItem("");setModal("checkout");}
     };
     document.addEventListener("keydown",h);
     return()=>document.removeEventListener("keydown",h);
-  },[user]);
+  },[user,modal,detail,confirm,labelItem,editOrder,useItem,notifyItem,editReq,pendingItem,editItem]);
 
   // computed
   const lowStock = items.filter(isLowStock);
@@ -2833,7 +2863,7 @@ function LabInventory(){
               // sat in the queue would otherwise go out with an expired token.
               const result = await API.post(await getFreshToken(), req.action, req.payload);
               if (result?.error === "Unauthorized") { setSessionExpired(true); }
-              if (result?.error === "NotMember") { setUser(null); localStorage.removeItem("labtrack_user"); setError("Your account is not authorized to access this lab's system."); }
+              if (result?.error === "NotMember") { setUser(null); localStorage.removeItem("labtrack_user"); setSignedOutBecause("Your account is not authorized to access this lab's system."); }
               if (result?.error && result.error !== "Unauthorized" && result.error !== "NotMember") addToast("error", `Error: ${result.error} — ${result.detail||""}`);
               req.resolve(result);
             } catch(e) { req.resolve(null); }
@@ -2880,6 +2910,20 @@ function LabInventory(){
       setCheckouts(p=>p.filter(x=>x.id!==checkout.id));
       if(!pending&&!heldElsewhere) setItems(prev=>prev.map(i=>isCheckoutTarget(i,checkout)?{...i,status:"Available",usedBy:toArr(i.usedBy).filter(u=>u!==checkout.user)}:i));
       addToast("error",res.detail||res.error);
+      return;
+    }
+    // The browser guessed from a list that is up to a poll old; the server decided
+    // from the whole table. If someone joined the queue for this slot in between,
+    // what we just drew as a checkout is really a request — say so, and put the
+    // item back on the shelf rather than leaving it marked In Use on this screen
+    // while the sheet says nobody has it.
+    if(res&&res.pending&&!pending){
+      setCheckouts(p=>p.map(x=>x.id===checkout.id?{...x,status:CO_PENDING}:x));
+      if(!checkouts.some(x=>x.status==="Active"&&x.user===checkout.user&&String(x.itemId||"")===String(checkout.itemId||"")))
+        setItems(prev=>prev.map(i=>isCheckoutTarget(i,checkout)?{...i,status:"Available",usedBy:toArr(i.usedBy).filter(u=>u!==checkout.user)}:i));
+      addToast("info",res.reason==="queue"
+        ? `Someone else asked for this slot first — ${checkout.item} is waiting on an admin`
+        : `${checkout.item} needs an admin's approval`);
     }
   };
 
@@ -2911,11 +2955,18 @@ function LabInventory(){
 
   const handleDecideCheckout=async(coId,approve)=>{
     const co=checkouts.find(c=>c.id===coId); if(!co)return;
+    const wasHeld=items.some(i=>isCheckoutTarget(i,co)&&toArr(i.usedBy).includes(co.user));
     setCheckouts(p=>p.map(c=>c.id===coId?{...c,status:approve?"Active":"Rejected"}:c));
     if(approve) markInUse(co);
     addToast("success",approve?`${co.item} approved for ${co.user}`:`Request for ${co.item} rejected`);
     const res=await postAction("decideCheckout",{checkoutId:coId,approve});
-    if(res&&res.error) addToast("error",res.detail||res.error);
+    // The usual refusal here is "taken while this was waiting", so leaving the row
+    // reading Active would tell the admin they granted something they did not.
+    if(!res||res.error){
+      setCheckouts(p=>p.map(c=>c.id===coId?{...c,status:co.status}:c));
+      if(approve&&!wasHeld) setItems(prev=>prev.map(i=>isCheckoutTarget(i,co)?{...i,status:i.shared?i.status:"Available",usedBy:toArr(i.usedBy).filter(u=>u!==co.user)}:i));
+      addToast("error",(res&&(res.detail||res.error))||"Could not reach the lab sheet — nothing was changed");
+    }
   };
 
   const handleNotifyLowStock = async (item, note) => {
@@ -2955,8 +3006,8 @@ function LabInventory(){
     if(effectiveRole==="admin")return true;
     if(!c.checkedOutByEmail)return true; // legacy records without email
     if(user?.email===c.checkedOutByEmail)return true;
-    const grp=(c.groupEmails||"").split(",").map(e=>e.trim()).filter(Boolean);
-    return grp.includes(user?.email||"");
+    const grp=(c.groupEmails||"").split(",").map(e=>e.trim().toLowerCase()).filter(Boolean);
+    return grp.includes(String(user?.email||"").toLowerCase());
   };
 
   const handleBulkReturn=()=>{
@@ -3189,7 +3240,7 @@ function LabInventory(){
     </div>;
   }
 
-  if (!user) return <LoginPage onSignIn={handleSignIn}/>;
+  if (!user) return <LoginPage onSignIn={handleSignIn} notice={signedOutBecause}/>;
 
   return(
     <div style={{background:"var(--bg0)",minHeight:"100vh",color:"var(--text)"}}>
@@ -3851,6 +3902,7 @@ function LabInventory(){
                           <div style={{minWidth:0}}>
                             <div style={{color:"var(--text)",fontSize:13,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{c.item}</div>
                             <div style={{color:od2?"var(--red)":"var(--dim)",fontSize:10,fontFamily:"'IBM Plex Mono',monospace",marginTop:2}}>{od2?"OVERDUE":"Return"} {c.ret||"—"}{hasWindow(c)&&<span style={{color:"var(--cyan)"}}> · {windowLabel(c)}</span>}</div>
+                            {c.notes&&<div style={{color:"var(--sub)",fontSize:11,marginTop:3,fontStyle:"italic"}}>{c.notes}</div>}
                           </div>
                           {canReturn(c)&&<Btn v="ghost" sm onClick={()=>setConfirm({msg:`Return "${c.item}" from ${c.user}?`,onConfirm:()=>handleReturn(c.id)})}><Ico n="undo" s={11}/></Btn>}
                         </div>
@@ -3953,7 +4005,7 @@ function LabInventory(){
                         <td style={{padding:"10px 16px"}}>{c.status==="Active"&&canRet&&<input type="checkbox" checked={isSel} onChange={handleCoClick} onClick={e=>e.stopPropagation()} style={{cursor:"pointer",accentColor:"var(--cyan)"}}/>}</td>
                         <td style={{padding:"10px 16px",color:"var(--text)",fontWeight:600}}>{c.item}{Number(c.qty)>1&&<span style={{color:"var(--sub)",fontWeight:400,fontFamily:"'IBM Plex Mono',monospace",fontSize:12,marginLeft:6}}>×{Number(c.qty)}</span>}</td>
                         <td style={{padding:"10px 16px"}}><div style={{display:"flex",alignItems:"center",gap:8}}><MemberAvatar name={c.user} sz={26}/><span style={{color:"var(--sub)"}}>{c.user}</span></div></td>
-                        <td style={{padding:"10px 16px",color:"var(--dim)",fontFamily:"'IBM Plex Mono',monospace",fontSize:11}}>{c.out}{hasWindow(c)&&<div style={{color:"var(--cyan)",marginTop:2}}>{windowLabel(c)}</div>}</td>
+                        <td style={{padding:"10px 16px",color:"var(--dim)",fontFamily:"'IBM Plex Mono',monospace",fontSize:11}}>{c.out}{hasWindow(c)&&<div style={{color:"var(--cyan)",marginTop:2}}>{windowLabel(c)}</div>}{c.notes&&<div style={{color:"var(--sub)",marginTop:2,fontStyle:"italic",fontFamily:"'Roboto',sans-serif"}}>{c.notes}</div>}</td>
                         <td style={{padding:"10px 16px",color:od?"var(--red)":"var(--dim)",fontFamily:"'IBM Plex Mono',monospace",fontSize:11,fontWeight:od?700:400}}>{c.ret||"—"}{od&&" !"}</td>
                         <td style={{padding:"10px 16px"}}><Badge status={od?"Overdue":c.status}/></td>
                         <td style={{padding:"10px 16px"}}>{c.status==="Active"&&canRet&&<Btn v="ghost" sm onClick={e=>{e.stopPropagation();setConfirm({msg:`Return "${c.item}" from ${c.user}?`,onConfirm:()=>handleReturn(c.id)});}}><Ico n="undo" s={12}/>Return</Btn>}</td>

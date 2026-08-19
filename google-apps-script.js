@@ -9,7 +9,7 @@
  * and adds any column a pre-existing sheet is missing:
  *   Items      — id | name | cat | qty | unit | loc | minQty | img | desc | status | usedBy | serial | displayId | shared | consumable
  *   Deliveries — id | item | qty | unit | from | receivedBy | date | tracking | status
- *   Checkouts  — id | itemId | item | user | out | ret | status | checkedOutByEmail | groupEmails | qty | fromTime | toTime
+ *   Checkouts  — id | itemId | item | user | out | ret | status | checkedOutByEmail | groupEmails | qty | fromTime | toTime | notes
  *   Orders     — id | store | item | link | qty | unit | price | cat | requestedBy | reason | urgency | date | status | requestedByEmail
  *   Settings   — key | value
  *   DeleteLog  — date | type | name | details | deletedBy
@@ -76,10 +76,23 @@ const CHECKOUT_PENDING = "Pending Approval";
 
 // "YYYY-MM-DD HH:MM" → epoch ms. Apps Script's Date parses this reliably enough
 // for comparison; the values are always produced by the client in this shape.
+// "YYYY-MM-DD HH:MM" or "YYYY-MM-DD" as an instant on the local clock.
+//
+// new Date("2026-08-25") is parsed as UTC midnight, while new Date("2026-08-25T09:00")
+// is parsed as local — so leaving the return *time* blank, which the form lets you
+// do, put the end of the hold four hours before the day it names even began. The
+// two ends of one booking were being measured on two different clocks: a hold from
+// 18 Aug 09:00 to 25 Aug came out as 6.46 days and slipped under the seven-day
+// rule, and its slot read as free from 20:00 the evening before. Build the instant
+// from the parts instead of leaving it to the parser.
 function bookingMs_(s) {
-  var t = String(s || "").trim().replace(" ", "T");
-  var d = new Date(t);
-  return isNaN(d.getTime()) ? null : d.getTime();
+  var m = String(s || "").trim().match(/^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{1,2}):(\d{2}))?$/);
+  if (m) {
+    var d = new Date(+m[1], +m[2] - 1, +m[3], m[4] === undefined ? 0 : +m[4], m[5] === undefined ? 0 : +m[5]);
+    return isNaN(d.getTime()) ? null : d.getTime();
+  }
+  var f = new Date(String(s || "").trim().replace(" ", "T"));
+  return isNaN(f.getTime()) ? null : f.getTime();
 }
 
 function bookingDays_(out, ret) {
@@ -832,7 +845,7 @@ function logAudit(userName, userEmail, action, details) {
 const TABLE_HEADERS = {
   Items:      ["id","name","cat","qty","unit","loc","minQty","img","desc","status","usedBy","serial","displayId","shared","consumable"],
   Deliveries: ["id","item","qty","unit","from","receivedBy","date","tracking","status"],
-  Checkouts:  ["id","itemId","item","user","out","ret","status","checkedOutByEmail","groupEmails","qty","fromTime","toTime"],
+  Checkouts:  ["id","itemId","item","user","out","ret","status","checkedOutByEmail","groupEmails","qty","fromTime","toTime","notes"],
   Orders:     ["id","store","item","link","qty","unit","price","cat","requestedBy","reason","urgency","date","status","requestedByEmail"],
   Settings:   ["key","value"],
   DeleteLog:  ["date","type","name","details","deletedBy"],
@@ -890,7 +903,7 @@ function normalizeRow_(headers, row) {
     if (h === "id" || h === "itemId") { val = val === "" || val == null ? (h === "itemId" ? "" : String(val)) : String(val); }
     // Ensure text fields are strings — Sheets auto-detects numbers in text cells
     // (e.g. a serial number "12345678" returns as the JS number 12345678)
-    var textFields = ["name","loc","cat","desc","serial","unit","status","displayId","tags","item","store","requestedBy","reason","link","from","receivedBy","tracking","user","checkedOutByEmail","groupEmails","requestedByEmail"];
+    var textFields = ["name","loc","cat","desc","serial","unit","status","displayId","tags","item","store","requestedBy","reason","link","from","receivedBy","tracking","user","checkedOutByEmail","groupEmails","requestedByEmail","notes"];
     if (textFields.indexOf(h) >= 0 && typeof val !== "string") {
       val = val == null ? "" : String(val);
     }
@@ -1355,6 +1368,14 @@ function doPost(e) {
       const groupList = String(co.groupEmails || "").split(",").map(e => e.trim().toLowerCase()).filter(Boolean);
       if (!admin && coEmail && userEmail !== coEmail && !groupList.includes(userEmail)) {
         return jsonResponse({ error: "Forbidden", detail: "Only the person who checked out this item, group members, or an admin can return it." });
+      }
+      // Only a live loan can be returned. Without this a second click — the bulk
+      // return, a stale tab, a double tap — rewrote the recorded return time and
+      // pulled the item off whoever had picked it up since; and a request still
+      // waiting for an admin could be "returned", which marked it Returned and
+      // freed an item it had never been given.
+      if (co.status !== "Active") {
+        return jsonResponse({ error: "Not out", detail: "This one is already " + String(co.status).toLowerCase() + " — nothing to return" });
       }
       const now = new Date();
       const nowStr = now.getFullYear()+"-"+String(now.getMonth()+1).padStart(2,"0")+"-"+String(now.getDate()).padStart(2,"0")

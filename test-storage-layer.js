@@ -101,6 +101,10 @@ function run(scriptPath, slackMode, asAdmin) {
   const ss = makeSpreadsheet({
     Items:      [["id","name","cat","qty","unit","loc","minQty","img","desc","status","usedBy","serial","displayId","shared","consumable"]],
     Deliveries: [["id","item","qty","unit","from","receivedBy","date","tracking","status"]],
+    // Deliberately one column short of TABLE_HEADERS (no `notes`): this is a lab
+    // whose sheet predates the column, and the seam has to file values under the
+    // sheet's own headings and drop the rest rather than shift everything left.
+    // setupNewLab() is what widens it; test-sheet-setup.js asserts that half.
     Checkouts:  [["id","itemId","item","user","out","ret","status","checkedOutByEmail","groupEmails","qty","fromTime","toTime"]],
     Orders:     [["id","store","item","link","qty","unit","price","cat","requestedBy","reason","urgency","date","status","requestedByEmail"]],
     Settings:   [["key","value"],

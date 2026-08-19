@@ -69,7 +69,7 @@ ctx.setupNewLab();
 const SCHEMA = {
   Items:      ["id","name","cat","qty","unit","loc","minQty","img","desc","status","usedBy","serial","displayId","shared","consumable"],
   Deliveries: ["id","item","qty","unit","from","receivedBy","date","tracking","status"],
-  Checkouts:  ["id","itemId","item","user","out","ret","status","checkedOutByEmail","groupEmails","qty","fromTime","toTime"],
+  Checkouts:  ["id","itemId","item","user","out","ret","status","checkedOutByEmail","groupEmails","qty","fromTime","toTime","notes"],
   Orders:     ["id","store","item","link","qty","unit","price","cat","requestedBy","reason","urgency","date","status","requestedByEmail"],
   Settings:   ["key","value"],
   DeleteLog:  ["date","type","name","details","deletedBy"],
@@ -234,6 +234,7 @@ console.log("shared items book by the hour; long holds wait for an admin");
     item("p5","Reject Rig",     false, "RM-005"),   // rejecting leaves the item alone
     item("p6","Solo Rig",       false, "RM-006"),   // rule 2 on a sole-use item
     item("p7","Range Rig",      false, "RM-007"),   // dates that do not make sense
+    item("p8","Group Rig",      false, "RM-008"),   // who is allowed to return it
   ]);
   const c6 = load(ss6);
   const asAdmin  = () => { c6.verifyToken = () => ({ email:"zzhan409@jh.edu", name:"Z", oid:"a" }); };
@@ -502,7 +503,7 @@ console.log("shared items book by the hour; long holds wait for an admin");
   // used to be covered only by test-storage-layer.js's non-admin run, which could
   // exercise it only because addCheckout let the caller forge whose row it was.
   asAdmin();
-  post({ action:"addCheckout", checkout:{ id:"g1", itemId:"p6", item:"Solo Rig", user:"Yara",
+  post({ action:"addCheckout", checkout:{ id:"g1", itemId:"p8", item:"Group Rig", user:"Yara",
     out:"2026-09-08 09:00", ret:"2026-09-09 09:00", status:"Active",
     checkedOutByEmail:"yara@jh.edu", groupEmails:"pal@jh.edu", qty:1, fromTime:"", toTime:"" } });
   asMember();
@@ -512,6 +513,20 @@ console.log("shared items book by the hour; long holds wait for an admin");
         (() => { c6.verifyToken = () => ({ email:"pal@jh.edu", name:"Pal", oid:"p" });
                  return post({ action:"returnItem", checkoutId:"g1" }).ok === true; })());
   check("and the row says Returned", row("g1").status === "Returned");
+  // Returning twice used to rewrite the recorded time and pull the item off
+  // whoever had picked it up since; and a request still waiting for an admin
+  // could be "returned", freeing an item it had never been given.
+  check("returning it again is refused",
+        post({ action:"returnItem", checkoutId:"g1" }).error === "Not out");
+  check("and a request still waiting cannot be returned at all", (() => {
+    c6.verifyToken = () => ({ email:"zzhan409@jh.edu", name:"Z", oid:"a" });
+    post({ action:"addCheckout", checkout:{ id:"g2", itemId:"p8", item:"Group Rig", user:"Zia",
+      out:"2026-08-20 09:00", ret:"2026-09-20 09:00", status:"Active",
+      checkedOutByEmail:"zia@jh.edu", groupEmails:"", qty:1, fromTime:"", toTime:"" } });
+    return row("g2").status === "Pending Approval" &&
+           post({ action:"returnItem", checkoutId:"g2" }).error === "Not out" &&
+           row("g2").status === "Pending Approval";
+  })());
 
   asAdmin();
   check("an admin may still log a checkout for someone else", (() => {
