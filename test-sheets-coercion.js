@@ -39,8 +39,17 @@ const RE_DTM  = /^(\d{4})-(\d{2})-(\d{2}) (\d{1,2}):(\d{2})$/;
 // nothing to do with Sheets. Build them with the context's own constructor.
 const REALM = { Date: Date };
 
+// Text that begins like a formula IS a formula to a spreadsheet, unless it was
+// written with Sheets' own "this is text" mark. Both halves of that matter:
+// the apostrophe is CONSUMED on the way in, so a cell holding literal "=A1" reads
+// back as "=A1" with nothing to say it was ever guarded. Round-tripping a row
+// through getValues()/setValues() therefore arms every formula it carries.
+const FORMULA_LEAD = /^[=+\-@\t\r]/;
+const FORMULA_FIRED = "#FORMULA-EVALUATED";
+
 function coerce(v) {
   if (typeof v !== "string") return v;
+  if (v.charAt(0) === "'") return v.slice(1);   // guarded: stored verbatim, mark dropped
   const D = REALM.Date;
   let m;
   if ((m = RE_DTM.exec(v)))  return new D(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]);
@@ -51,6 +60,7 @@ function coerce(v) {
   if (/^-?\d+(\.\d+)?$/.test(v)) return Number(v);
   if (v === "TRUE") return true;
   if (v === "FALSE") return false;
+  if (FORMULA_LEAD.test(v)) return FORMULA_FIRED;   // unguarded: Sheets runs it
   return v;
 }
 
@@ -209,15 +219,36 @@ console.log("\ntext beginning with = + - or @ is stored as text, not run as a fo
   post("a", "addItem", { item: item("i3", "@SUM(A1:A9)", false) });
   const hdr = ss.__sheets.Items.__data[0], col = hdr.indexOf("name");
   const cells = ss.__sheets.Items.__data.slice(1).map(r => r[col]);
-  check("nothing lands in a cell as a live formula", cells.every(c => String(c).charAt(0) !== "="));
-  check("the guard marks it as text", cells.every(c => String(c).charAt(0) === "'"));
+  check("nothing lands in a cell as a live formula", cells.every(c => c !== FORMULA_FIRED));
   const names = rows("Items").map(i => i.name);
   check("and the app still reads back exactly what was typed",
         names[0] === evil && names[1] === "+1+1" && names[2] === "@SUM(A1:A9)");
   // A leading apostrophe on ordinary text is somebody's data, not our marker.
   post("a", "addItem", { item: item("i4", "'tis a scope", false) });
-  check("an ordinary apostrophe is left alone",
+  check("an ordinary apostrophe survives being written",
         rows("Items").find(i => i.id === "i4").name === "'tis a scope");
+
+  // The bug this pair exists for: getValues() hands back a guarded cell as plain
+  // text, so writing the row back armed everything it carried. Editing the qty
+  // used to detonate the name.
+  post("a", "updateItem", { item: { id: "i1", qty: 9 } });
+  const after = rows("Items").find(i => i.id === "i1");
+  check("editing another field does not arm the name", after.name === evil);
+  check("and the edit still applied", after.qty === 9);
+  const rawAfter = ss.__sheets.Items.__data.slice(1).map(r => r[col]);
+  check("no cell evaluated after the round trip", rawAfter.every(c => c !== FORMULA_FIRED));
+}
+
+// The smoke test is the one thing that runs against the real spreadsheet, where
+// nobody is watching it for regressions. Run it here too, against the model, so a
+// typo in it surfaces at the desk rather than three months later in the editor.
+console.log("\nthe real-sheet smoke test is itself exercised here");
+{
+  const { ctx, rows } = build();
+  const report = ctx.smokeTest();
+  check("smokeTest reports no failures", report.indexOf("FAIL") < 0);
+  check("smokeTest cleans up after itself", rows("Items").length === 0 && rows("Checkouts").length === 0);
+  if (report.indexOf("FAIL") >= 0) console.log(report.split("\n").filter(l => /FAIL|note/.test(l)).join("\n"));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

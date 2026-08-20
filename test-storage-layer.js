@@ -38,6 +38,9 @@ function makeSheet(name, rows) {
     __name: name,
     __data: data,
     getName: () => name,
+    // presentation-only, recorded nowhere — the purchase summary sheet calls these
+    setColumnWidth: () => sheet,
+    setFrozenRows: () => sheet,
     getLastRow: () => data.length,
     getLastColumn: () => (data[0] ? data[0].length : 0),
     getDataRange() {
