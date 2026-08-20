@@ -47,9 +47,21 @@ const REALM = { Date: Date };
 const FORMULA_LEAD = /^[=+\-@\t\r]/;
 const FORMULA_FIRED = "#FORMULA-EVALUATED";
 
+// Deliberately wider than anything the backend enumerates. The point of a model is
+// to be at least as eager as the thing it models: if a column is not marked as text,
+// this should mangle it here, at the desk, rather than in the lab's spreadsheet.
+const RE_MD   = /^\d{1,2}[-\/]\d{1,2}([-\/]\d{2,4})?$/;   // 3-14, 5/10, 9/1/2026
+const RE_SCI  = /^[-+]?\d*\.?\d+[eE][-+]?\d+$/;           // 1E5
+const RE_CUR  = /^[$£€¥]\s*[\d,]+(\.\d+)?$/;              // $14.99
+const RE_THOU = /^\d{1,3}(,\d{3})+(\.\d+)?$/;             // 1,000
+const RE_PCT  = /^-?\d+(\.\d+)?%$/;                       // 50%
+const RE_12H  = /^\d{1,2}:\d{2}(:\d{2})?\s*[AaPp]\.?[Mm]\.?$/;  // 9:00 AM
+
 function coerce(v) {
   if (typeof v !== "string") return v;
-  if (v.charAt(0) === "'") return v.slice(1);   // guarded: stored verbatim, mark dropped
+  // Marked as text: no parsing happens at all. The mark itself is eaten one layer
+  // down, in makeSheet, which is where every stub models it — see that comment.
+  if (v.charAt(0) === "'") return v;
   const D = REALM.Date;
   let m;
   if ((m = RE_DTM.exec(v)))  return new D(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]);
@@ -61,6 +73,16 @@ function coerce(v) {
   if (v === "TRUE") return true;
   if (v === "FALSE") return false;
   if (FORMULA_LEAD.test(v)) return FORMULA_FIRED;   // unguarded: Sheets runs it
+  // Everything below destroys the typed value. A shelf "3-14" becomes a date and
+  // reads back "Sat Mar 14 2026 …"; "$14.99" loses its dollar sign; "1E5" becomes
+  // 100000; "1,000" becomes 1000. All of these were live until text columns started
+  // being marked as text.
+  if (RE_MD.test(v))   { const p = v.split(/[-\/]/); return new D(p[2] ? (+p[2] < 100 ? 2000 + +p[2] : +p[2]) : 2026, +p[0] - 1, +p[1]); }
+  if (RE_12H.test(v))  { const m2 = /^(\d{1,2}):(\d{2})/.exec(v); return new D(1899, 11, 30, +m2[1] + (/[Pp]/.test(v) && +m2[1] < 12 ? 12 : 0), +m2[2]); }
+  if (RE_SCI.test(v))  return Number(v);
+  if (RE_CUR.test(v))  return Number(v.replace(/[$£€¥,\s]/g, ""));
+  if (RE_THOU.test(v)) return Number(v.replace(/,/g, ""));
+  if (RE_PCT.test(v))  return Number(v.slice(0, -1)) / 100;
   return v;
 }
 
@@ -237,6 +259,39 @@ console.log("\ntext beginning with = + - or @ is stored as text, not run as a fo
   check("and the edit still applied", after.qty === 9);
   const rawAfter = ss.__sheets.Items.__data.slice(1).map(r => r[col]);
   check("no cell evaluated after the round trip", rawAfter.every(c => c !== FORMULA_FIRED));
+}
+
+console.log("\ntext a spreadsheet would rather was a number, a date or a price");
+{
+  const { post, rows } = build();
+  // Every one of these was destroyed on the way in, unrecoverably, until text
+  // columns started being marked as text. They are not exotic — a shelf reference,
+  // a price typed the way a person types one, a part number, a quantity with a
+  // thousands separator.
+  post("a", "addItem", { item: { id:"t1", name:"1E5 Resistor", cat:"Compute & Electronics",
+    qty:1, unit:"units", loc:"3-14", minQty:0, img:"", desc:"", status:"Available",
+    usedBy:[], serial:"0012345678", displayId:"CE-001", shared:false, consumable:false } });
+  const it = rows("Items").find(i => i.id === "t1");
+  check("a shelf written 3-14 is not March",   it.loc === "3-14");
+  check("a part number in E notation survives", it.name === "1E5 Resistor");
+  check("a serial keeps its leading zeros",     it.serial === "0012345678");
+
+  post("a", "addOrder", { order: { id:"o1", store:"5/10 Supplies", item:"Cable, 1,000 ct",
+    link:"https://x.example", qty:2, unit:"box", price:"$14.99", cat:"Compute & Electronics",
+    requestedBy:"Alice", reason:"", urgency:"Normal", date:"2026-08-20", status:"Pending",
+    requestedByEmail:"alice@jh.edu" } });
+  const o = rows("Orders").find(x => x.id === "o1");
+  check("a price keeps its dollar sign",        o.price === "$14.99");
+  check("a store written 5/10 is not a date",   o.store === "5/10 Supplies");
+  check("a thousands separator is not stripped", o.item === "Cable, 1,000 ct");
+  check("urgency stays the word it was",        o.urgency === "Normal");
+
+  // The sharp one: a price range parses as a date, and both the Copy Text total and
+  // the Purchase Summary =SUM() strip non-digits out of whatever comes back.
+  post("a", "addOrder", { order: { id:"o2", store:"S", item:"Widget", link:"", qty:1,
+    unit:"ea", price:"10-15", cat:"Compute & Electronics", requestedBy:"Alice", reason:"",
+    urgency:"Normal", date:"2026-08-20", status:"Pending", requestedByEmail:"alice@jh.edu" } });
+  check("a price range is still a price range", rows("Orders").find(x => x.id === "o2").price === "10-15");
 }
 
 // The smoke test is the one thing that runs against the real spreadsheet, where

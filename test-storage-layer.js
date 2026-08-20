@@ -33,7 +33,18 @@ const vm = require("vm");
 const FIXED_NOW = new Date("2026-08-16T14:30:00Z");
 
 function makeSheet(name, rows) {
-  const data = rows.map(r => r.slice());
+  // A leading apostrophe is Sheets' "this is text" mark, and it is EATEN on the way
+  // in: the cell holds the rest and getValues() never returns the mark. Measured
+  // against the real spreadsheet on 2026-08-20 by smokeTest(). It lives inside this
+  // function because test-sheets-coercion.js lifts makeSheet out by regex and
+  // rebuilds it, so anything in the enclosing scope is not there any more.
+  //
+  // Modelled here rather than in the coercing stub because it is the same for every
+  // sheet, plain or not — and because a stub that stored the mark would report a
+  // status of "'Pending", which is the exact species of divergence this file exists
+  // to make impossible.
+  const eatMark = v => (typeof v === "string" && v.charAt(0) === "'") ? v.slice(1) : v;
+  const data = rows.map(r => r.map(eatMark));
   const sheet = {
     __name: name,
     __data: data,
@@ -55,13 +66,13 @@ function makeSheet(name, rows) {
         setValues(vals) {
           for (let i = 0; i < nr; i++) {
             while (data.length < row + i) data.push([]);
-            for (let j = 0; j < nc; j++) data[row - 1 + i][col - 1 + j] = vals[i][j];
+            for (let j = 0; j < nc; j++) data[row - 1 + i][col - 1 + j] = eatMark(vals[i][j]);
           }
           return api;
         },
         setValue(v) {
           while (data.length < row) data.push([]);
-          data[row - 1][col - 1] = v;
+          data[row - 1][col - 1] = eatMark(v);
           return api;
         },
         getValues: () => {
@@ -83,7 +94,8 @@ function makeSheet(name, rows) {
       };
       return api;
     },
-    appendRow(row) { data.push(row.slice()); },
+    appendRow(row) {
+      row = row.map(eatMark); data.push(row.slice()); },
     deleteRow(n) { data.splice(n - 1, 1); },
     deleteRows(start, count) { data.splice(start - 1, count); },
     setColumnWidth: () => {},

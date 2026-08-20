@@ -411,7 +411,7 @@ const DEV_NO_AUTH_EMAIL = "zzhan409@jh.edu";   // identity the backend assumes
 8. Copy the Web app URL into `LAB_CONFIG.apps_script_url` in `index.html`
 9. **Run → `smokeTest`.** Checks the storage layer against the real spreadsheet —
    see [Tests](#tests) for why that is a different question from the other suites.
-   Expect `✅ smoke test: 36 passed`.
+   Expect `✅ smoke test: 45 passed`.
 
 > **After a code update, redeploy via Deploy → Manage deployments → ✏️ → Version:
 > New version.** *Not* "New deployment" — that mints a **different** `/exec` URL and
@@ -904,9 +904,9 @@ changed**; these are only the record of *why*.
 
 ```bash
 node --check google-apps-script.js       # backend syntax
-node test-sheet-setup.js                 # 229 assertions: setup, labels, per-unit
+node test-sheet-setup.js                 # 253 assertions: setup, labels, per-unit
                                          # targeting, order approval, booking rules
-node test-sheets-coercion.js             # 29 assertions: the ones that only fail live
+node test-sheets-coercion.js             # 37 assertions: the ones that only fail live
 node test-storage-layer.js > after.json  # behaviour snapshot — see below
 ```
 
@@ -942,6 +942,15 @@ ever opens. A third quietly truncated serial numbers with leading zeros.
 The lesson worth keeping: **when the model gains a rule, re-run and read the
 failures before assuming the test is wrong.** All four presented as broken
 assertions in a file that had been green.
+
+And then the enumeration turned out to be the wrong shape entirely. Guarding only
+the patterns someone thought of missed a shelf written `3-14` (a date), a price
+written `$14.99` (14.99), a part number `1E5` (100000) and a count `1,000` (1000) —
+each destroying the typed value with nothing left to recover it from. So text
+columns no longer get a guess: **every non-empty string in one is marked as text.**
+Missing a case costs silent corruption; marking one case too many costs nothing.
+`coerce()` in the model is now deliberately *wider* than anything the backend
+enumerates, so a column left out of `TEXT_FIELDS_` fails at the desk instead.
 
 If you add a column that stores anything other than plain text, add it to
 `normalizeRow_()`, add it to `TEXT_FIELDS_` if it is text, and add a case here.
