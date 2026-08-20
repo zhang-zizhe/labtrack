@@ -92,7 +92,13 @@ expected.forEach(n => {
 check("stray Sheet1 removed", !ss.__sheets.Sheet1);
 const st = ctx.readSettings();
 check("categories seeded (8)", JSON.parse(st.categories).length === 8);
+// Both, and lowercased: the PI is an admin from the first minute rather than after
+// somebody remembers, and two admins means one can always repair the list from
+// inside the app if the other is mistyped.
 check("admins seeded lowercase", JSON.parse(st.admins)[0] === "zzhan409@jh.edu");
+check("the PI is seeded as an admin too", JSON.parse(st.admins).indexOf("hhu49@jh.edu") >= 0);
+check("seeded as sign-in names, not mail aliases",
+      JSON.parse(st.admins).every(a => a.endsWith("@jh.edu")));
 check("members seeded empty",   JSON.parse(st.members).length === 0);
 check("slack_mode seeded",      st.slack_mode === "all");
 check("isAdmin works for seeded admin", ctx.isAdmin("zzhan409@jh.edu") === true);

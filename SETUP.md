@@ -50,7 +50,7 @@ The backend uses a Google Sheet with these tabs:
 | key | value |
 |-----|-------|
 | `categories` | `["Robots & Motors","Sensors & Vision","Compute & Electronics","Wiring & Networking","Tools & Hardware","Consumables & Supplies","Safety & Facility","Other"]` |
-| `admins` | `["jdoe12@jh.edu"]` — use the **sign-in name** (`<JHED>@jh.edu`), not the `@jhu.edu` mail alias. Compared case-insensitively. Must be valid JSON: `isAdmin` treats a value it cannot parse as "nobody is an admin", and only the Settings tab itself can then put you back. Saving it through the app is checked for exactly that, and refuses a list that leaves you out. |
+| `admins` | `["jdoe12@jh.edu"]` — use the **sign-in name** (`<JHED>@jh.edu`), not the `@jhu.edu` mail alias. This is the single easiest way to lock somebody out: the token carries the UPN, so seeding the address people know a colleague by produces a successful Microsoft sign-in followed by "not authorized", which reads like the consent failing rather than a typo. Seeded from `INITIAL_ADMINS` with the student and the PI both in it. Compared case-insensitively. Must be valid JSON: `isAdmin` treats a value it cannot parse as "nobody is an admin", and only the Settings tab itself can then put you back. Saving it through the app is checked for exactly that, and refuses a list that leaves you out. |
 | `members` | `["jdoe12@jh.edu","asmith3@jh.edu"]` — if present and non-empty, only these accounts can sign in; all other JHU accounts are rejected. Omit the key (or leave it as `[]`) to allow anyone in the JHU tenant. **Anyone in `admins` is a member whether or not they are listed here** — otherwise filling this in and forgetting yourself would lock you out of your own lab, settings included. |
 | `cat_prefixes` | `{"Robots & Motors":"RM","Sensors & Vision":"SV"}` — the label prefix per category, set from **Manage Categories** in the app. Written here as well as cached per-browser, because it decides what gets printed on a sticker: when it lived only in `localStorage`, the admin's machine and everyone else's produced two label series for one category, and clearing site data started a third |
 | `slack_mode` | `all` or `important` or `digest` or `off` |
@@ -389,8 +389,11 @@ const DEV_NO_AUTH_EMAIL = "zzhan409@jh.edu";   // identity the backend assumes
    and seeds Settings (categories, admins, members, slack_mode). It is idempotent,
    so it is safe to re-run later. Without it you would be building tabs by hand and
    column order matters.
-4. Confirm `ENTRA_CLIENT_ID` matches `client_id` in `index.html`, and replace
-   `"YOUR_SLACK_WEBHOOK_URL_HERE"` with your Slack webhook URL
+4. Check the constants at the top of the script before running anything:
+   `ENTRA_CLIENT_ID` must match `client_id` in `index.html`; `INITIAL_ADMINS` is who
+   gets seeded into the admin list, as **sign-in names** (`<JHED>@jh.edu`), not mail
+   aliases; `SLACK_WEBHOOK_URL` can stay as the placeholder for now — `sendSlack()`
+   returns early on it, so nothing breaks while there is no webhook
 5. **Set script timezone**: Project Settings → Time zone → **America/New_York**
 6. **Deploy → New deployment** → Web app → Execute as: Me → Who has access: Anyone
 7. Copy the Web app URL into `LAB_CONFIG.apps_script_url` in `index.html`

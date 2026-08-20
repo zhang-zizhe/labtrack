@@ -52,8 +52,17 @@ const DEV_NO_AUTH_KEY = "";
 const DEV_NO_AUTH_EMAIL = "zzhan409@jh.edu";
 
 // Seeded into the Settings "admins" list by setupNewLab() on a fresh sheet.
-// Must be the sign-in name (<JHED>@jh.edu), not the @jhu.edu mail alias.
-const INITIAL_ADMIN = "zzhan409@jh.edu";
+//
+// Sign-in names (<JHED>@jh.edu), NOT @jhu.edu mail aliases. The token carries the
+// UPN in preferred_username and isAdmin matches it exactly, so seeding the address
+// people actually know somebody by — haimin.hu@jhu.edu rather than hhu49@jh.edu —
+// produces a successful Microsoft sign-in followed by "not authorized", which reads
+// like the consent failing rather than like a typo in a spreadsheet.
+//
+// More than one on purpose: the PI should be an admin from the first minute, not
+// after the student remembers to add them. Two admins also means one of them can
+// always repair the list from inside the app.
+const INITIAL_ADMINS = ["zzhan409@jh.edu", "hhu49@jh.edu"];
 
 // ─── LABEL IDS ────────────────────────────────────────────────────────────────
 // PREFIX-NNN, and a split unit appends -NN:  RM-001,  RM-001-01
@@ -862,7 +871,7 @@ function setupNewLab() {
     categories: JSON.stringify(["Robots & Motors","Sensors & Vision","Compute & Electronics",
                                 "Wiring & Networking","Tools & Hardware","Consumables & Supplies",
                                 "Safety & Facility","Other"]),
-    admins:     JSON.stringify([String(INITIAL_ADMIN).trim().toLowerCase()]),
+    admins:     JSON.stringify(normalizeEmails_(INITIAL_ADMINS)),
     members:    JSON.stringify([]),   // empty = anyone in the tenant may sign in
     slack_mode: "all",
   };
