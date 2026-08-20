@@ -18,6 +18,7 @@
 |---|---|
 | App | ✅ deployed at `labtrack.zizhe.io` (temporary home; the intended one is a subdomain of the lab domain, which needs a JHU CS IT DNS request) |
 | Entra app registration | ✅ created — `06d4df0f-39e8-4c3a-aa24-8e76a45d1aa3` |
+| Admin consent | ⏳ requested 2026-08-20, JHU IT ticket **INC2905524** — sign-in stops at "Approval required" until it lands |
 | Admin consent | ❌ **not granted** — the one thing blocking real sign-in |
 | Backend | ❌ no Sheet yet; `apps_script_url` is empty, so the app runs out of localStorage |
 | Slack | ❌ webhook not created |
@@ -98,17 +99,34 @@ Sign-in is restricted to the Johns Hopkins Entra tenant
 | Application (client) ID | `06d4df0f-39e8-4c3a-aa24-8e76a45d1aa3` |
 | Object ID | `131c5c77-3d58-40b5-979f-3773a54776ca` |
 | Service principal ID | `6b25d3e1-700e-42b8-ac1d-79bf68e258c5` |
-| Owners | `zzhan409@jh.edu` (Zizhe Zhang), `hhu49@jh.edu` (Haimin Hu) — two on purpose; see [Before real inventory goes in](#before-real-inventory-goes-in) |
+| Owners | `zzhan409@jh.edu` (Zizhe Zhang), `hhu49@jh.edu` (Haimin Hu) — on **both** the application and the service principal. Two objects, two owner lists; the one an admin grants consent against is the service principal. See [Before real inventory goes in](#before-real-inventory-goes-in) |
 | Display name | LabTrack — Alliance AI Lab |
 | Supported account types | Single tenant (`AzureADMyOrg`) |
 | Platform | **Single-page application (SPA)** — *not* Web |
-| Redirect URIs | `https://labtrack.zizhe.io/`, `http://localhost:8000/`, `http://localhost:8000/index.html` |
+| Redirect URIs | Six, in three pairs — each origin registered both bare and with `/index.html`:<br>`https://labtrack.zizhe.io/` · `…/index.html`<br>`https://labtrack.alliance-ai.cs.jhu.edu/` · `…/index.html` *(registered ahead of the DNS record)*<br>`http://localhost:8000/` · `…/index.html` |
 | API permissions | `openid`, `profile`, `email`, `offline_access` (delegated, Microsoft Graph) |
 | Implicit grant | Off — MSAL uses authorization code flow with PKCE |
 
-This is **separate from the Figueroa lab's registration** (`5ac3d97f-…`), on purpose.
-Sharing one would mean either lab's token passed the other backend's `aud` check,
-and Alliance users would see "Figueroa Lab Inventory" on the Microsoft sign-in screen.
+**Why both forms of every origin.** MSAL derives `redirectUri` from
+`location.origin + location.pathname` (index.html), and GitHub Pages serves
+`/index.html` as its own path rather than redirecting it to `/`. So a bookmark or a
+pasted deep link ending in `/index.html` produces a redirect URI that Entra matches
+by exact string — and if it is not registered, sign-in dies with `AADSTS50011` and
+looks exactly like the consent not having worked. Registering both costs nothing.
+
+The `labtrack.alliance-ai.cs.jhu.edu` pair is registered **before** that DNS record
+exists, on purpose: it makes the move a DNS change rather than a DNS change plus a
+directory edit, and it means the URI list an administrator reads is visibly the
+lab's own domain rather than only a student's personal one.
+
+**Every lab gets its own registration.** Sharing one would mean either lab's token
+passed the other backend's `aud` check, and Alliance users would see the other lab's
+name on the Microsoft sign-in screen. A `LabTrack - Figueroa Lab Inventory`
+registration (`5ac3d97f-…`) briefly existed in this tenant as a by-product of the
+fork — pointed at `penn-figueroa-lab.github.io`, never consented, unable to work as
+configured — and was deleted on 2026-08-20 so that an administrator looking at the
+tenant sees one LabTrack rather than two. Deleted registrations are recoverable from
+Entra's deleted items for 30 days.
 
 Adding a redirect URI later (a new domain, say) means **rewriting the whole list**.
 PATCH replaces `spa.redirectUris` outright — it does not merge — so every URI you
@@ -161,16 +179,118 @@ restriction does not cover.
 
 ### One-time admin consent (required before first sign-in)
 
-Ask a JHU Entra administrator to do **either**:
+Without this, sign-in stops at *"Approval required — this app requires your admin's
+approval"*. The grant itself is one click for whoever has the rights:
 
-- Open <https://login.microsoftonline.com/9fa4f438-b1e6-473b-803f-86f8aedf0dec/adminconsent?client_id=06d4df0f-39e8-4c3a-aa24-8e76a45d1aa3> and accept, or
-- Entra admin center → Enterprise applications → *LabTrack — Alliance AI Lab* → Permissions → **Grant admin consent**
+- Entra admin center → Enterprise applications → *LabTrack — Alliance AI Lab* →
+  Permissions → **Grant admin consent for Johns Hopkins**
+- Or open
+  <https://login.microsoftonline.com/9fa4f438-b1e6-473b-803f-86f8aedf0dec/adminconsent?client_id=06d4df0f-39e8-4c3a-aa24-8e76a45d1aa3>
+  and accept. Do **not** put that link in the request — a message carrying a link
+  into an admin-consent endpoint is shaped exactly like the phishing a security team
+  spends its day blocking, and the portal path is the same operation.
 
-Without this, sign-in stops at *"Approval required — this app requires your admin's approval"*.
+#### How to actually reach someone at JHU
 
-What to tell them: no client secret, no application permissions, and no Graph data
-is read beyond the signed-in user's own name and sign-in address. Single tenant, so
-only JHU accounts can use it at all.
+This is tenant-level, so it is **central JHU IT, not CS department IT** — the CS
+support wiki routes "JHED accounts, @jh.edu email, and Microsoft services" upstream.
+Mailing `help@jhu.edu` gets an auto-reply pointing you at the self-service portal
+rather than opening a ticket, so go straight to
+<https://johnshopkins.service-now.com/serviceportal> → Request Help → Create Incident.
+
+The form's own quirks, which cost a round trip if you miss them:
+
+| Field | What it wants |
+|---|---|
+| *Does the description involve PHI/PII* | **No.** Until this is answered the description box does not even render. JHED IDs and work addresses are directory information, not the SSN/DOB/home-address category the form defines |
+| *Workstation ID* | Optional, and not applicable — but **say so in the description** rather than leaving it silent, because the auto-reply asks for it by name |
+| *Error message* | There is a real one to quote: *"Approval required — this app requires your admin's approval"*. Add that authentication itself works and only consent is missing |
+| *Location* | A **campus**, not a building — "Malone" finds nothing, "Homewood" does. The building is its own field below |
+
+#### The request, ready to adapt
+
+Filed 2026-08-20 as **INC2905524**. Another lab reusing this only needs to swap the
+four identifiers and the URL.
+
+```text
+Please grant admin consent, on behalf of the organization (tenant-wide, all users),
+for an Entra ID app registration in the Johns Hopkins tenant. It is a sign-in-only
+registration for an internal lab tool.
+
+  Application:             LabTrack - Alliance AI Lab
+  Application (client) ID: 06d4df0f-39e8-4c3a-aa24-8e76a45d1aa3
+  Service principal ID:    6b25d3e1-700e-42b8-ac1d-79bf68e258c5
+  Tenant ID:               9fa4f438-b1e6-473b-803f-86f8aedf0dec
+  Owners:                  zzhan409 (me) and hhu49 (my advisor, who approved this)
+
+TO GRANT
+Entra admin center > Enterprise applications > the application above > Permissions
+> Grant admin consent for Johns Hopkins. If it does not appear, set the
+"Application type" filter to "All Applications" and search by the client ID.
+
+Please grant it "on behalf of the organization" rather than for me individually.
+The whole lab signs in through it, so a per-user grant would leave everyone else
+blocked and we would be back here.
+
+WORKSTATION ID
+Not applicable. This is not a workstation issue - it is a tenant-level directory
+change and affects every device.
+
+ERROR MESSAGE
+Anyone who clicks "Sign in with Microsoft" at <URL> reaches Microsoft's sign-in
+page and is then stopped with:
+
+  "Approval required - this app requires your admin's approval"
+
+Authentication itself works. Only the consent is missing.
+
+WHAT IS BEING REQUESTED
+Delegated permissions on Microsoft Graph, four scopes, and nothing else:
+
+  openid, profile, email, offline_access
+
+These are the four standard sign-in scopes that any "Sign in with Microsoft" button
+uses. The application never calls Microsoft Graph at all - it validates the ID token
+Microsoft issues and reads the signed-in person's name and sign-in address from it.
+Its only outbound request to Microsoft is to the tenant's public key endpoint, to
+verify the token signature.
+
+WHAT THE REGISTRATION DOES NOT HAVE
+  - No client secret and no certificates. It is a browser single-page app using the
+    authorization code flow with PKCE, so there is no credential to store.
+  - No application (app-only) permissions - all four are delegated.
+  - No access to mail, files, calendar, directory, or any other person's data.
+  - signInAudience is AzureADMyOrg, so only Johns Hopkins accounts can use it.
+
+WHY AN ADMIN IS NEEDED FOR SCOPES THIS SMALL
+All four are user-consentable by default, but self-service consent is disabled
+tenant-wide - the authorization policy's permissionGrantPoliciesAssigned contains
+only the two Teams resource-specific entries. So an administrator grant is required
+even for these.
+
+ON "ANY JHU ACCOUNT CAN SIGN IN"
+That is intended, and I mention it because it is usually the thing worth asking
+about. Authorization is enforced server-side against a lab member list: someone who
+signs in without being on that list receives no data, only a "not authorized"
+message. Sign-in establishes who you are; the member list decides what you may see.
+
+ONE QUESTION WHILE YOU ARE IN THERE
+Is there any Conditional Access policy that would block this application, for
+example for someone signing in from a personal or unmanaged device? I cannot read
+CA policy from my own account. If an exclusion is needed, it is much cheaper to
+know now than after the lab starts using it.
+```
+
+Three things in there are not padding, and dropping them costs a second ticket:
+
+- **"on behalf of the organization", said twice.** An admin who grants consent for
+  the requester alone leaves everybody else at the same "Approval required" screen.
+  This is the one realistic way this request fails.
+- **Getting ahead of "why can any JHU account sign in".** It is the first thing a
+  reviewer stops on, and answering it unprompted saves a round trip.
+- **The Conditional Access question.** A student cannot read CA policy, so it cannot
+  be checked beforehand; asked inside this ticket it is free, asked later it is
+  another ticket.
 
 Check whether it has landed:
 
@@ -701,6 +821,22 @@ az rest --method GET \
 Owners can add owners; no administrator is needed. Adding one changes nothing about
 the application's identity — `appId`, object ID, service principal ID, scopes and
 credentials are all untouched.
+
+**Do it on both objects.** The application and the service principal are separate
+directory objects with separate owner lists, and it is the *service principal* that
+an administrator grants consent against and that appears under Enterprise
+applications. Owning one is not owning the other:
+
+```bash
+az rest --method POST \
+  --url "https://graph.microsoft.com/v1.0/servicePrincipals/6b25d3e1-.../owners/\$ref" \
+  --body '{"@odata.id":"https://graph.microsoft.com/v1.0/directoryObjects/<user-object-id>"}'
+```
+
+Both are done for this registration as of 2026-08-20 — `zzhan409@jh.edu` and
+`hhu49@jh.edu` own the application and the service principal. Note the PI's identity
+in this tenant is `hhu49@jh.edu`; `haimin@cs.jhu.edu` is a departmental mail alias in
+a *different* tenant and does not resolve here.
 
 ## Local development
 
