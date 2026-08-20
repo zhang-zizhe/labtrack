@@ -257,6 +257,17 @@ const demoData = () => {
   };
 };
 
+// Where this came from, and who adapted it. Rendered at the foot of the login page
+// and of the app, so it is visible whether or not anyone signs in.
+const Credit = ({style}) => (
+  <div style={{textAlign:"center",fontSize:11,lineHeight:1.7,color:"var(--dim)",...style}}>
+    Adapted for the {LAB.lab_name} by Zizhe Zhang, from the inventory system built by the{" "}
+    <a href="https://figueroa.seas.upenn.edu/" target="_blank" rel="noopener noreferrer"
+       style={{color:"var(--sub)",textDecoration:"underline",textUnderlineOffset:2}}>Figueroa Robotics Lab</a>
+    {" "}at the University of Pennsylvania.
+  </div>
+);
+
 const isBypassToken = t => t === "local" || String(t||"").indexOf("dev:") === 0;
 
 // Preview data lives under its own key. It used to share the one a real session
@@ -2497,6 +2508,7 @@ const LoginPage = ({onSignIn, notice=""}) => {
             Explore the interface with sample data stored only in this browser. Nothing is saved to the lab.<br/>
             The two members hold different items, so "yours" and "someone else's" look different.
           </p>
+          <Credit style={{marginTop:26,paddingTop:18,borderTop:"1px solid var(--border)"}}/>
         </div>
       </div>
     </div>
@@ -3425,7 +3437,7 @@ function LabInventory(){
           </div>
           <div>
             <div style={{fontFamily:"'Roboto',sans-serif",fontWeight:900,fontSize:16,letterSpacing:"-0.02em",whiteSpace:"nowrap"}}>{LAB.app_title}</div>
-            <div style={{color:"var(--dim)",fontSize:10,fontFamily:"'IBM Plex Mono',monospace"}}>robotics · inventory · v0.1</div>
+            <div style={{color:"var(--dim)",fontSize:10,fontFamily:"'IBM Plex Mono',monospace"}}>inventory system · v0.1</div>
           </div>
         </div>
         <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
@@ -4255,6 +4267,8 @@ function LabInventory(){
       {detail && <ItemDetail item={detail} checkouts={checkouts} onClose={()=>setDetail(null)} onReturn={handleReturn} onQuickCheckout={handleQuickCheckout} onUse={setUseItem} onNotify={setNotifyItem} onEdit={handleEditItem} categories={categories} editLocked={editLocked}/>}
       {groupDetail && <GroupDetail group={groupDetail} checkouts={checkouts} onClose={()=>setGroupDetail(null)} onEdit={handleEditItem} onQuickCheckout={handleQuickCheckout} onReturn={handleReturn} editLocked={editLocked} categories={categories} onAddUnit={async (newUnit)=>{const fid=await handleAddItem(newUnit);setGroupDetail(p=>p?{...p,qty:(p.qty||0)+1,_items:[...(p._items||[]),{...newUnit,displayId:fid||newUnit.displayId}]}:p);}}/>}
       {confirm && <ConfirmModal msg={confirm.msg} onConfirm={confirm.onConfirm} onClose={()=>setConfirm(null)}/>}
+
+      <Credit style={{margin:"40px auto 28px",maxWidth:640,padding:"0 24px"}}/>
 
       <ToastStack toasts={toasts} rm={id=>setToasts(t=>t.filter(x=>x.id!==id))}/>
     </div>
