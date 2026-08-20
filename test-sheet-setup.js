@@ -140,7 +140,7 @@ console.log("checkout targets one unit, not every item sharing its name");
   const c3 = load(ss3);
 
   // Check out the SECOND unit. Matching on name would have moved the first.
-  c3.updateItemStatus("u2", "TEST ROBOT", "In Use", "Zizhe", "add");
+  c3.updateItemStatus("u2", "TEST ROBOT", "Zizhe", "add");
   const after = c3.readTable("Items");
   const u1 = after.find(r => r.id === "u1"), u2 = after.find(r => r.id === "u2");
   check("picked unit went In Use",       u2.status === "In Use");
@@ -149,13 +149,13 @@ console.log("checkout targets one unit, not every item sharing its name");
   check("sibling usedBy untouched",      JSON.stringify(u1.usedBy) === "[]");
 
   // Returning it must also only touch that unit.
-  c3.updateItemStatus("u2", "TEST ROBOT", "Available", "Zizhe", "remove");
+  c3.updateItemStatus("u2", "TEST ROBOT", "Zizhe", "remove");
   const back = c3.readTable("Items");
   check("return clears only that unit", back.find(r=>r.id==="u2").status === "Available"
                                      && JSON.stringify(back.find(r=>r.id==="u2").usedBy) === "[]");
 
   // Legacy rows carry no itemId, so the name is all there is to fall back on.
-  c3.updateItemStatus("", "TEST ROBOT", "In Use", "Zizhe", "add");
+  c3.updateItemStatus("", "TEST ROBOT", "Zizhe", "add");
   const legacy = c3.readTable("Items");
   check("no itemId falls back to name", legacy.some(r => r.status === "In Use"));
 }
@@ -725,6 +725,13 @@ console.log("using a consumable is a subtraction, not an assignment");
   check("and is left alone", qty("c2") === "");
   check("an unknown item is refused",
         post({ action:"useConsumable", itemId:"nope", used:1 }).error === "Item not found");
+  check("and equipment is not a consumable", (() => {
+    post({ action:"addItem", item:{ id:"e1", name:"Arm", cat:"Robots & Motors", qty:1, unit:"units",
+      loc:"H306", minQty:0, img:"", desc:"", status:"Available", usedBy:[], serial:"",
+      displayId:"", shared:false, consumable:false } });
+    return post({ action:"useConsumable", itemId:"e1", used:1 }).error === "Not a consumable" &&
+           Number(cD.readTable("Items").find(i => i.id === "e1").qty) === 1;
+  })());
   check("what was taken is logged",
         cD.readTable("AuditLog").some(a => a.action === "UseConsumable" && /used:3/.test(a.details)));
 }
@@ -756,7 +763,11 @@ console.log("In Use means somebody has it now, not that somebody booked it");
 
   check("a booking under way takes the item now", it("a1").status === "In Use" && it("a1").usedBy[0] === "Nia");
   check("a booking for next month does not", it("a2").status === "Available" && it("a2").usedBy.length === 0);
-  check("nor does one logged after it ended", it("a3").status === "Available");
+  // Past its return date and still Active is not a finished loan, it is an overdue
+  // one — the case where somebody most likely still has the thing. Returning it is
+  // what puts it back, not the clock running out.
+  check("one whose return date has passed still holds it", it("a3").status === "In Use" && it("a3").usedBy[0] === "Pia");
+  check("and the overdue alert agrees", cA.getOverdueCheckouts_().length === 1);
 
   // Nothing to correct: the sweep must agree with what addCheckout already did.
   check("the sweep changes nothing on a settled lab", cA.syncItemStatuses() === 0);
@@ -765,11 +776,17 @@ console.log("In Use means somebody has it now, not that somebody booked it");
   // Hand-set the flags wrong, the way a stale browser or an admin override would.
   cA.updateRow("Items", "a1", { status: "Available", usedBy: [] });
   cA.updateRow("Items", "a2", { status: "In Use", usedBy: ["Oli"] });
-  cA.updateRow("Items", "a3", { status: "In Use", usedBy: ["Pia"] });
+  cA.updateRow("Items", "a3", { status: "Available", usedBy: [] });
   check("the sweep corrects all three", cA.syncItemStatuses() === 3);
   check("the live hold is back", it("a1").status === "In Use" && it("a1").usedBy[0] === "Nia");
   check("the future one is free again", it("a2").status === "Available" && it("a2").usedBy.length === 0);
-  check("and the finished one is released", it("a3").status === "Available" && it("a3").usedBy.length === 0);
+  check("and the overdue one is put back in the borrower's hands",
+        it("a3").status === "In Use" && it("a3").usedBy[0] === "Pia");
+  check("the sweep never contradicts the overdue alert it runs beside",
+        cA.getOverdueCheckouts_().every(function (c) {
+          const item = cA.readTable("Items").find(function (i) { return i.id === c.itemId; });
+          return !item || item.usedBy.indexOf(c.user) >= 0;
+        }));
 
   // A shared item under way stays Available — several people hold it at once.
   book("bk-shared","a4","Bench","Quin","2026-08-15 09:00","2026-08-20 17:00");
@@ -796,6 +813,21 @@ console.log("In Use means somebody has it now, not that somebody booked it");
   check("a row matched only by name is counted too", it("a4").usedBy.indexOf("Rex") >= 0);
   check("alongside the one matched by id", it("a4").usedBy.indexOf("Quin") >= 0);
   check("and the sweep has settled again", cA.syncItemStatuses() === 0);
+
+  // Split units share a name. A name-only booking is one loan of one unit, and
+  // must not take every sibling off the shelf.
+  item("s1","Twin Rig"); item("s2","Twin Rig");
+  {
+    const co = ssA.__sheets.Checkouts, h = co.__data[0];
+    co.__data.push(h.map(function (k) {
+      return ({ id:"bk-twin", itemId:"", item:"Twin Rig", user:"Sam", out:"2026-08-15 09:00",
+                ret:"2026-08-20 17:00", status:"Active", checkedOutByEmail:"sam@jh.edu",
+                groupEmails:"", qty:1, fromTime:"", toTime:"", notes:"" })[k];
+    }));
+  }
+  cA.syncItemStatuses();
+  check("one legacy loan takes one unit", it("s1").status === "In Use" && it("s1").usedBy[0] === "Sam");
+  check("and leaves its twin on the shelf", it("s2").status === "Available" && it("s2").usedBy.length === 0);
 
   // A returned booking releases the item whether or not the sweep has run.
   post({ action:"returnItem", checkoutId:"bk-now" });

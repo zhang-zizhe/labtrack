@@ -566,8 +566,8 @@ makes it a different request.
   which of the two reasons applies.
 - Moving it onto an `Active` booking is refused, exactly like making one there.
 
-All five rules and both admin paths are covered by `node test-sheet-setup.js`
-(119 assertions). That suite runs on a **frozen clock** — bookings are judged
+All six rules and both admin paths are covered by `node test-sheet-setup.js`
+(the suite prints its own count when it runs). It runs on a **frozen clock** — bookings are judged
 against "now", so a real one would quietly rot every fixture date.
 
 ---
@@ -1002,9 +1002,11 @@ front.
 
 Worth knowing, because none of it is an oversight:
 
-- **Any member can add and edit any item** — name, quantity, location, category, `status`, and the `shared` and `consumable` flags. The lab inventory is a shared document; the edit lock in the header is a guard against fat fingers, not a permission. The costly direction is `status`: a member can set an item to `Available` while somebody has it. Since rule 2 now clash-checks by date rather than trusting that flag, this no longer lets anyone double-book — it just makes a badge wrong
-- **`doGet` returns every table to every member**, including all pending requests and the `admins`/`members` roster. The calendar hides other people's pending requests, but that is presentation, not access control; anyone who opens the network tab sees them. Do not put anything in Settings you would not show the whole lab
+- **Any member can add an item, and describe it however they like** — including marking a new one Shared or Consumable. Describing something you are putting on the shelf is not the same as changing what an existing thing is, which is why those two are open here and admin-only afterwards. `status` is forced to `Available` on creation; a new item cannot be In Use, because that is derived from bookings which cannot exist yet
+- **Any member can edit any item's descriptive fields** — name, category, quantity, unit, location, min stock, photo, description, serial. Not `status`, `shared`, `consumable` or the Label ID; see *Admin System* above. The edit lock in the header is a guard against fat fingers, not a permission, and anybody may unlock it
+- **`doGet` returns every record table to every member**, including everyone's bookings and the requests waiting for an admin — which the calendar now also draws, deliberately. The Settings tab is the exception: a member sees only the four keys the app draws itself from. Still worth knowing that no *row* of Items, Checkouts, Deliveries or Orders is hidden from anyone signed in
 - **Any member can trigger a Slack notification** by reporting a supply as running low. That is the point of the button
+- **Any member can use up a consumable**, which is a subtraction the server performs — but only on something actually marked Consumable; the action refuses anything you would check out instead
 
 ## Troubleshooting
 

@@ -154,40 +154,23 @@ function badRange_(c) {
   return "";
 }
 
-// True while a booking is actually under way — started, and not yet over.
+// True once a booking has begun. An Active booking holds its item from its start
+// until somebody returns it — the clock does not end a loan, returnItem does.
 //
 // In Use means somebody physically has the thing, so a booking for the tenth of
 // next month should not take it off the shelf today; it did, because that flag used
 // to be the only thing keeping a sole-use item exclusive. Rule 2 does that job now,
-// by date, so the flag is free to mean what it says. The end matters as well as the
-// start: logging a loan after it finished is normal, and should not hand the item
-// to somebody who has already given it back. syncItemStatuses() keeps this true as
-// the days pass.
-function bookingLiveNow_(c) {
-  const now = new Date().getTime();
-  const start = bookingMs_(c.out), end = bookingMs_(c.ret);
-  if (start !== null && start > now) return false;
-  if (end !== null && end <= now) return false;
-  return true;
-}
-
-/**
- * Who is holding a sole-use item right now, or "" if it is on the shelf.
- *
- * Sole-use items are never clash-checked by date — bookingConflict_ deliberately
- * skips them — so the only thing keeping one exclusive is the In Use flag. That
- * makes this the whole of rule 2 for them, and it has to be tested server-side:
- * the picker that hides In Use items from the form is working off a copy of the
- * item list that is up to a poll old.
- */
-function soleUseHeldBy_(c) {
-  const item = findRow("Items", c.itemId ? c.itemId : function (r) { return r.name === c.item; });
-  if (!item) return "";
-  const shared = item.shared === true || String(item.shared).toLowerCase() === "true";
-  if (shared || item.status !== "In Use") return "";
-  const holders = Array.isArray(item.usedBy) ? item.usedBy : [];
-  if (holders.indexOf(c.user) >= 0) return "";   // already theirs
-  return holders.length ? holders.join(", ") : "someone else";
+// by date, so the flag is free to mean what it says.
+//
+// Deliberately NOT "and not yet over". A booking past its return date with no
+// Return recorded is not a finished loan, it is the definition of an overdue one —
+// the case where somebody most likely still has the thing. Releasing the item then
+// would have had checkOverduesAndAlert() nag that Alice is late with the arm two
+// lines after writing down that the arm is on the shelf and nobody has it.
+// syncItemStatuses() keeps this true as the days pass.
+function bookingHoldsItem_(c) {
+  const start = bookingMs_(c.out);
+  return start === null || start <= new Date().getTime();
 }
 
 /**
@@ -497,7 +480,9 @@ function sendDailyDigest() {
 function sendManualDigest() { sendDailyDigest(); }
 
 // ─── SETUP TRIGGERS (run once from the Apps Script editor) ───────────────────
-// Run this function manually from the editor to create both time-based triggers.
+// Run this function manually from the editor to create the four time-based triggers:
+// the daily digest, the overdue alert, the item-status sweep and the weekly backup.
+// Safe to re-run — it removes any existing trigger for those four first.
 // Requires: Project Settings → Time zone = America/New_York
 // After running, verify in Triggers tab (clock icon on left sidebar).
 function createTriggers() {
@@ -533,7 +518,7 @@ function createTriggers() {
     .onWeekDay(ScriptApp.WeekDay.SUNDAY)
     .atHour(3)
     .create();
-  Logger.log("✅ Triggers created (digest, overdue alert, weekly backup). Verify in Triggers tab. Time zone must be America/New_York.");
+  Logger.log("✅ Triggers created (digest, overdue alert, item-status sweep, weekly backup). Verify in Triggers tab. Time zone must be America/New_York.");
 }
 
 // ─── SPREADSHEET BACKUP ──────────────────────────────────────────────────────
@@ -613,24 +598,29 @@ function backupSpreadsheet() {
  * a lab that only ever sets up one trigger still gets it.
  */
 function syncItemStatuses() {
-  const live = {};            // itemKey -> [names holding it right now]
+  const items = readTable("Items");
+  // Resolve every booking to one row id up front, the way updateItemStatus does.
+  // A booking with no itemId used to be filed under the item *name*, and the sweep
+  // then handed it to every row with that name — but split units share a name, so
+  // one legacy loan of one arm took all three units off the shelf.
+  const byName = {};
+  items.forEach(function (i) { if (byName[i.name] === undefined) byName[i.name] = i.id; });
+  const live = {};            // item id -> [names holding it right now]
   readTable("Checkouts").forEach(function (c) {
-    if (c.status !== "Active" || !bookingLiveNow_(c)) return;
-    const key = c.itemId ? "id:" + c.itemId : "name:" + c.item;
-    (live[key] = live[key] || []).push(c.user);
+    if (c.status !== "Active" || !bookingHoldsItem_(c)) return;
+    const id = c.itemId ? String(c.itemId) : byName[c.item];
+    if (id === undefined) return;             // the item is gone; nothing to mark
+    (live[id] = live[id] || []).push(c.user);
   });
 
   var changed = 0;
-  readTable("Items").forEach(function (it) {
+  items.forEach(function (it) {
     if (it.consumable === true || String(it.consumable).toLowerCase() === "true") return;
     // Maintenance and Broken are somebody's deliberate call about the object, not a
     // consequence of who booked it. Leave them alone.
     if (it.status === "Maintenance" || it.status === "Broken") return;
     const shared = it.shared === true || String(it.shared).toLowerCase() === "true";
-    // Both keys, not whichever matches first: rows written before itemId was
-    // populated carry only the name, and an item can easily have one of each — the
-    // `||` would have taken the id-keyed holders and silently dropped the others.
-    const holders = (live["id:" + it.id] || []).concat(live["name:" + it.name] || []);
+    const holders = live[String(it.id)] || [];
     const want = holders.filter(function (u, i) { return holders.indexOf(u) === i; }).sort();
     const have = (Array.isArray(it.usedBy) ? it.usedBy : []).slice().sort();
     // A shared item stays Available however many people have it — same rule as
@@ -1239,6 +1229,11 @@ function doPost(e) {
     addLock.waitLock(10000);
     try {
       const it = body.item;
+      // Describing a thing you are adding is not the same as changing what an
+      // existing thing is — Shared and Consumable stay open here, and only an admin
+      // can change them afterwards. Status is not describing anything: a new item is
+      // on the shelf, and In Use is derived from bookings that cannot exist yet.
+      if (!admin) it.status = "Available";
       // Always generate displayId server-side (inside the lock) to prevent collisions.
       const allItems = readTable("Items");
       const parsed = parseDisplayId_(it.displayId);
@@ -1320,7 +1315,10 @@ function doPost(e) {
     const refused = admin ? [] : adminFields.filter(function (f) {
       return it[f] !== undefined && String(it[f]) !== String(prev[f]);
     });
-    logAudit(userName, userEmail, "UpdateItem", (it.name||"") + " | id:" + (it.displayId||it.id||"") +
+    // prev.displayId, not it.displayId: the browser's value may be the one that was
+    // just refused, and an audit line naming a label the sheet never held is worse
+    // than no label at all.
+    logAudit(userName, userEmail, "UpdateItem", (it.name||"") + " | id:" + (prev.displayId||it.id||"") +
       (refused.length ? " | ignored (admin only): " + refused.join(",") : ""));
     // Reported rather than refused: the browser sends the whole item back, so a
     // member editing the location of a shared item would otherwise be told off for
@@ -1344,6 +1342,11 @@ function doPost(e) {
       }
       const item = findRow("Items", body.itemId);
       if (!item) return jsonResponse({ error: "Item not found", detail: "No item with id " + body.itemId });
+      // Deducting from a thing you borrow makes no sense, and would put an arm
+      // "out of stock" — which the checkout form reads as unbookable.
+      if (!(item.consumable === true || String(item.consumable).toLowerCase() === "true")) {
+        return jsonResponse({ error: "Not a consumable", detail: item.name + " is checked out and returned, not used up" });
+      }
       // A supply with no count has nothing to deduct — that is what Notify is for.
       if (item.qty === "" || item.qty === null || item.qty === undefined) {
         return jsonResponse({ error: "Not tracked", detail: item.name + " has no quantity to deduct — report it as running low instead" });
@@ -1441,7 +1444,7 @@ function doPost(e) {
 
     // Only if it starts now. A booking for a fortnight's time is on the calendar,
     // not off the shelf — syncItemStatuses() marks it when the day arrives.
-    if (bookingLiveNow_(c)) updateItemStatus(c.itemId, c.item, "In Use", c.user, "add");
+    if (bookingHoldsItem_(c)) updateItemStatus(c.itemId, c.item, c.user, "add");
     sendSlack("🔑", "Item Checked Out: " + c.item, null, ["*Person*\n" + c.user, "*Date*\n" + (c.out||"—"), "*Return by*\n" + (c.ret||"—")]);
     logAudit(userName, userEmail, "Checkout", c.item + " → " + c.user + " | return by:" + (c.ret||"—"));
     return jsonResponse({ ok: true });
@@ -1457,16 +1460,17 @@ function doPost(e) {
     if (body.approve) {
       // Nothing was reserved while this waited, so the slot may be gone. Approving
       // blindly would hand the same item to two people.
+      // The one honest question: is anything Active over these dates? Since rule 2
+      // covers sole-use items too, that is the whole test. There used to be a second
+      // one here — refuse if the item is flagged In Use — which made sense while In
+      // Use was the only thing keeping a sole-use item exclusive. It no longer is,
+      // and In Use now means "somebody has it right now", so that test had come to
+      // read "refuse every future request for anything currently out": exactly the
+      // behaviour we set out to kill.
       const gone = bookingConflict_(co, co.id);
       if (gone) return jsonResponse({ error: "Clash", detail: "Taken while this was waiting \u2014 " + gone });
-      const item = findRow("Items", co.itemId ? co.itemId : function (r) { return r.name === co.item; });
-      const shared = !!item && (item.shared === true || String(item.shared).toLowerCase() === "true");
-      const holders = Array.isArray(item && item.usedBy) ? item.usedBy : [];
-      if (item && !shared && item.status === "In Use" && holders.indexOf(co.user) < 0) {
-        return jsonResponse({ error: "Clash", detail: "Someone checked out " + co.item + " while this was waiting" });
-      }
       updateRow("Checkouts", body.checkoutId, { status: "Active" });
-      if (bookingLiveNow_(co)) updateItemStatus(co.itemId, co.item, "In Use", co.user, "add");
+      if (bookingHoldsItem_(co)) updateItemStatus(co.itemId, co.item, co.user, "add");
       sendSlack("✅", "Long Checkout Approved: " + co.item, null, ["*Person*\n" + co.user, "*Until*\n" + (co.ret||"—"), "*By*\n" + userName]);
       logAudit(userName, userEmail, "CheckoutApproved", co.item + " → " + co.user);
     } else {
@@ -1519,7 +1523,7 @@ function doPost(e) {
     updateRow("Checkouts", co.id, patch);
 
     if (!stillPending) {
-      if (bookingLiveNow_(merged)) updateItemStatus(co.itemId, co.item, "In Use", co.user, "add");
+      if (bookingHoldsItem_(merged)) updateItemStatus(co.itemId, co.item, co.user, "add");
       sendSlack("🔑", "Request Shortened — Now Active: " + co.item, "No longer needs approval",
         ["*Person*\n" + co.user, "*From*\n" + (merged.out||"—"), "*Return by*\n" + (merged.ret||"—")]);
     }
@@ -1575,7 +1579,7 @@ function doPost(e) {
       const nowStr = now.getFullYear()+"-"+String(now.getMonth()+1).padStart(2,"0")+"-"+String(now.getDate()).padStart(2,"0")
                     +" "+String(now.getHours()).padStart(2,"0")+":"+String(now.getMinutes()).padStart(2,"0");
       updateRow("Checkouts", coId, { ret: nowStr, status: "Returned" });
-      updateItemStatus(co.itemId, co.item, "Available", co.user, "remove");
+      updateItemStatus(co.itemId, co.item, co.user, "remove");
       sendSlack("✅", "Item Returned: " + co.item, null, ["*Returned by*\n" + userName]);
       logAudit(userName, userEmail, "Return", co.item + " | originally checked out by:" + co.user);
     }
@@ -1837,7 +1841,10 @@ function doPost(e) {
 // name, and matching on name moved whichever sibling happened to come first —
 // which is also why the sheet and the browser could disagree about which one
 // changed. Rows written before itemId was populated have only the name to go on.
-function updateItemStatus(itemId, itemName, newStatus, userName, mode) {
+// mode is "add" when somebody takes the item and "remove" when they give it back.
+// There is no status argument: the status is derived below from who is left
+// holding it, so a caller cannot assert one that contradicts the bookings.
+function updateItemStatus(itemId, itemName, userName, mode) {
   const target = (itemId !== undefined && itemId !== null && String(itemId) !== "")
     ? function(r) { return idsMatch(r.id, itemId); }
     : function(r) { return r.name === itemName; };
@@ -1845,9 +1852,6 @@ function updateItemStatus(itemId, itemName, newStatus, userName, mode) {
   if (!item) return;
 
   const patch = {};
-  // A shared item stays "Available" while checked out — several people hold it at once.
-  const isShared = item.shared === true || String(item.shared).toLowerCase() === "true";
-  if (!(newStatus === "In Use" && isShared)) patch.status = newStatus;
 
   // The storage layer already hands usedBy over as an array; the string branch is
   // for a row written before it did.
@@ -1858,6 +1862,18 @@ function updateItemStatus(itemId, itemName, newStatus, userName, mode) {
   if (mode === "add" && !usedBy.includes(userName)) usedBy.push(userName);
   else if (mode === "remove") usedBy = usedBy.filter(u => u !== userName);
   patch.usedBy = usedBy;   // serialized on write by the storage layer
+
+  // Derived from who is left holding it, not asserted from the one booking that
+  // just changed. A sole-use item may legitimately carry a second Active booking
+  // for later now that rule 2 judges by date, so ending one hold does not mean the
+  // thing is on the shelf. A shared item stays Available however many people have
+  // it. And Maintenance and Broken are somebody's call about the object — an admin
+  // marks an arm Broken while it is out, and returning it must not quietly undo
+  // that and put it back in the picker. syncItemStatuses() decides the same way.
+  const isShared = item.shared === true || String(item.shared).toLowerCase() === "true";
+  if (item.status !== "Maintenance" && item.status !== "Broken") {
+    patch.status = (!isShared && usedBy.length) ? "In Use" : "Available";
+  }
 
   updateRow("Items", target, patch);
 }
