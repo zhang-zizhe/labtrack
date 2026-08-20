@@ -6,7 +6,9 @@
 2. Sign in with your **Johns Hopkins** account (`<JHED>@jh.edu`)
 3. Start managing inventory
 
-> **Sign-in does not work yet.** A JHU Entra administrator must grant admin
+> **Sign-in does not work yet — but the backend behind it does.** The Sheet, the
+> triggers and the Web App are live; what is missing is permission for anyone to
+> reach them. A JHU Entra administrator must grant admin
 > consent once before anyone can sign in — see [Microsoft Entra ID Setup](#microsoft-entra-id-setup-sign-in).
 > Until then, use **Preview without signing in** on the login page to explore the
 > interface, or the [dev escape hatch](#running-without-sign-in) to test against a
@@ -18,9 +20,10 @@
 |---|---|
 | App | ✅ deployed at `labtrack.zizhe.io` (temporary home; the intended one is a subdomain of the lab domain, which needs a JHU CS IT DNS request) |
 | Entra app registration | ✅ created — `06d4df0f-39e8-4c3a-aa24-8e76a45d1aa3` |
-| Admin consent | ⏳ requested 2026-08-20, JHU IT ticket **INC2905524** — sign-in stops at "Approval required" until it lands |
-| Admin consent | ❌ **not granted** — the one thing blocking real sign-in |
-| Backend | ❌ no Sheet yet; `apps_script_url` is empty, so the app runs out of localStorage |
+| Admin consent | ⏳ requested 2026-08-20, JHU IT ticket **INC2905524** — sign-in stops at "Approval required" until it lands. **The one thing blocking real sign-in** |
+| Backend | ✅ live — Sheet created, eight tabs seeded, four triggers installed, Web App deployed (v2, 2026-08-20). `smokeTest()`: 36 passed against the real sheet |
+| Backend account | ⚠️ the deployment runs as the **lab's** Google account and is bound to it permanently — see [The lab account is a consumer account](#the-lab-account-is-a-consumer-account-and-what-follows-from-that) |
+| Lab Google account | ⏳ created; the hygiene it needs is **not** done yet — recovery pointed at the PI, 2FA + backup codes, Sheet shared with the PI as editor, and somebody signing in once in a while. All four are in [the consumer-account section](#the-lab-account-is-a-consumer-account-and-what-follows-from-that), and none is optional |
 | Slack | ❌ webhook not created |
 | Data store | Google Sheet for now, **SharePoint List is the destination** — see [Moving the data](#moving-the-data-to-sharepoint) |
 | Backend host | Apps Script for now; whether it moves to Azure depends on the scheduled jobs — see [Moving the backend](#moving-the-backend-off-google) |
@@ -395,10 +398,28 @@ const DEV_NO_AUTH_EMAIL = "zzhan409@jh.edu";   // identity the backend assumes
    aliases; `SLACK_WEBHOOK_URL` can stay as the placeholder for now — `sendSlack()`
    returns early on it, so nothing breaks while there is no webhook
 5. **Set script timezone**: Project Settings → Time zone → **America/New_York**
-6. **Deploy → New deployment** → Web app → Execute as: Me → Who has access: Anyone
-7. Copy the Web app URL into `LAB_CONFIG.apps_script_url` in `index.html`
+6. **Run → `createTriggers`.** Four scheduled jobs: the 5pm digest, the 8am overdue
+   alert, the 6am item-status sweep, the Sunday 3am backup. Do this *after* step 5 —
+   they fire on the project's timezone and setting it later is not something they
+   warn you about. Re-running is safe; it deletes its own old triggers first.
+7. **Deploy → New deployment** → Web app → Execute as: Me → Who has access: **Anyone**
 
-> After code updates, always create a **new version** via Deploy → Manage deployments.
+   "Anyone", not "Anyone with a Google Account". The frontend calls this with a
+   Microsoft token and carries no Google identity, so the stricter setting bounces
+   every request with an HTML login page — which the app reports as a backend error.
+   Access control is `verifyToken`'s job, one layer down, not this dropdown's.
+8. Copy the Web app URL into `LAB_CONFIG.apps_script_url` in `index.html`
+9. **Run → `smokeTest`.** Checks the storage layer against the real spreadsheet —
+   see [Tests](#tests) for why that is a different question from the other suites.
+   Expect `✅ smoke test: 36 passed`.
+
+> **After a code update, redeploy via Deploy → Manage deployments → ✏️ → Version:
+> New version.** *Not* "New deployment" — that mints a **different** `/exec` URL and
+> the frontend goes on talking to the old code. The deployment ID stays the same when
+> you do it right, which is how you can tell.
+>
+> Until you do, `/exec` keeps serving the version it was pinned to. The editor runs
+> the latest saved code, so `smokeTest()` sees your changes before the deployment does.
 
 > **`Execute as: Me` binds the deployment to one Google account permanently.**
 > Use the lab's account, never a student's — changing it later means redeploying
@@ -883,11 +904,18 @@ changed**; these are only the record of *why*.
 
 ```bash
 node --check google-apps-script.js       # backend syntax
-node test-sheet-setup.js                 # 227 assertions: setup, labels, per-unit
+node test-sheet-setup.js                 # 229 assertions: setup, labels, per-unit
                                          # targeting, order approval, booking rules
-node test-sheets-coercion.js             # 25 assertions: the ones that only fail live
+node test-sheets-coercion.js             # 29 assertions: the ones that only fail live
 node test-storage-layer.js > after.json  # behaviour snapshot — see below
 ```
+
+And one that does not run here at all: **`smokeTest()`, from the Apps Script editor.**
+Everything above runs against a *model* of a spreadsheet. `smokeTest()` runs against
+the spreadsheet. It writes rows whose ids begin with `ZZSMOKE`, asserts on what comes
+back, and deletes them again — including when an assertion fails — so it is safe to
+run on a sheet that already holds real inventory. Run it after any change to
+`normalizeRow_`, `serializeCell_`, or the storage layer.
 
 **`test-sheets-coercion.js` is the one worth understanding.** The in-memory sheet
 the other two tests use stores whatever JavaScript value it is handed and gives the
@@ -897,14 +925,40 @@ datetime and reads back as a `Date`. A serial number that happens to be all digi
 comes back a `Number`. `"TRUE"` comes back a boolean. Text beginning with `=` stops
 being text at all.
 
-Two bugs lived in exactly that gap, and neither was visible to the other two files:
-every daily time window silently became all-day after one round trip, and every
-rule evaluated on a `findRow()` row — the "taken while this was waiting" re-check,
-the whole edit path — quietly found no conflict. So this file wraps the same stub
-in a layer that coerces the way Sheets coerces, and asserts the rules still hold.
+Six bugs have now lived in exactly that gap, and none was visible to the other two
+files. Two were found when this file was written: every daily time window silently
+became all-day after one round trip, and every rule evaluated on a `findRow()` row —
+the "taken while this was waiting" re-check, the whole edit path — quietly found no
+conflict. So this file wraps the same stub in a layer that coerces the way Sheets
+coerces, and asserts the rules still hold.
+
+Four more surfaced later, when the model was taught that `=` starts a formula and
+that a leading apostrophe gets eaten. The worst of them: `updateRow` carried the
+columns it was not patching forward verbatim, so editing an item's *quantity* armed
+a formula sitting in its *name* — inert on the way in, live on the way out. Another
+put member-supplied order text into the purchase-summary sheet, which only an admin
+ever opens. A third quietly truncated serial numbers with leading zeros.
+
+The lesson worth keeping: **when the model gains a rule, re-run and read the
+failures before assuming the test is wrong.** All four presented as broken
+assertions in a file that had been green.
 
 If you add a column that stores anything other than plain text, add it to
-`normalizeRow_()` and add a case here.
+`normalizeRow_()`, add it to `TEXT_FIELDS_` if it is text, and add a case here.
+
+#### What a real sheet actually does with the text marker
+
+A leading apostrophe is Sheets' own "treat this as text" mark. The code both *wrote*
+it (to keep formulas inert) and *stripped* it on the way back — which cannot both be
+right, and nothing in the test suite could say which, because a model sheet has no
+opinion about apostrophes. `smokeTest()` settled it against the real thing on
+2026-08-20: `getValues()` returned the guarded cell with **no apostrophe**. Sheets
+eats the mark.
+
+So the strip in `normalizeRow_()` never fires in production. It is kept anyway,
+because with the writer escaping a leading apostrophe the round trip lands on the
+original value under *either* behaviour — which is the property that made the change
+safe to ship before the answer was known.
 
 The app is one big inline Babel block, so a JSX syntax error renders a blank page
 with no stack trace. Compiling it with `@babel/standalone` 7.24.7 before deploying
