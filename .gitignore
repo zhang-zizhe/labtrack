@@ -1,0 +1,7 @@
+# Session logs: kept on the working machine, deliberately not in the repo.
+#
+# This repository is public and GitHub Pages serves it, so anything committed here
+# is readable by anyone who finds the URL. The logs are the record of *why* things
+# were done — worth having, not worth publishing. See "Session logs" in SETUP.md.
+chat-log-*.md
+chat-log-*.txt

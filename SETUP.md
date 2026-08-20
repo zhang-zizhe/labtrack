@@ -635,14 +635,21 @@ python3 -m http.server 8000     # then open http://localhost:8000/index.html
 
 Design decisions that never made it into a commit message — why SharePoint over
 Excel, why Power Automate is out, what the JHU tenant does and does not allow —
-live in the chat logs at the repo root:
+live in the chat logs.
+
+**They are not in this repository, and `.gitignore` keeps them out.** The repo is
+public and GitHub Pages serves from it, so anything committed here is readable by
+anyone who finds the URL; the logs are the record of *why*, which is worth keeping
+and not worth publishing. They sit at the working copy's root on the machine the
+work was done on:
 
 | | |
 |---|---|
 | `chat-log-2026-08-15-entra-auth-migration.txt` | replacing Google Sign-In with Entra; Graph permission GUIDs in §16 |
 | `chat-log-2026-08-17-booking-rules-and-calendar.md` | booking rules, the approval queue, the calendar rewrite, the backend-migration analysis |
 
-The `.md` one is generated from the Claude Code session transcript:
+Both are regenerable from the Claude Code session transcripts, which is the real
+archive — the files are a rendering. The `.md` one was made with:
 
 ```bash
 node transcript-to-md.js ~/.claude/projects/-Users-zizhe-labtrack/<session-id>.jsonl out.md
