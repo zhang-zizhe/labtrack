@@ -835,6 +835,75 @@ console.log("In Use means somebody has it now, not that somebody booked it");
   check("and the sweep agrees", cA.syncItemStatuses() === 0 && it("a1").status === "Available");
 }
 
+console.log("returning one booking does not free what another is holding");
+{
+  const ssE = fresh();
+  const cE = load(ssE);
+  cE.setupNewLab();
+  cE.writeSetting("admins", JSON.stringify(["zzhan409@jh.edu"]));
+  cE.verifyToken = () => ({ email:"zzhan409@jh.edu", name:"Z", oid:"a" });
+  const post = p => JSON.parse(cE.doPost({ postData:{ contents: JSON.stringify(Object.assign({token:"t"}, p)) } }).__text);
+  const it = id => cE.readTable("Items").find(i => i.id === id);
+  const mk = (id,name,extra) => post({ action:"addItem", item: Object.assign({ id, name,
+    cat:"Robots & Motors", qty:1, unit:"units", loc:"H306", minQty:0, img:"", desc:"",
+    status:"Available", usedBy:[], serial:"", displayId:"", shared:false, consumable:false }, extra||{}) });
+  const book = (id,itemId,name,user,out,ret) => post({ action:"addCheckout", checkout:{ id, itemId,
+    item:name, user, out, ret, status:"Active", checkedOutByEmail:user.toLowerCase()+"@jh.edu",
+    groupEmails:"", qty:1, fromTime:"", toTime:"" } });
+
+  mk("e1","Arm"); mk("e2","Rig"); mk("e3","Cracked Arm", { status:"Broken" });
+
+  // now = 2026-08-16. One live hold and one for next month, on the same item —
+  // which rule 2 allows because the ranges do not overlap.
+  book("h-now","e1","Arm","Ann","2026-08-15 09:00","2026-08-18 17:00");
+  book("h-later","e1","Arm","Bo","2026-09-01 09:00","2026-09-03 17:00");
+  check("only the live one holds it", it("e1").status === "In Use" && it("e1").usedBy.join() === "Ann");
+  post({ action:"returnItem", checkoutId:"h-later" });
+  check("returning the future one leaves Ann holding it",
+        it("e1").status === "In Use" && it("e1").usedBy.join() === "Ann");
+  post({ action:"returnItem", checkoutId:"h-now" });
+  check("and returning hers puts it back", it("e1").status === "Available" && it("e1").usedBy.length === 0);
+
+  // An admin marks something Broken while it is out; giving it back must not
+  // quietly put it in the picker again.
+  book("h-broken","e3","Cracked Arm","Cy","2026-08-15 09:00","2026-08-18 17:00");
+  check("a Broken item stays Broken while out", it("e3").status === "Broken");
+  post({ action:"returnItem", checkoutId:"h-broken" });
+  check("and returning it does not un-break it", it("e3").status === "Broken");
+  check("though the borrower is no longer holding it", it("e3").usedBy.length === 0);
+
+  // An overdue hold is still a hold, and approving a future request for something
+  // that is out today is not a clash.
+  book("h-late","e2","Rig","Dee","2026-08-01 09:00","2026-08-05 17:00");
+  check("an overdue loan still holds its item", it("e2").status === "In Use" && it("e2").usedBy.join() === "Dee");
+  const later = post({ action:"addCheckout", checkout:{ id:"h-q", itemId:"e2", item:"Rig", user:"Eli",
+    out:"2026-08-20 09:00", ret:"2026-09-12 17:00", status:"Active",
+    checkedOutByEmail:"eli@jh.edu", groupEmails:"", qty:1, fromTime:"", toTime:"" } });
+  check("a long request for later still waits for an admin", later.pending === true);
+  check("and the admin can approve it even though the rig is out today",
+        post({ action:"decideCheckout", checkoutId:"h-q", approve:true }).ok === true);
+  check("without taking it from whoever is late with it",
+        it("e2").usedBy.indexOf("Dee") >= 0 && it("e2").usedBy.indexOf("Eli") < 0);
+}
+
+console.log("a new item is described, not commanded, into existence");
+{
+  const ssF = fresh();
+  const cF = load(ssF);
+  cF.setupNewLab();
+  cF.writeSetting("admins", JSON.stringify(["zzhan409@jh.edu"]));
+  cF.verifyToken = () => ({ email:"member@jh.edu", name:"Member", oid:"m" });
+  const post = p => JSON.parse(cF.doPost({ postData:{ contents: JSON.stringify(Object.assign({token:"t"}, p)) } }).__text);
+  post({ action:"addItem", item:{ id:"n1", name:"Bench", cat:"Compute & Electronics", qty:1,
+    unit:"units", loc:"H306", minQty:0, img:"", desc:"", status:"In Use", usedBy:["Nobody"],
+    serial:"", displayId:"", shared:true, consumable:false } });
+  const n1 = cF.readTable("Items").find(i => i.id === "n1");
+  check("a member cannot add an item already checked out", n1.status === "Available");
+  // Describing a thing you are putting on the shelf is not changing what an
+  // existing thing is, so these two stay open at creation.
+  check("but may say it is shared", n1.shared === true);
+}
+
 console.log("a printed base label belongs to one thing");
 {
   const ss9 = fresh();
