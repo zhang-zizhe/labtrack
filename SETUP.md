@@ -179,9 +179,14 @@ az rest --method GET \
 # "value": []  → not granted yet
 ```
 
-> **If you also want the SharePoint scope, add it to the registration *before*
-> asking.** One request to IT covers both; asking later means a second round trip.
-> See [Moving the data](#moving-the-data-to-sharepoint) for which scope to pick.
+> **Ask for sign-in only.** The registration deliberately requests nothing but
+> `openid`, `profile`, `email` and `offline_access` — the four lowest-privilege
+> scopes there are, and the ones every "sign in with Microsoft" button uses. Adding
+> a SharePoint scope to bundle a future request turns a trivial approval into one
+> that needs justifying, and `Sites.Selected` needs a *second* administrator action
+> to bind the app to a site regardless, so nothing is actually saved. If the data
+> ever moves to SharePoint, that is its own request. See
+> [Moving the data](#moving-the-data-to-sharepoint).
 
 ---
 
