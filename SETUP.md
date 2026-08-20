@@ -277,10 +277,47 @@ const DEV_NO_AUTH_EMAIL = "zzhan409@jh.edu";   // identity the backend assumes
 > After code updates, always create a **new version** via Deploy → Manage deployments.
 
 > **`Execute as: Me` binds the deployment to one Google account permanently.**
-> JHU has no Google Workspace, so that account is necessarily a personal one.
-> This is acceptable while the Sheet is an interim store — but it is also the
-> reason the data is headed for SharePoint. If the Sheet ends up being kept, move
-> it to a lab-held Google account rather than a graduating student's.
+> Use the lab's account, never a student's — changing it later means redeploying
+> from the other account and updating `apps_script_url`.
+
+### The lab account is a consumer account, and what follows from that
+
+JHU has no Google Workspace, so the lab's Google account is a personal one. For
+this app that is mostly fine, but three things follow from it and none are obvious.
+
+**Quotas are not one of them.** A consumer account gets 90 minutes of trigger
+runtime a day and 20,000 URL Fetch calls, against Workspace's 6 hours and 100,000
+([quota reference](https://developers.google.com/apps-script/guides/services/quotas)).
+This app runs four scheduled jobs — the digest, the overdue alert, the item-status
+sweep, and a weekly backup — each finishing in seconds, and one Slack call per
+notification. The headroom is about two orders of magnitude.
+
+**Nobody can recover the account for you.** A Workspace administrator can reset a
+password or transfer ownership; for a consumer account there is no such person. If
+the password is lost and the recovery contact has gone stale, the lab loses the
+spreadsheet. So, when the account is created:
+
+- Point recovery at the PI's address, not a student's — students leave
+- Turn on 2FA and keep the backup codes wherever the lab keeps shared credentials
+- **Share the Sheet itself with the PI's own Google account as an editor.** This is
+  the cheap insurance: if the account is ever lost, the data is still reachable
+  from somebody else's Drive
+- Note that `backupSpreadsheet()` copies into a folder in the *same* Drive, so it
+  protects against a bad edit but not against losing the account. Share that folder
+  too, or pull a copy down now and then
+
+**A personal account unused for two years may be deleted.** The
+[inactive account policy](https://support.google.com/accounts/answer/12418290)
+applies to personal accounts and explicitly not to organisation ones. The trap here
+is specific: lab members sign in with **Microsoft**, not with this account — in
+normal operation the only thing touching it is Apps Script. Human sign-ins can
+genuinely be zero for years while the tool is in daily use. Signing in occasionally
+is the whole mitigation.
+
+One more, which is a policy question rather than a technical one: the Sheet holds
+lab members' names and `@jh.edu` sign-in addresses on a service the university does
+not administer. It is equipment records rather than research data, but it is worth
+knowing that is the question a compliance review would ask.
 
 ### Slack Notification Modes
 
