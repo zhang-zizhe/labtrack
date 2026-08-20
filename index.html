@@ -20,6 +20,7 @@ window.LAB_CONFIG = {
   app_title:   "LabTrack for Alliance AI Lab",   // browser tab, login page, header
   lab_name:    "Alliance AI Lab",
   institution: "Johns Hopkins University",
+  lab_url:     "https://alliance-ai.cs.jhu.edu/",   // linked from the credit line
   signin_hint: "@jh.edu",          // shown on the login page; UPN domain, not the mail alias
 
   // Lab mark, inlined so the app stays a single self-contained file. Source:
@@ -259,11 +260,19 @@ const demoData = () => {
 
 // Where this came from, and who adapted it. Rendered at the foot of the login page
 // and of the app, so it is visible whether or not anyone signs in.
+const CreditLink = ({href,children}) => (
+  <a href={href} target="_blank" rel="noopener noreferrer"
+     style={{color:"var(--sub)",textDecoration:"underline",textUnderlineOffset:2}}>{children}</a>
+);
 const Credit = ({style}) => (
   <div style={{textAlign:"center",fontSize:11,lineHeight:1.7,color:"var(--dim)",...style}}>
-    Adapted for the {LAB.lab_name} by Zizhe Zhang, from the inventory system built by the{" "}
-    <a href="https://figueroa.seas.upenn.edu/" target="_blank" rel="noopener noreferrer"
-       style={{color:"var(--sub)",textDecoration:"underline",textUnderlineOffset:2}}>Figueroa Robotics Lab</a>
+    Adapted for the <CreditLink href={LAB.lab_url}>{LAB.lab_name}</CreditLink>
+    {" "}by <CreditLink href="https://zizhe.io">Zizhe Zhang</CreditLink>,
+    {/* The two halves are separate thoughts — who adapted it, and whose design it
+        was — so they get a line each rather than one long wrap. */}
+    <br/>
+    from the inventory system built by the{" "}
+    <CreditLink href="https://figueroa.seas.upenn.edu/">Figueroa Robotics Lab</CreditLink>
     {" "}at the University of Pennsylvania.
   </div>
 );
@@ -2448,8 +2457,11 @@ const LoginPage = ({onSignIn, notice=""}) => {
     } finally { setBusy(false); }
   };
 
+  // A column, so the credit can sit on the floor of the window when the card does
+  // not fill it, and be pushed below the fold when it does.
   return(
-    <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"var(--bg0)"}}>
+    <div style={{minHeight:"100vh",display:"flex",flexDirection:"column",background:"var(--bg0)"}}>
+      <div style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",padding:"32px 0"}}>
       {/* Wide enough for the title to sit on one line — wrapping it split
           "Alliance AI Lab" across lines, which reads badly for a proper noun. */}
       <div style={{textAlign:"center",animation:"fadeUp .5s ease",maxWidth:560,padding:"0 24px"}}>
@@ -2508,9 +2520,10 @@ const LoginPage = ({onSignIn, notice=""}) => {
             Explore the interface with sample data stored only in this browser. Nothing is saved to the lab.<br/>
             The two members hold different items, so "yours" and "someone else's" look different.
           </p>
-          <Credit style={{marginTop:26,paddingTop:18,borderTop:"1px solid var(--border)"}}/>
         </div>
       </div>
+      </div>
+      <Credit style={{padding:"16px 24px 20px",borderTop:"1px solid var(--border)"}}/>
     </div>
   );
 };
@@ -3428,7 +3441,7 @@ function LabInventory(){
   if (!user) return <LoginPage onSignIn={handleSignIn} notice={signedOutBecause}/>;
 
   return(
-    <div style={{background:"var(--bg0)",minHeight:"100vh",color:"var(--text)"}}>
+    <div style={{background:"var(--bg0)",minHeight:"100vh",color:"var(--text)",display:"flex",flexDirection:"column"}}>
       {/* HEADER */}
       <header style={{background:"var(--bg1)",borderBottom:"1px solid var(--border)",padding:"12px 24px",display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:12,position:"sticky",top:0,zIndex:200}}>
         <div style={{display:"flex",alignItems:"center",gap:13}}>
@@ -4268,7 +4281,9 @@ function LabInventory(){
       {groupDetail && <GroupDetail group={groupDetail} checkouts={checkouts} onClose={()=>setGroupDetail(null)} onEdit={handleEditItem} onQuickCheckout={handleQuickCheckout} onReturn={handleReturn} editLocked={editLocked} categories={categories} onAddUnit={async (newUnit)=>{const fid=await handleAddItem(newUnit);setGroupDetail(p=>p?{...p,qty:(p.qty||0)+1,_items:[...(p._items||[]),{...newUnit,displayId:fid||newUnit.displayId}]}:p);}}/>}
       {confirm && <ConfirmModal msg={confirm.msg} onConfirm={confirm.onConfirm} onClose={()=>setConfirm(null)}/>}
 
-      <Credit style={{margin:"40px auto 28px",maxWidth:640,padding:"0 24px"}}/>
+      {/* marginTop:auto puts it on the floor of the window when a new lab has
+          almost nothing in it yet, and after the content once it does. */}
+      <Credit style={{marginTop:"auto",paddingTop:28,paddingBottom:22,paddingLeft:24,paddingRight:24}}/>
 
       <ToastStack toasts={toasts} rm={id=>setToasts(t=>t.filter(x=>x.id!==id))}/>
     </div>
