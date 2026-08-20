@@ -98,6 +98,7 @@ Sign-in is restricted to the Johns Hopkins Entra tenant
 | Application (client) ID | `06d4df0f-39e8-4c3a-aa24-8e76a45d1aa3` |
 | Object ID | `131c5c77-3d58-40b5-979f-3773a54776ca` |
 | Service principal ID | `6b25d3e1-700e-42b8-ac1d-79bf68e258c5` |
+| Owners | `zzhan409@jh.edu` (Zizhe Zhang), `hhu49@jh.edu` (Haimin Hu) — two on purpose; see [Before real inventory goes in](#before-real-inventory-goes-in) |
 | Display name | LabTrack — Alliance AI Lab |
 | Supported account types | Single tenant (`AzureADMyOrg`) |
 | Platform | **Single-page application (SPA)** — *not* Web |
@@ -646,24 +647,60 @@ SPA redirect URI on the app registration.
 
 ## Deployment
 
-GitHub Pages with a custom subdomain:
-
-```bash
-git push origin <branch>
-```
+GitHub Pages serves the app. The demo currently runs from the `gh-pages` branch,
+which carries only `index.html`, `CNAME`, `robots.txt` and `.nojekyll` — Pages
+publishes whatever is on the branch at a public URL, and the working branch also
+holds SETUP.md and the session logs, none of which belong at one.
 
 1. Repo Settings → Pages → deploy from the branch, `/ (root)`
-2. The `CNAME` file at the repo root sets the custom domain (`labtrack.zizhe.io`)
+2. The `CNAME` file at the branch root sets the custom domain
 3. DNS: `CNAME  labtrack → zhang-zizhe.github.io`
 
-> **Set the DNS record to "DNS only" (grey cloud) in Cloudflare at first.**
-> A proxied record breaks GitHub's HTTP-01 certificate validation and Pages hangs
-> at *"certificate not yet created"*. Once the certificate issues, the proxy can be
-> switched back on with SSL mode = Full.
+**On the certificate, there are two routes and they are genuinely different:**
 
-Moving to a different domain later means: update `CNAME`, add the DNS record, and
-add the new origin to the app registration's SPA redirect URIs (see above) —
-otherwise sign-in fails with `AADSTS50011`.
+- *Grey cloud (DNS only).* GitHub provisions its own Let's Encrypt certificate via
+  an HTTP-01 challenge. A proxied record intercepts that challenge, so Pages hangs
+  at *"certificate not yet created"* — which is what happened here, and why the
+  ACME path returned 404 for half an hour. Once the certificate issues you can turn
+  the proxy back on, and you then have HTTPS whether or not Cloudflare is in front.
+- *Orange cloud (proxied), SSL mode **Full**.* Cloudflare terminates TLS with its
+  own Universal SSL certificate, whose SAN covers `example.com` and `*.example.com`.
+  GitHub never needs a certificate at all — the browser never talks to it. This is
+  what the site runs on now. **Never Flexible:** Cloudflare would reach the origin
+  over HTTP, and once GitHub's *Enforce HTTPS* is on that is an infinite redirect.
+
+Until HTTPS works, the login page shows *"Could not load Microsoft sign-in"*. That
+is not a bug: plain HTTP is not a secure context, so `crypto.subtle` does not exist
+and MSAL refuses to initialise. It clears itself the moment the certificate is live.
+
+### Before real inventory goes in
+
+Two dependencies currently rest on one student, and both should be moved before the
+lab starts trusting the tool with real data.
+
+**1. The domain.** `labtrack.zizhe.io` is a personal domain. The app registration's
+redirect URI points at it, so if it lapses or is reclaimed the tool goes dark *and*
+sign-in breaks. The intended home is `labtrack.alliance-ai.cs.jhu.edu` — a DNS
+record in the zone that already points `alliance-ai.cs.jhu.edu` at
+`jhu-alliancelab.github.io`, which CS IT can add. Moving means: update `CNAME`, add
+the DNS record, and **add the new origin to the registration's SPA redirect URIs**
+— MSAL derives `redirectUri` from `location.origin + location.pathname`, so an
+unregistered origin fails with `AADSTS50011`.
+
+**2. Ownership of the app registration.** The registration lives in the JHU tenant,
+not in anybody's account, and deleting a user does *not* delete it — consent stays
+granted and sign-in keeps working. What is lost is the ability to manage it: an
+ownerless registration cannot have a redirect URI added, which is exactly what
+step 1 needs. So keep at least one owner who is not leaving:
+
+```bash
+az rest --method GET \
+  --url https://graph.microsoft.com/v1.0/applications/131c5c77-3d58-40b5-979f-3773a54776ca/owners
+```
+
+Owners can add owners; no administrator is needed. Adding one changes nothing about
+the application's identity — `appId`, object ID, service principal ID, scopes and
+credentials are all untouched.
 
 ## Local development
 
