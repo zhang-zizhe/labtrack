@@ -780,6 +780,23 @@ console.log("In Use means somebody has it now, not that somebody booked it");
   check("consumables are left out of it", it("a5").status === "Available");
   check("and Broken is not overwritten by the sweep", it("a6").status === "Broken");
 
+  // A row written before itemId was populated carries only the name, and an item
+  // can easily have one of each kind.
+  {
+    const co = ssA.__sheets.Checkouts;
+    const h = co.__data[0];
+    const row = h.map(function (k) {
+      return ({ id:"bk-legacy", itemId:"", item:"Bench", user:"Rex", out:"2026-08-15 09:00",
+                ret:"2026-08-20 17:00", status:"Active", checkedOutByEmail:"rex@jh.edu",
+                groupEmails:"", qty:1, fromTime:"", toTime:"", notes:"" })[k];
+    });
+    co.__data.push(row);
+  }
+  cA.syncItemStatuses();
+  check("a row matched only by name is counted too", it("a4").usedBy.indexOf("Rex") >= 0);
+  check("alongside the one matched by id", it("a4").usedBy.indexOf("Quin") >= 0);
+  check("and the sweep has settled again", cA.syncItemStatuses() === 0);
+
   // A returned booking releases the item whether or not the sweep has run.
   post({ action:"returnItem", checkoutId:"bk-now" });
   check("returning frees it", it("a1").status === "Available" && it("a1").usedBy.length === 0);

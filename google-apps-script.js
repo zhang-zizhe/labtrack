@@ -627,8 +627,11 @@ function syncItemStatuses() {
     // consequence of who booked it. Leave them alone.
     if (it.status === "Maintenance" || it.status === "Broken") return;
     const shared = it.shared === true || String(it.shared).toLowerCase() === "true";
-    const holders = live["id:" + it.id] || live["name:" + it.name] || [];
-    const want = holders.slice().sort();
+    // Both keys, not whichever matches first: rows written before itemId was
+    // populated carry only the name, and an item can easily have one of each — the
+    // `||` would have taken the id-keyed holders and silently dropped the others.
+    const holders = (live["id:" + it.id] || []).concat(live["name:" + it.name] || []);
+    const want = holders.filter(function (u, i) { return holders.indexOf(u) === i; }).sort();
     const have = (Array.isArray(it.usedBy) ? it.usedBy : []).slice().sort();
     // A shared item stays Available however many people have it — same rule as
     // updateItemStatus, which is the only other place this is decided.
