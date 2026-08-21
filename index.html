@@ -3180,17 +3180,22 @@ function LabInventory(){
   const effectiveRole = previewMode ? "member" : userRole;
   // Yours are what you can do something about — the checkout is in your name, or
   // you were listed on it. An admin is on the hook for everyone else's too.
-  const onCheckout = c => !!user?.email && (c.checkedOutByEmail===user.email ||
-    String(c.groupEmails||"").split(",").map(e=>e.trim()).filter(Boolean).includes(user.email));
+  // Group emails are typed by hand, so they arrive in whatever case somebody used.
+  // The server has always compared them lowercased; the browser asked the same
+  // question in two places and only one of them agreed, so a member listed as
+  // JDoe1@jh.edu was missing from the overdue banner for a loan they are on the
+  // hook for. One predicate now, so the two cannot drift apart again.
+  const emailsOn = c => [String(c.checkedOutByEmail||"")]
+    .concat(String(c.groupEmails||"").split(","))
+    .map(e=>e.trim().toLowerCase()).filter(Boolean);
+  const onCheckout = c => !!user?.email && emailsOn(c).includes(String(user.email).trim().toLowerCase());
   const overdueMine = overdues.filter(onCheckout);
   const overdueBanner = effectiveRole==="admin" ? overdues : overdueMine;
 
   const canReturn=(c)=>{
     if(effectiveRole==="admin")return true;
-    if(!c.checkedOutByEmail)return true; // legacy records without email
-    if(user?.email===c.checkedOutByEmail)return true;
-    const grp=(c.groupEmails||"").split(",").map(e=>e.trim().toLowerCase()).filter(Boolean);
-    return grp.includes(String(user?.email||"").toLowerCase());
+    if(!c.checkedOutByEmail)return true; // legacy records without an owner recorded
+    return onCheckout(c);
   };
 
   const handleBulkReturn=()=>{
