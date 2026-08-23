@@ -3,7 +3,7 @@
   "private": true,
   "description": "Lab inventory and equipment booking for the JHU Alliance AI Lab",
   "scripts": {
-    "test": "node test-sheet-setup.js && node test-sheets-coercion.js && node test-storage-layer.js > /dev/null && node test-worker.mjs && node --check google-apps-script.js && ./deploy.sh --check",
+    "test": "node test-sheet-setup.js && node test-sheets-coercion.js && node test-storage-layer.js > /dev/null && node test-worker.mjs && node --check google-apps-script.js && node stamp.js --check && ./deploy.sh --check",
     "deploy": "./deploy.sh"
   },
   "devDependencies": {

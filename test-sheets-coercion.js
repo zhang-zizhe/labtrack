@@ -120,7 +120,15 @@ function build() {
   const ctx = {
     SpreadsheetApp: { getActiveSpreadsheet: () => ss },
     LockService: { getScriptLock: () => ({ waitLock() {}, releaseLock() {} }) },
-    UrlFetchApp: { fetch: (u, o) => { slack.push({ u, o }); return { getResponseCode: () => 200, getContentText: () => "ok" }; } },
+    UrlFetchApp: { fetch: (u, o) => {
+      // The freshness check fetches its own source. Hand it the real file so the
+      // check is exercised rather than merely not crashing; everything else is Slack.
+      if (String(u).indexOf("google-apps-script.js") >= 0) {
+        return { getResponseCode: () => 200, getContentText: () => fs.readFileSync(REPO + "/google-apps-script.js", "utf8") };
+      }
+      slack.push({ u, o });
+      return { getResponseCode: () => 200, getContentText: () => "ok" };
+    } },
     CacheService: { getScriptCache: () => ({ get: () => null, put() {} }) },
     ContentService: { MimeType: { JSON: "json", ICAL: "ical" }, createTextOutput: t => ({ __text: t, setMimeType(m) { this.__mime = m; return this; } }) },
     // A real one, not a placeholder: the calendar feed is almost entirely date
@@ -129,6 +137,12 @@ function build() {
     // the whole file, so "local" here means what it means in Apps Script.
     Utilities: {
       base64DecodeWebSafe: s => Buffer.from(String(s), "base64"),
+      computeDigest: (alg, value, charset) =>
+        [...require("crypto").createHash("sha256").update(String(value), "utf8").digest()]
+          .map(b => (b > 127 ? b - 256 : b)),      // Apps Script hands back signed bytes
+      DigestAlgorithm: { SHA_256: "sha256" },
+      Charset: { UTF_8: "utf8" },
+
       // java.util.UUID.randomUUID() in Apps Script. A counter here, because a test
       // that cannot predict the token cannot assert on it — the property under test
       // is the shape and the uniqueness, not the entropy.
@@ -362,6 +376,11 @@ console.log("\nthe real-sheet smoke test is itself exercised here");
   const { ctx, rows } = build();
   const report = ctx.smokeTest();
   check("smokeTest reports no failures", report.indexOf("FAIL") < 0);
+  // The stamp is the only thing that can tell you the editor is behind, so it has
+  // to be right in both directions.
+  check("it says the code is current when it is", report.indexOf("up to date") > 0);
+  const stale = ctx.codeStampOf_("something else entirely");
+  check("and a different file hashes differently", stale !== ctx.CODE_STAMP);
   check("smokeTest cleans up after itself", rows("Items").length === 0 && rows("Checkouts").length === 0);
   if (report.indexOf("FAIL") >= 0) console.log(report.split("\n").filter(l => /FAIL|note/.test(l)).join("\n"));
 }

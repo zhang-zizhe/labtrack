@@ -54,6 +54,17 @@ const ICS_CAL_NAME = "Alliance AI Lab — Equipment";
 // the editor gets it wrong.
 const WEB_APP_URL = "https://script.google.com/macros/s/AKfycbzBrg3dcycZZ7u2uX6PYWq455ngl6CojS3w-Qcno6i3rKh1uvg2e9fTKxXWs9p5rF8LRQ/exec";
 
+// A hash of this file, maintained by stamp.js and verified by npm test, so nobody
+// has to remember to bump it. smokeTest() fetches the file from GitHub, hashes it
+// the same way, and says whether the editor is running the current code.
+//
+// This exists because there is no other way to tell. The editor shows no version,
+// pasting is manual, and stale code fails in whatever way the missing fix was
+// supposed to prevent — twice in one day, the only clue was that a log message had
+// different wording than expected. That was luck, not a check.
+const CODE_STAMP = "1df13aa16d424426";
+const SOURCE_URL = "https://raw.githubusercontent.com/zhang-zizhe/labtrack/main/google-apps-script.js";
+
 // Where subscription addresses point, if that is not the web app itself. Set it to
 // a proxy's address, path and all, with no query string — the token is appended
 // here:
@@ -2444,6 +2455,35 @@ function updateItemStatus(itemId, itemName, userName, mode) {
 // Running it on a sheet that already holds real inventory is safe.
 var SMOKE_ = "ZZSMOKE";
 
+// The same hash stamp.js computes, over the same blanked text, so the two agree by
+// construction rather than by two implementations happening to match.
+function codeStampOf_(text) {
+  var blanked = String(text).replace(/^const CODE_STAMP = "[^"]*";$/m, 'const CODE_STAMP = "";');
+  var bytes = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, blanked, Utilities.Charset.UTF_8);
+  var hex = "";
+  for (var i = 0; i < bytes.length; i++) {
+    var b = (bytes[i] + 256) % 256;          // Apps Script hands back signed bytes
+    hex += (b < 16 ? "0" : "") + b.toString(16);
+  }
+  return hex.slice(0, 16);
+}
+
+// Is the code in this editor the code on main? Never throws and never fails the
+// smoke test over it — a network blip is not a reason to call the backend broken.
+function codeFreshness_() {
+  if (!CODE_STAMP) return "unstamped build \u2014 run node stamp.js";
+  try {
+    var r = UrlFetchApp.fetch(SOURCE_URL, { muteHttpExceptions: true });
+    if (r.getResponseCode() !== 200) return "could not reach GitHub (HTTP " + r.getResponseCode() + ")";
+    var latest = codeStampOf_(r.getContentText());
+    if (latest === CODE_STAMP) return "up to date (" + CODE_STAMP + ")";
+    return "\u26A0 STALE \u2014 this editor is " + CODE_STAMP + ", main is " + latest
+         + ". Paste the file again and redeploy.";
+  } catch (e) {
+    return "could not check (" + e.message + ")";
+  }
+}
+
 function smokePurge_() {
   var n = 0, tables = ["Items", "Checkouts", "Deliveries", "Orders"];
   var mine = function (r) { return String(r.id).indexOf(SMOKE_) === 0; };
@@ -2570,6 +2610,11 @@ function smokeTest() {
 
   smokePurge_();   // in case an earlier run died before its cleanup
   try {
+    // First, because everything below is only meaningful about the code that is
+    // actually here. A stale editor passes its own tests perfectly.
+    out.push("— is this the current code? —");
+    out.push("  " + codeFreshness_());
+
     out.push("— schema —");
     Object.keys(TABLE_HEADERS).forEach(function (name) {
       var sheet = getSheet(name);

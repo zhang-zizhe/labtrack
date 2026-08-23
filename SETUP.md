@@ -418,7 +418,7 @@ const DEV_NO_AUTH_EMAIL = "zzhan409@jh.edu";   // identity the backend assumes
 8. Copy the Web app URL into `LAB_CONFIG.apps_script_url` in `index.html`
 9. **Run → `smokeTest`.** Checks the storage layer against the real spreadsheet —
    see [Tests](#tests) for why that is a different question from the other suites.
-   Expect `✅ smoke test: 58 passed`.
+   Expect `✅ smoke test: 58 passed`, and read the first line — see below.
 
 > **After a code update, redeploy via Deploy → Manage deployments → ✏️ → Version:
 > New version.** *Not* "New deployment" — that mints a **different** `/exec` URL and
@@ -1142,8 +1142,41 @@ changed**; these are only the record of *why*.
 node --check google-apps-script.js       # backend syntax
 node test-sheet-setup.js                 # 314 assertions: setup, labels, per-unit
                                          # targeting, order approval, booking rules
-node test-sheets-coercion.js             # 43 assertions: the ones that only fail live
+node test-sheets-coercion.js             # 45 assertions: the ones that only fail live
 node test-storage-layer.js > after.json  # behaviour snapshot — see below
+```
+
+#### Is the editor running the current code?
+
+`smokeTest()` answers that first, before anything else, because everything after it
+is only true of the code that is actually there — **a stale editor passes its own
+tests perfectly.**
+
+```
+— is this the current code? —
+  up to date (1df13aa16d424426)
+```
+
+or
+
+```
+  ⚠ STALE — this editor is 1df13aa16d424426, main is 9c4e…. Paste the file again and redeploy.
+```
+
+It works by carrying a hash of its own source, maintained by `stamp.js` and verified
+by `npm test`, so nobody has to remember to bump it — a stamp somebody forgot is
+worse than none, because it reports "up to date" about code that is not. `smokeTest()`
+fetches the file from GitHub, hashes it the same way, and compares. A network failure
+says "could not check" and fails nothing.
+
+This exists because there was no other way to tell. The editor shows no version,
+pasting is manual, and stale code fails in whatever way the missing fix was meant to
+prevent. It happened twice in one day and both times the only clue was a log message
+whose wording had changed — which was luck, not a check.
+
+```bash
+node stamp.js          # rewrite the stamp to match the file
+node stamp.js --check  # fail if it does not
 ```
 
 And one that does not run here at all: **`smokeTest()`, from the Apps Script editor.**

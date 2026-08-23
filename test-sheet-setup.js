@@ -58,6 +58,12 @@ function load(ss) {
     // the whole file, so "local" here means what it means in Apps Script.
     Utilities: {
       base64DecodeWebSafe: s => Buffer.from(String(s), "base64"),
+      computeDigest: (alg, value, charset) =>
+        [...require("crypto").createHash("sha256").update(String(value), "utf8").digest()]
+          .map(b => (b > 127 ? b - 256 : b)),      // Apps Script hands back signed bytes
+      DigestAlgorithm: { SHA_256: "sha256" },
+      Charset: { UTF_8: "utf8" },
+
       // java.util.UUID.randomUUID() in Apps Script. A counter here, because a test
       // that cannot predict the token cannot assert on it — the property under test
       // is the shape and the uniqueness, not the entropy.
