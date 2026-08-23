@@ -506,6 +506,64 @@ What holds the damage down:
 - **Active and pending bookings only.** Returned ones leave the calendar — a
   calendar answers what is *claimed*, and the Usage tab is where the record lives
 
+### Why there is a proxy in front of it
+
+A calendar client cannot subscribe to an Apps Script web app. `/exec` answers with a
+302 to `script.googleusercontent.com` — an empty body typed `application/binary`,
+carrying a key that works exactly **once**; fetch that URL a second time and it is a
+redirect again. Neither Google Calendar nor Outlook follows it. Both refuse the
+address outright: *"couldn't add this calendar"*.
+
+The same bytes served with no redirect are accepted by both. That is what identified
+the transport rather than the file as the fault, and it was worth establishing before
+building anything: an independent parser (Mozilla's `ical.js`) reads the feed
+correctly, so nothing was wrong with what we generate.
+
+So `worker/calendar-proxy.mjs` — about forty lines on Cloudflare Workers' free tier —
+follows the redirect and hands the client a plain `text/calendar` body.
+
+**It lives on `*.workers.dev`, not under the site's own domain.** The site is expected
+to move to `labtrack.alliance-ai.cs.jhu.edu`, and a subscription that breaks on moving
+day is worse than one that never depended on the domain. The worker is tied to a
+Cloudflare *account* — register it with the **lab's** Google account, not a student's,
+for the same reason the Apps Script deployment runs as the lab.
+
+Two properties of the worker are worth keeping if it is ever rewritten:
+
+- **Only a token-shaped `ics` parameter is forwarded**, and nothing else — not the
+  path, not other query parameters. Otherwise it is an open proxy to every parameter
+  the backend understands, from an address with no authentication in front of it.
+- **It never answers 200 with something that is not a calendar.** Apps Script serves
+  an HTML error page on a thrown script or a quota refusal, and passing that through
+  as `text/calendar` would have every subscriber quietly stop updating with nothing to
+  say why.
+
+`node test-worker.mjs` covers both, plus the refusals, without deploying anything.
+
+#### Setting it up
+
+1. Register at Cloudflare with the **lab's** Google account. Turn on 2FA and keep the
+   backup codes wherever the lab keeps shared credentials
+2. **Workers & Pages → Create → Worker**, name it something like `labtrack-cal`
+3. Replace the starter code with `worker/calendar-proxy.mjs`, check that
+   `APPS_SCRIPT` matches the deployed `/exec` URL, **Deploy**
+4. Set `ICS_PUBLIC_BASE` in `google-apps-script.js` to
+   `https://labtrack-cal.<subdomain>.workers.dev/calendar.ics`, then redeploy the
+   backend through **Manage deployments → ✏️ → New version**
+5. Subscribe to `…/calendar.ics?ics=<token>` and check the events render
+
+#### If the lab gets its own server
+
+A NAS could host this, but the requirement that decides it is **inbound reachability
+from the public internet**: the feed is fetched by Google's and Microsoft's servers,
+not by anybody in the lab, so it needs a public hostname, an open port and a
+certificate — which on a university network means an IT request. And if the NAS is
+down the calendars quietly stop updating.
+
+If a server does arrive, the migration worth doing is the whole backend rather than
+this proxy — see [Moving the backend off Google](#moving-the-backend-off-google).
+The proxy exists only because the backend is on Apps Script.
+
 ### Trying it before anyone can sign in
 
 `previewFeed()` from the Apps Script editor mints your address and writes three

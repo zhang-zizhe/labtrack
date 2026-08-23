@@ -54,6 +54,26 @@ const ICS_CAL_NAME = "Alliance AI Lab — Equipment";
 // the editor gets it wrong.
 const WEB_APP_URL = "";
 
+// Where subscription addresses point, if that is not the web app itself.
+//
+// It is not, and cannot be. Apps Script answers /exec with a 302 to
+// script.googleusercontent.com carrying a one-shot key — the second fetch of that
+// URL is already a redirect again — and neither Google Calendar nor Outlook will
+// follow it. Both refuse the address outright: "couldn't add this calendar". The
+// same bytes served with no redirect are accepted by both, which is what identified
+// the transport rather than the content as the fault.
+//
+// So a small proxy sits in front, follows the redirect, and hands the client a
+// plain text/calendar body. Set this to its address, path and all, with no query
+// string — the token is appended here:
+//
+//   https://labtrack-cal.<subdomain>.workers.dev/calendar.ics
+//
+// Deliberately not a path under the site itself: the site moves to the lab's own
+// domain eventually, and a subscription that breaks on that day is worse than one
+// that never depended on the domain to begin with.
+const ICS_PUBLIC_BASE = "";
+
 // ─── DEV ESCAPE HATCH ────────────────────────────────────────────────────────
 // Set to a random string to accept "dev:<key>" as a token and skip Entra
 // verification entirely, so the app can be exercised end-to-end before admin
@@ -1594,7 +1614,7 @@ function icsUrlFor_(email, rotate) {
       map[mine] = who;
       writeSetting(ICS_TOKENS_KEY_, JSON.stringify(map));
     }
-    var base = WEB_APP_URL;
+    var base = ICS_PUBLIC_BASE || WEB_APP_URL;
     if (!base) { try { base = ScriptApp.getService().getUrl() || ""; } catch (e) { base = ""; } }
     return base ? base + "?ics=" + mine : "?ics=" + mine;
   } finally {
@@ -2474,7 +2494,7 @@ function previewFeed(email) {
 
   var url = icsUrlFor_(who, false);
   var token = String(url).split("ics=")[1] || "";
-  var devWarning = url.indexOf("/exec?") < 0
+  var devWarning = (!ICS_PUBLIC_BASE && url.indexOf("/exec?") < 0)
     ? ["", "!!  That address is NOT usable. getUrl() handed back the /dev URL, which",
        "!!  needs your own browser session — Google's fetcher gets a sign-in page and",
        "!!  the calendar shows nothing. /dev and /exec have different deployment ids,",
