@@ -40,10 +40,27 @@ jobs:
 
       - run: npm install --no-audit --no-fund
 
-      # The three suites, the backend syntax, the source stamp, and the four
-      # refusals in deploy.sh --check.
-      - name: npm test
-        run: npm test
+      # Deliberately one step each rather than `npm test`. A single failing step is
+      # readable from the run summary without downloading the log, which needs admin
+      # rights on the repository — so a green-to-red transition can be diagnosed by
+      # anybody who can see the repository at all.
+      #
+      # TZ is deliberately NOT set here. The suites pin it themselves, and setting it
+      # for them would hide the day one of them stops doing that.
+      - name: booking rules, labels, permissions
+        run: node test-sheet-setup.js
+      - name: the ones that only fail on a real spreadsheet
+        run: node test-sheets-coercion.js
+      - name: storage-layer snapshot
+        run: node test-storage-layer.js > /dev/null
+      - name: calendar proxy
+        run: node test-worker.mjs
+      - name: backend parses
+        run: node --check google-apps-script.js
+      - name: source stamp matches
+        run: node stamp.js --check
+      - name: publish checks
+        run: ./deploy.sh --check
 
       - name: Publish index.html to gh-pages
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
