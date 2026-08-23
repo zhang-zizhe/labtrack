@@ -412,7 +412,7 @@ const DEV_NO_AUTH_EMAIL = "zzhan409@jh.edu";   // identity the backend assumes
 8. Copy the Web app URL into `LAB_CONFIG.apps_script_url` in `index.html`
 9. **Run → `smokeTest`.** Checks the storage layer against the real spreadsheet —
    see [Tests](#tests) for why that is a different question from the other suites.
-   Expect `✅ smoke test: 54 passed`.
+   Expect `✅ smoke test: 56 passed`.
 
 > **After a code update, redeploy via Deploy → Manage deployments → ✏️ → Version:
 > New version.** *Not* "New deployment" — that mints a **different** `/exec` URL and
@@ -491,7 +491,13 @@ Three properties follow, and none of them can be engineered away:
 
 What holds the damage down:
 
-- **160 bits of randomness.** Not guessable; the only way in is to be given it
+- **256 bits from a CSPRNG.** `Utilities.getUuid()` is `java.util.UUID.randomUUID()`,
+  which draws on `SecureRandom`. Not `Math.random()` — V8 seeds xorshift128+ per
+  context and its state is recoverable from a handful of outputs, so any member
+  holding one token legitimately would be a short step from predicting everyone's
+- **Membership is rechecked on every fetch.** A token is minted once and fetched for
+  years; taking somebody off the `members` roster ends their calendar too, or
+  offboarding quietly does not
 - **One per person.** Revoke one without disturbing anyone else — in the app,
   Subscribe → *Replace this address*, which kills the old one the same second and
   writes an `IcsUrlRotated` line to `AuditLog`
@@ -503,11 +509,33 @@ What holds the damage down:
 To revoke everyone at once, clear the `ics_tokens` row in the Settings tab. Every
 address dies and each person mints a new one next time they open Subscribe.
 
+> This worked only after a review. The lookup used to be `icsTokens_()[ics]`, which
+> walks the prototype chain — so `?ics=constructor` returned the `Object`
+> constructor, which is truthy, and served the entire lab's calendar to anyone who
+> typed an eleven-letter English word. It worked on a spreadsheet where nobody had
+> ever subscribed, because `{}` has a prototype too; and it made this paragraph's
+> panic button a no-op, because clearing the row leaves `{}`. The map is built with
+> `Object.create(null)` now, the token must be hex-shaped, and the lookup is an
+> own-property check. Four independent reviewers found it; one reproduced it through
+> the repo's own harness.
+>
+> The lesson generalises: **any object whose keys come from data needs no prototype.**
+> `byName` and `live` in `syncItemStatuses`, `byId` in `buildIcs_` and `counts` in the
+> digest were all the same shape and are all bare dictionaries now.
+
 ### What subscribers actually see
 
-- A booking with a **daily window** (9–5 across three days) becomes a *recurring*
-  event — three 9-to-5 blocks. Drawn as one 80-hour slab it would read as the item
-  being gone overnight, which is the opposite of what booking by the hour means.
+- A booking with a **daily window** (9–5 across three days) becomes **three separate
+  events**, one per day. Drawn as one 80-hour slab it would read as the item being
+  gone overnight, which is the opposite of what booking by the hour means — and
+  written as one event with `RRULE:FREQ=DAILY`, it would be wrong for a different
+  reason: a recurrence anchored to a UTC start repeats every 24 *absolute* hours, so
+  from the Sunday the clocks change a 09:00–17:00 booking starts reading 08:00–16:00
+  for the rest of its run. Keeping wall-clock time across a change is what `TZID`
+  plus a `VTIMEZONE` block is for, and hand-writing one means hard-coding the US
+  daylight-saving rules into this file. Writing each day out instead lets the
+  platform's tz database answer. A hold is capped at `MAX_HOLD_DAYS`, so it is at
+  most ninety events.
 - A booking with **dates and no times** becomes an all-day band.
 - A **pending** request is marked ⏳ and carries `STATUS:TENTATIVE`, so a calendar
   draws it as provisional. It is not a promise and should not look like one.
@@ -966,7 +994,7 @@ changed**; these are only the record of *why*.
 
 ```bash
 node --check google-apps-script.js       # backend syntax
-node test-sheet-setup.js                 # 287 assertions: setup, labels, per-unit
+node test-sheet-setup.js                 # 308 assertions: setup, labels, per-unit
                                          # targeting, order approval, booking rules
 node test-sheets-coercion.js             # 37 assertions: the ones that only fail live
 node test-storage-layer.js > after.json  # behaviour snapshot — see below

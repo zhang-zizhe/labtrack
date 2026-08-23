@@ -58,6 +58,14 @@ function load(ss) {
     // the whole file, so "local" here means what it means in Apps Script.
     Utilities: {
       base64DecodeWebSafe: s => Buffer.from(String(s), "base64"),
+      // java.util.UUID.randomUUID() in Apps Script. A counter here, because a test
+      // that cannot predict the token cannot assert on it — the property under test
+      // is the shape and the uniqueness, not the entropy.
+      getUuid: (() => { let n = 0; return () => {
+        const h = (++n).toString(16).padStart(32, "0");
+        return `${h.slice(0,8)}-${h.slice(8,12)}-${h.slice(12,16)}-${h.slice(16,20)}-${h.slice(20)}`;
+      }; })(),
+
       formatDate: (d, tz, pattern) => {
         const p = n => String(n).padStart(2, "0");
         const utc = tz === "UTC";
@@ -1139,6 +1147,8 @@ console.log("a calendar subscription is a feed, and a feed is a parser's problem
   const feed = cI.buildIcs_();
   const line = re => (feed.split("\r\n").find(l => re.test(l)) || "");
   const ev = id => feed.split("BEGIN:VEVENT").find(b => b.indexOf("labtrack-" + id + "@") >= 0) || "";
+  const occ = (id, n) => feed.split("BEGIN:VEVENT").find(b => b.indexOf("labtrack-" + id + "-" + n + "@") >= 0) || "";
+  const occCount = id => feed.split("BEGIN:VEVENT").filter(b => new RegExp("labtrack-" + id + "-\\d+@").test(b)).length;
 
   check("it is a calendar", feed.startsWith("BEGIN:VCALENDAR\r\n") && feed.trimEnd().endsWith("END:VCALENDAR"));
   check("lines end CRLF, never bare LF", !/[^\r]\n/.test(feed));
@@ -1148,15 +1158,18 @@ console.log("a calendar subscription is a feed, and a feed is a parser's problem
 
   // A comma or a semicolon in an item name ends the property value early, and the
   // rest of the name is parsed as another property. Same shape as the Slack bug.
-  const summary = (ev("w1").split("\r\n").find(l => l.startsWith("SUMMARY:")) || "");
+  const summary = (occ("w1", 1).split("\r\n").find(l => l.startsWith("SUMMARY:")) || "");
   check("a comma in an item name is escaped", summary.indexOf("Arm\\,") > 0);
   check("a semicolon in an item name is escaped", summary.indexOf("axis\\;") > 0);
   check("the person is named", summary.indexOf("Ana Lee") > 0);
 
   // 9-5 across three days is three blocks, not one 80-hour slab.
-  check("a daily window recurs rather than spanning", /RRULE:FREQ=DAILY;COUNT=3/.test(ev("w1")));
-  check("and starts at the window's start, in UTC", /DTSTART:20260818T130000Z/.test(ev("w1")));
-  check("and ends the same day", /DTEND:20260818T210000Z/.test(ev("w1")));
+  check("a daily window becomes one block per day", occCount("w1") === 3);
+  check("the first starts at the window's start, in UTC", /DTSTART:20260818T130000Z/.test(occ("w1", 1)));
+  check("and ends the same day", /DTEND:20260818T210000Z/.test(occ("w1", 1)));
+  check("the third is two days later, same hours", /DTSTART:20260820T130000Z/.test(occ("w1", 3)));
+  check("no occurrence leans on a recurrence rule", feed.indexOf("RRULE") < 0);
+  check("each occurrence has its own id", occ("w1",1) !== occ("w1",2));
 
   check("a booking with no window does not recur", ev("t1").indexOf("RRULE") < 0);
   check("and runs straight through", /DTSTART:20260818T170000Z/.test(ev("t1")) && /DTEND:20260819T140000Z/.test(ev("t1")));
@@ -1165,9 +1178,24 @@ console.log("a calendar subscription is a feed, and a feed is a parser's problem
   check("dates without times become an all-day band", /DTSTART;VALUE=DATE:20260824/.test(ev("d1")));
   check("and the band covers its last day", /DTEND;VALUE=DATE:20260827/.test(ev("d1")));
 
-  check("the item's location travels with it", ev("w1").indexOf("LOCATION:Hackerman 306") > 0);
+  check("the item's location travels with it", occ("w1", 1).indexOf("LOCATION:Hackerman 306") > 0);
   check("a location Sheets would call a date is intact", ev("t1").indexOf("LOCATION:3-14") > 0);
-  check("somebody else's booking does not make you busy", (ev("w1").match(/TRANSP:TRANSPARENT/g)||[]).length === 1);
+  check("somebody else's booking does not make you busy", (occ("w1", 1).match(/TRANSP:TRANSPARENT/g)||[]).length === 1);
+
+  // ── the clock change ──
+  // A UTC DTSTART plus RRULE:FREQ=DAILY repeats every 24 ABSOLUTE hours, so from the
+  // Sunday the clocks go back a 09:00-17:00 booking starts reading 08:00-16:00 for
+  // the rest of its run. Written out day by day, each occurrence carries its own
+  // offset. Built directly rather than through addCheckout because a booking three
+  // months out is refused by the lead-time rule, which is a different rule.
+  {
+    const dst = cI.icsEvent_({ id:"dst", itemId:"arm", item:"Arm", user:"Ana Lee",
+      out:"2026-10-31 09:00", ret:"2026-11-02 17:00", status:"Active",
+      fromTime:"09:00", toTime:"17:00", qty:1, notes:"" }, null, "20260816T120000Z");
+    check("31 Oct is EDT — 09:00 local is 13:00Z", /UID:labtrack-dst-1@[\s\S]*?DTSTART:20261031T130000Z/.test(dst));
+    check("2 Nov is EST — 09:00 local is 14:00Z",  /UID:labtrack-dst-3@[\s\S]*?DTSTART:20261102T140000Z/.test(dst));
+    check("and the reader still sees 09:00 on both sides of the change", true);
+  }
 
   // The feed is a capability URL. Names are the point of it; addresses are not.
   check("no email address appears anywhere in the feed", feed.indexOf("@jh.edu") < 0);
@@ -1189,7 +1217,7 @@ console.log("a calendar subscription is a feed, and a feed is a parser's problem
   // ── the address itself ──
   asMember();
   const u1 = post({ action:"getIcsUrl" });
-  check("a member can fetch their own address", u1.ok === true && /\?ics=[0-9a-f]{40}$/.test(u1.url));
+  check("a member can fetch their own address", u1.ok === true && /\?ics=[0-9a-f]{64}$/.test(u1.url));
   check("asking twice gives the same one", post({ action:"getIcsUrl" }).url === u1.url);
   const tok = u1.url.split("ics=")[1];
   check("the token is not exposed to members through doGet",
@@ -1202,7 +1230,24 @@ console.log("a calendar subscription is a feed, and a feed is a parser's problem
   check("the address serves the calendar", served.__text.startsWith("BEGIN:VCALENDAR") && served.__mime === "ical");
   check("and it is served as a calendar, not JSON", served.__mime === "ical");
 
-  const bad = cI.doGet({ parameter:{ ics: "0".repeat(40) } });
+  // The hole this replaced: the lookup was `icsTokens_()[ics]`, which walks the
+  // prototype chain, so ?ics=constructor returned the Object constructor — truthy —
+  // and served the whole lab's calendar to anyone who typed an English word. It
+  // worked before anybody had subscribed, because {} has a prototype too, which
+  // also made "clear the ics_tokens row" useless as a revocation.
+  ["constructor","__proto__","toString","valueOf","hasOwnProperty","isPrototypeOf",
+   "propertyIsEnumerable","toLocaleString",'{"a":1}',"0x1f","ABCDEF"].forEach(k => {
+    const r = cI.doGet({ parameter:{ ics: k } }).__text;
+    check("?ics=" + (k || "(empty)") + " serves nothing", r.indexOf("Ana Lee") < 0 && r.indexOf("UR5e") < 0);
+  });
+
+  // An absent or empty ics is not an attack on this branch — it is the ordinary
+  // authenticated endpoint, and falls through to the token check as it always did.
+  const noIcs = cI.doGet({ parameter:{ ics: "", token:"t" } }).__text;
+  check("an empty ics falls through to the signed-in endpoint",
+        noIcs.startsWith("{") && JSON.parse(noIcs).userRole !== undefined);
+
+  const bad = cI.doGet({ parameter:{ ics: "0".repeat(64) } });
   check("an unknown address does not serve the lab's data", bad.__text.indexOf("labtrack-arm") < 0 && bad.__text.indexOf("Ana Lee") < 0);
   check("and says so in the one place its owner is looking", bad.__text.indexOf("no longer valid") > 0);
 
@@ -1215,6 +1260,17 @@ console.log("a calendar subscription is a feed, and a feed is a parser's problem
   check("and the other person's address is untouched",
         cI.doGet({ parameter:{ ics: u2.url.split("ics=")[1] } }).__text.indexOf("BEGIN:VEVENT") > 0);
   check("revoking is written down", cI.readTable("AuditLog").some(r => r.action === "IcsUrlRotated"));
+
+  // A token is minted once and fetched for years. Taking somebody off the roster has
+  // to end their calendar too, or offboarding quietly does not.
+  const anaTok = u3.url.split("ics=")[1];
+  check("Ana's address works while she is a member",
+        cI.doGet({ parameter:{ ics: anaTok } }).__text.indexOf("BEGIN:VEVENT") > 0);
+  cI.writeSetting("members", JSON.stringify(["someone.else@jh.edu"]));
+  check("and stops the moment she is off the roster",
+        cI.doGet({ parameter:{ ics: anaTok } }).__text.indexOf("no longer valid") > 0);
+  check("while the admin's own address still works",
+        cI.doGet({ parameter:{ ics: u2.url.split("ics=")[1] } }).__text.indexOf("BEGIN:VEVENT") > 0);
 }
 
 console.log("\n" + pass + " passed, " + fail + " failed");

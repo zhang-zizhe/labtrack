@@ -493,7 +493,7 @@ function sendDailyDigest() {
 
   // ── Today's activity: count by type only (no listing individual events) ──
   if (queuedRows.length > 0) {
-    var counts = {};
+    var counts = dict_();
     queuedRows.forEach(function(r) {
       var emoji = String(r.emoji).trim();
       counts[emoji] = (counts[emoji] || 0) + 1;
@@ -643,9 +643,9 @@ function syncItemStatuses() {
   // A booking with no itemId used to be filed under the item *name*, and the sweep
   // then handed it to every row with that name — but split units share a name, so
   // one legacy loan of one arm took all three units off the shelf.
-  const byName = {};
+  const byName = dict_();
   items.forEach(function (i) { if (byName[i.name] === undefined) byName[i.name] = i.id; });
-  const live = {};            // item id -> [names holding it right now]
+  const live = dict_();       // item id -> [names holding it right now]
   readTable("Checkouts").forEach(function (c) {
     if (c.status !== "Active" || !bookingHoldsItem_(c)) return;
     const id = c.itemId ? String(c.itemId) : byName[c.item];
@@ -1286,6 +1286,16 @@ function freshId_(table) {
   throw new Error("Could not mint an unused id for " + table);
 }
 
+// A map whose keys come from data needs no prototype, and having one is a hazard
+// rather than a convenience: `{}["constructor"]` is a function, and a function is
+// truthy. Every lookup below is keyed by something a person typed — an item id, an
+// item name, a subscription token — so every one of them gets a bare dictionary.
+function dict_(src) {
+  var d = Object.create(null);
+  if (src) Object.keys(src).forEach(function (k) { d[k] = src[k]; });
+  return d;
+}
+
 function idsMatch(sheetVal, targetId) {
   var a = String(sheetVal).trim();
   var b = String(targetId).trim();
@@ -1410,52 +1420,62 @@ function icsEvent_(c, item, stamp) {
   if (c.notes) desc.push("Notes: " + c.notes);
   desc.push("Booked in LabTrack. This calendar is read-only \u2014 change it in the app.");
 
-  var lines = [];
-  lines.push("BEGIN:VEVENT");
-  // Stable, so a client replaces the event it already has rather than adding a
-  // second copy every time the feed is fetched.
-  lines.push("UID:labtrack-" + icsEsc_(c.id) + "@alliance-ai-lab");
-  lines.push("DTSTAMP:" + stamp);
+  // Everything after the times is identical for every occurrence.
+  var tail = ["SUMMARY:" + icsEsc_(summary), "DESCRIPTION:" + icsEsc_(desc.join("\n"))];
+  if (item && item.loc) tail.push("LOCATION:" + icsEsc_(item.loc));
+  // What these two words are for: a request nobody has approved is tentative, and
+  // somebody else's booking must not mark the reader busy in their own free/busy.
+  tail.push("STATUS:" + (pending ? "TENTATIVE" : "CONFIRMED"));
+  tail.push("TRANSP:TRANSPARENT");
+  tail.push("END:VEVENT");
+
+  // UIDs are stable, so a client replaces the event it already holds rather than
+  // adding a second copy on every fetch.
+  var block = function (uid, when) {
+    return ["BEGIN:VEVENT", "UID:labtrack-" + icsEsc_(uid) + "@alliance-ai-lab", "DTSTAMP:" + stamp]
+      .concat(when, tail).map(icsFold_).join("\r\n");
+  };
 
   var hasWindow = String(c.fromTime || "") !== "" && String(c.toTime || "") !== "";
   if (hasWindow) {
+    // Each day is written out on its own rather than as one event with
+    // RRULE:FREQ=DAILY. A recurrence anchored to a UTC DTSTART repeats every 24
+    // absolute hours, so from the second Sunday in March the whole series slides an
+    // hour: a 09:00-17:00 booking starts showing as 08:00-16:00 for the rest of its
+    // run. Keeping wall-clock time across a change is exactly what TZID plus a
+    // VTIMEZONE block is for, and a hand-written VTIMEZONE means hard-coding the US
+    // daylight-saving rules into this file and hoping Congress leaves them alone.
+    // Computing each occurrence from its own local date and converting that instant
+    // to UTC gets the platform's tz database to answer instead. A hold is capped at
+    // MAX_HOLD_DAYS, so this is at most ninety events.
     var fm = minutes_(c.fromTime), tm = minutes_(c.toTime);
     var d0 = new Date(startMs);
-    var s0 = new Date(d0.getFullYear(), d0.getMonth(), d0.getDate(), Math.floor(fm / 60), fm % 60);
-    var e0 = new Date(d0.getFullYear(), d0.getMonth(), d0.getDate(), Math.floor(tm / 60), tm % 60);
-    lines.push("DTSTART:" + icsUtc_(s0.getTime()));
-    lines.push("DTEND:" + icsUtc_(e0.getTime()));
     var n = icsDaySpan_(startMs, endMs);
-    // COUNT rather than UNTIL: UNTIL has to be given in UTC while DTSTART is local,
-    // and clients disagree about the off-by-one at the boundary. A count cannot be
-    // misread.
-    if (n > 1) lines.push("RRULE:FREQ=DAILY;COUNT=" + n);
-  } else if (icsDateOnly_(c.out) && icsDateOnly_(c.ret)) {
+    var out = [];
+    for (var k = 0; k < n; k++) {
+      var day = new Date(d0.getFullYear(), d0.getMonth(), d0.getDate() + k);
+      var s0 = new Date(day.getFullYear(), day.getMonth(), day.getDate(), Math.floor(fm / 60), fm % 60);
+      var e0 = new Date(day.getFullYear(), day.getMonth(), day.getDate(), Math.floor(tm / 60), tm % 60);
+      out.push(block(c.id + "-" + (k + 1), ["DTSTART:" + icsUtc_(s0.getTime()), "DTEND:" + icsUtc_(e0.getTime())]));
+    }
+    return out.join("\r\n");
+  }
+
+  if (icsDateOnly_(c.out) && icsDateOnly_(c.ret)) {
     // DTEND is exclusive for an all-day event: a booking through the 3rd ends on
     // the 4th, or the calendar draws it one day short.
     var endPlus = new Date(endMs); endPlus.setDate(endPlus.getDate() + 1);
-    lines.push("DTSTART;VALUE=DATE:" + icsDate_(startMs));
-    lines.push("DTEND;VALUE=DATE:" + icsDate_(endPlus.getTime()));
-  } else {
-    lines.push("DTSTART:" + icsUtc_(startMs));
-    lines.push("DTEND:" + icsUtc_(endMs));
+    return block(c.id, ["DTSTART;VALUE=DATE:" + icsDate_(startMs),
+                        "DTEND;VALUE=DATE:" + icsDate_(endPlus.getTime())]);
   }
 
-  lines.push("SUMMARY:" + icsEsc_(summary));
-  lines.push("DESCRIPTION:" + icsEsc_(desc.join("\n")));
-  if (item && item.loc) lines.push("LOCATION:" + icsEsc_(item.loc));
-  // What these two words are for: a request nobody has approved is tentative, and
-  // somebody else's booking must not mark the reader busy in their own free/busy.
-  lines.push("STATUS:" + (pending ? "TENTATIVE" : "CONFIRMED"));
-  lines.push("TRANSP:TRANSPARENT");
-  lines.push("END:VEVENT");
-  return lines.map(icsFold_).join("\r\n");
+  return block(c.id, ["DTSTART:" + icsUtc_(startMs), "DTEND:" + icsUtc_(endMs)]);
 }
 
 // Active and pending only. A returned booking is a finished fact, and the Usage tab
 // is where facts live; a calendar answers what is claimed.
 function buildIcs_() {
-  var byId = {};
+  var byId = dict_();
   readTable("Items").forEach(function (i) { byId[String(i.id)] = i; });
   var stamp = icsUtc_(new Date().getTime());
 
@@ -1507,15 +1527,24 @@ function icsResponse_(body) {
 // getIcsUrl.
 function icsTokens_() {
   var raw = readSettings()[ICS_TOKENS_KEY_];
-  if (!raw) return {};
-  try { var m = JSON.parse(raw); return (m && typeof m === "object" && !Array.isArray(m)) ? m : {}; }
-  catch (e) { return {}; }
+  if (!raw) return dict_();
+  try { var m = JSON.parse(raw); return dict_((m && typeof m === "object" && !Array.isArray(m)) ? m : null); }
+  catch (e) { return dict_(); }
 }
 
+// Is this string shaped like something icsMintToken_ produced? Cheap, and it means
+// the lookup below can never be handed a word.
+function icsTokenShape_(v) {
+  return /^[0-9a-f]{32,128}$/.test(String(v || ""));
+}
+
+// Math.random() is not a source of secrets. V8 seeds xorshift128+ per context, and
+// its internal state is recoverable from a handful of outputs — so any member, who
+// holds one token legitimately, is a short step from predicting everyone else's.
+// Utilities.getUuid() is java.util.UUID.randomUUID(), which draws on SecureRandom.
+// Two of them, dashes removed, is 256 bits from a CSPRNG.
 function icsMintToken_() {
-  var hex = "";
-  while (hex.length < 40) hex += Math.floor(Math.random() * 0x100000000).toString(16);
-  return hex.slice(0, 40);          // 160 bits
+  return (Utilities.getUuid() + Utilities.getUuid()).replace(/-/g, "").toLowerCase();
 }
 
 // Returns this person's subscription address, minting one the first time. Under the
@@ -1528,7 +1557,7 @@ function icsUrlFor_(email, rotate) {
   try {
     var who = String(email || "").trim().toLowerCase();
     if (!who) return "";
-    var map = icsTokens_(), mine = "";
+    var map = dict_(icsTokens_()), mine = "";
     Object.keys(map).forEach(function (t) {
       if (String(map[t]).toLowerCase() === who) { if (rotate) delete map[t]; else mine = t; }
     });
@@ -1553,8 +1582,24 @@ function doGet(e) {
     // for what the URL being the credential costs.
     const ics = (e && e.parameter && e.parameter.ics) || "";
     if (ics) {
-      const owner = icsTokens_()[ics];
-      if (!owner) return icsResponse_(icsNotice_("LabTrack: this calendar link is no longer valid"));
+      // Three checks, and the first two exist because the obvious one line was a
+      // hole. `icsTokens_()[ics]` walked the prototype chain, so ?ics=constructor
+      // returned the Object constructor — truthy — and served the entire lab's
+      // calendar to anyone who typed an eleven-letter English word. It did so on a
+      // spreadsheet where nobody had ever subscribed, because {} has a prototype
+      // too, which also made "clear the ics_tokens row to revoke everyone" a no-op.
+      //
+      // The shape test rejects any word. The own-property test is what actually
+      // decides. dict_() removes the prototype so there is nothing left to walk.
+      const icsMap = icsTokens_();
+      const owner = (icsTokenShape_(ics) && Object.prototype.hasOwnProperty.call(icsMap, ics))
+        ? String(icsMap[ics] || "") : "";
+      // And membership is rechecked on every fetch. A token is minted once and
+      // fetched for years; taking somebody off the roster has to end their access
+      // too, or offboarding quietly does not.
+      if (!owner || !isMember(owner)) {
+        return icsResponse_(icsNotice_("LabTrack: this calendar link is no longer valid"));
+      }
       return icsResponse_(buildIcs_());
     }
 
@@ -2493,16 +2538,23 @@ function smokeTest() {
     // The address is a key anyone can hold, so this is the line that matters most.
     ok("no email address anywhere in the feed", ics.indexOf("@jh.edu") < 0 && ics.indexOf("smoke@") < 0, null);
 
-    var smokeEv = ics.split("BEGIN:VEVENT").filter(function (b) { return b.indexOf(SMOKE_ + "-CO-1@") >= 0; })[0] || "";
-    ok("the smoke booking is in the feed", !!smokeEv, null);
-    if (smokeEv) {
-      // 09:00-17:00 on 1-3 September is three blocks, and 09:00 in New York is
-      // 13:00Z while daylight time is in force.
-      ok("a daily window recurs, not spans", /RRULE:FREQ=DAILY;COUNT=3/.test(smokeEv), smokeEv.match(/RRULE:[^\r]*/));
-      ok("local 09:00 is written as 13:00Z", /DTSTART:20260901T130000Z/.test(smokeEv), smokeEv.match(/DTSTART:[^\r]*/));
-      ok("and 17:00 as 21:00Z",             /DTEND:20260901T210000Z/.test(smokeEv), smokeEv.match(/DTEND:[^\r]*/));
-      ok("somebody else's booking is transparent", smokeEv.indexOf("TRANSP:TRANSPARENT") > 0, null);
-    }
+    var blocks = ics.split("BEGIN:VEVENT");
+    var occ = function (n) {
+      return blocks.filter(function (b) { return b.indexOf(SMOKE_ + "-CO-1-" + n + "@") >= 0; })[0] || "";
+    };
+    var mine = blocks.filter(function (b) { return b.indexOf(SMOKE_ + "-CO-1-") >= 0; }).length;
+    // 09:00-17:00 on 1-3 September is three separate blocks, and 09:00 in New York
+    // is 13:00Z while daylight time is in force. This is the only place the real
+    // Utilities.formatDate and the real project timezone do that conversion.
+    ok("the booking becomes one block per day", mine === 3, mine);
+    ok("local 09:00 is written as 13:00Z", /DTSTART:20260901T130000Z/.test(occ(1)), occ(1).match(/DTSTART:[^\r]*/));
+    ok("and 17:00 as 21:00Z",             /DTEND:20260901T210000Z/.test(occ(1)), occ(1).match(/DTEND:[^\r]*/));
+    ok("the third day keeps the same hours", /DTSTART:20260903T130000Z/.test(occ(3)), occ(3).match(/DTSTART:[^\r]*/));
+    ok("nothing leans on a recurrence rule", ics.indexOf("RRULE") < 0, null);
+    ok("somebody else's booking is transparent", occ(1).indexOf("TRANSP:TRANSPARENT") > 0, null);
+    // The lookup that was a hole: a word must not open the feed.
+    ok("a prototype key is not a token",
+       !icsTokenShape_("constructor") && !Object.prototype.hasOwnProperty.call(icsTokens_(), "constructor"), null);
 
     out.push("— readTable sees what findRow sees —");
     var fromTable = readTable("Items").filter(function (r) { return r.id === SMOKE_ + "-0012"; })[0];

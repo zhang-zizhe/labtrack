@@ -129,6 +129,14 @@ function build() {
     // the whole file, so "local" here means what it means in Apps Script.
     Utilities: {
       base64DecodeWebSafe: s => Buffer.from(String(s), "base64"),
+      // java.util.UUID.randomUUID() in Apps Script. A counter here, because a test
+      // that cannot predict the token cannot assert on it — the property under test
+      // is the shape and the uniqueness, not the entropy.
+      getUuid: (() => { let n = 0; return () => {
+        const h = (++n).toString(16).padStart(32, "0");
+        return `${h.slice(0,8)}-${h.slice(8,12)}-${h.slice(12,16)}-${h.slice(16,20)}-${h.slice(20)}`;
+      }; })(),
+
       formatDate: (d, tz, pattern) => {
         const p = n => String(n).padStart(2, "0");
         const utc = tz === "UTC";
