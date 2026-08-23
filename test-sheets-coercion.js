@@ -322,6 +322,38 @@ console.log("\ntext a spreadsheet would rather was a number, a date or a price")
   check("a price range is still a price range", rows("Orders").find(x => x.id === "o2").price === "10-15");
 }
 
+console.log("\nthe calendar feed, on a sheet that parses what you write");
+{
+  const { post, ctx, rows } = build();
+  post("a", "addItem", { item: { id:"arm", name:"Arm", cat:"Robots & Motors", qty:1, unit:"units",
+    loc:"H306", minQty:0, img:"", desc:"", status:"Available", usedBy:[], serial:"",
+    displayId:"", shared:true, consumable:false } });
+  const book = (id, out, ret, from, to) => post("a", "addCheckout", { checkout:{ id, itemId:"arm",
+    item:"Arm", user:"Ana", out, ret, status:"Active", checkedOutByEmail:"a@jh.edu",
+    groupEmails:"", qty:1, fromTime:from||"", toTime:to||"", notes:"" } });
+
+  // The bug this pins: "2026-08-28" is a DATE to Sheets, which stores it as one, and
+  // normalizeRow_ renders every Date as "YYYY-MM-DD HH:MM". So a date-only booking
+  // comes back carrying "00:00" and the all-day branch never ran in production. It
+  // passed in the plain stub, which stores strings exactly as handed — which is why
+  // an assertion for it belongs in this file and nowhere else.
+  book("d1", "2026-08-28", "2026-08-29");
+  const stored = rows("Checkouts").find(c => c.id === "d1");
+  check("a date-only booking reads back with a midnight time", stored.out === "2026-08-28 00:00");
+  const feed = ctx.buildIcs_();
+  const ev = feed.split("BEGIN:VEVENT").find(b => b.indexOf("labtrack-d1@") >= 0) || "";
+  check("and still becomes an all-day band", /DTSTART;VALUE=DATE:20260828/.test(ev));
+  check("covering its last day", /DTEND;VALUE=DATE:20260830/.test(ev));
+  check("not a midnight-to-midnight block", ev.indexOf("DTSTART:2026") < 0);
+
+  // A booking with real times must NOT be swept into the all-day branch. Clear of
+  // d1's dates, because an active booking owns its slot and the conflict rule would
+  // refuse this one — correctly, and for a reason that has nothing to do with here.
+  check("a timed booking clear of it is accepted", book("t1", "2026-09-02 13:00", "2026-09-03 10:00").ok === true);
+  const evT = ctx.buildIcs_().split("BEGIN:VEVENT").find(b => b.indexOf("labtrack-t1@") >= 0) || "";
+  check("a booking with times stays a timed event", /DTSTART:20260902T170000Z/.test(evT) && evT.indexOf("VALUE=DATE") < 0);
+}
+
 // The smoke test is the one thing that runs against the real spreadsheet, where
 // nobody is watching it for regressions. Run it here too, against the model, so a
 // typo in it surfaces at the desk rather than three months later in the editor.

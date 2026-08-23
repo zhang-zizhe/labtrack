@@ -40,6 +40,20 @@ const SLACK_WEBHOOK_URL = "YOUR_SLACK_WEBHOOK_URL_HERE";
 // subscribes. It is the only place the lab is named on the backend.
 const ICS_CAL_NAME = "Alliance AI Lab — Equipment";
 
+// The deployed web app URL, ending /exec. Paste it here after deploying — the same
+// value that goes into LAB_CONFIG.apps_script_url in index.html.
+//
+// Needed because ScriptApp.getService().getUrl() answers with the /dev address when
+// it is called from the editor, and /dev is not a thing a calendar can subscribe to:
+// it requires the owner's own browser session, so Google's fetcher gets a sign-in
+// page instead of a feed and the calendar silently shows nothing. The two URLs carry
+// different deployment ids, so /dev cannot be rewritten into /exec either.
+//
+// Left empty, subscription addresses still work when they are minted through the app
+// itself (getUrl() is correct inside a real web app request); only previewFeed() from
+// the editor gets it wrong.
+const WEB_APP_URL = "";
+
 // ─── DEV ESCAPE HATCH ────────────────────────────────────────────────────────
 // Set to a random string to accept "dev:<key>" as a token and skip Entra
 // verification entirely, so the app can be exercised end-to-end before admin
@@ -1380,8 +1394,17 @@ function icsDate_(ms) {
   return Utilities.formatDate(new Date(ms), Session.getScriptTimeZone(), "yyyyMMdd");
 }
 
+// Midnight counts as "no time given", because by the time a booking comes back off
+// the sheet the difference no longer exists. "2026-08-28" is a date to Sheets, which
+// stores it as a Date, and normalizeRow_ renders every Date as "YYYY-MM-DD HH:MM" —
+// so a date-only booking reads back as "2026-08-28 00:00" and the all-day branch was
+// unreachable in production. It matched in the plain test stub, which stores strings
+// as handed and never parsed anything, and that is the whole reason this went out.
+//
+// Treating 00:00 as date-only is not a guess about intent so much as the only choice
+// left: the information that distinguishes the two was destroyed on the way in.
 function icsDateOnly_(v) {
-  return /^\d{4}-\d{2}-\d{2}$/.test(String(v || "").trim());
+  return /^\d{4}-\d{2}-\d{2}( 00:00)?$/.test(String(v || "").trim());
 }
 
 // Calendar days from one date to another, inclusive. Deliberately not a division
@@ -1571,8 +1594,8 @@ function icsUrlFor_(email, rotate) {
       map[mine] = who;
       writeSetting(ICS_TOKENS_KEY_, JSON.stringify(map));
     }
-    var base = "";
-    try { base = ScriptApp.getService().getUrl() || ""; } catch (e) { base = ""; }
+    var base = WEB_APP_URL;
+    if (!base) { try { base = ScriptApp.getService().getUrl() || ""; } catch (e) { base = ""; } }
     return base ? base + "?ics=" + mine : "?ics=" + mine;
   } finally {
     lock.releaseLock();
@@ -2451,15 +2474,21 @@ function previewFeed(email) {
 
   var url = icsUrlFor_(who, false);
   var token = String(url).split("ics=")[1] || "";
+  var devWarning = url.indexOf("/exec?") < 0
+    ? ["", "!!  That address is NOT usable. getUrl() handed back the /dev URL, which",
+       "!!  needs your own browser session — Google's fetcher gets a sign-in page and",
+       "!!  the calendar shows nothing. /dev and /exec have different deployment ids,",
+       "!!  so it cannot be rewritten. Use your real web app URL instead:",
+       "",
+       "      <your /exec URL>?ics=" + token,
+       "",
+       "!!  Set WEB_APP_URL at the top of this file to stop this happening again.", ""]
+    : [];
   var msg = [
     "Subscription address for " + who + ":",
     "",
     "  " + url,
-    "",
-    "If that URL does not end in /exec, build it by hand — getUrl() sometimes",
-    "hands back the /dev address, which only works while you are signed in:",
-    "",
-    "  <your web app /exec URL>?ics=" + token,
+  ].concat(devWarning, [
     "",
     "Three bookings were added so there is something to see:",
     "  " + day(1) + " to " + day(3) + "  09:00-17:00 daily  -> three separate blocks",
@@ -2468,7 +2497,7 @@ function previewFeed(email) {
     "",
     "Paste it into Google Calendar (Other calendars -> + -> From URL).",
     "When you are done: run previewFeedClear().",
-  ].join("\n");
+  ]).join("\n");
   Logger.log(msg);
   return msg;
 }
@@ -2595,6 +2624,18 @@ function smokeTest() {
       ok("the date column is still a date",       o.date === "2026-08-20", o.date);
       ok("qty is still a number",                 o.qty === 2, o.qty);
     }
+
+    // Dates with no times, checked here because the round trip is what breaks it:
+    // Sheets stores "2026-09-10" as a date and it reads back as "2026-09-10 00:00".
+    appendRow("Checkouts", {
+      id: SMOKE_ + "-CO-2", itemId: SMOKE_ + "-0012", item: "All Day", user: "Smoke Tester",
+      out: "2026-09-10", ret: "2026-09-11", status: "Active",
+      checkedOutByEmail: "smoke@jh.edu", groupEmails: "", qty: 1, fromTime: "", toTime: "", notes: "",
+    });
+    var allDay = buildIcs_().split("BEGIN:VEVENT")
+      .filter(function (b) { return b.indexOf(SMOKE_ + "-CO-2@") >= 0; })[0] || "";
+    ok("a date-only booking is an all-day band", /DTSTART;VALUE=DATE:20260910/.test(allDay), allDay.match(/DTSTART[^\r]*/));
+    ok("and covers its last day",                /DTEND;VALUE=DATE:20260912/.test(allDay), allDay.match(/DTEND[^\r]*/));
 
     out.push("— settings are read raw, so they have to be written as text —");
     writeSetting(SMOKE_ + "-ts", "2026-08-20 5:42 PM");

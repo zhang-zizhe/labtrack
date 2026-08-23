@@ -412,7 +412,7 @@ const DEV_NO_AUTH_EMAIL = "zzhan409@jh.edu";   // identity the backend assumes
 8. Copy the Web app URL into `LAB_CONFIG.apps_script_url` in `index.html`
 9. **Run → `smokeTest`.** Checks the storage layer against the real spreadsheet —
    see [Tests](#tests) for why that is a different question from the other suites.
-   Expect `✅ smoke test: 56 passed`.
+   Expect `✅ smoke test: 58 passed`.
 
 > **After a code update, redeploy via Deploy → Manage deployments → ✏️ → Version:
 > New version.** *Not* "New deployment" — that mints a **different** `/exec` URL and
@@ -506,6 +506,19 @@ What holds the damage down:
 - **Active and pending bookings only.** Returned ones leave the calendar — a
   calendar answers what is *claimed*, and the Usage tab is where the record lives
 
+### Trying it before anyone can sign in
+
+`previewFeed()` from the Apps Script editor mints your address and writes three
+demo bookings covering the three shapes; `previewFeedClear()` removes them.
+
+**Set `WEB_APP_URL` at the top of `google-apps-script.js` to your `/exec` URL
+first.** Otherwise `ScriptApp.getService().getUrl()` answers with the `/dev`
+address, which is not something a calendar can subscribe to — it needs the owner's
+own browser session, so Google's fetcher receives a sign-in page and the calendar
+silently shows nothing at all. The two URLs carry **different deployment ids**, so
+`/dev` cannot be rewritten into `/exec`. Addresses minted through the app itself are
+unaffected; `getUrl()` is correct inside a real web app request.
+
 To revoke everyone at once, clear the `ics_tokens` row in the Settings tab. Every
 address dies and each person mints a new one next time they open Subscribe.
 
@@ -536,7 +549,12 @@ address dies and each person mints a new one next time they open Subscribe.
   daylight-saving rules into this file. Writing each day out instead lets the
   platform's tz database answer. A hold is capped at `MAX_HOLD_DAYS`, so it is at
   most ninety events.
-- A booking with **dates and no times** becomes an all-day band.
+- A booking with **dates and no times** becomes an all-day band. Note that "no
+  times" means `00:00` by the time it comes back: Sheets stores `2026-08-28` as a
+  date and `normalizeRow_` renders every date as `YYYY-MM-DD HH:MM`, so the
+  distinction is destroyed on the way in and midnight has to count as date-only.
+  The branch was unreachable in production until that was noticed, because it was
+  only ever tested against the stub that stores strings exactly as handed.
 - A **pending** request is marked ⏳ and carries `STATUS:TENTATIVE`, so a calendar
   draws it as provisional. It is not a promise and should not look like one.
 - Everything is `TRANSP:TRANSPARENT`, so somebody else's booking does not make the
@@ -994,9 +1012,9 @@ changed**; these are only the record of *why*.
 
 ```bash
 node --check google-apps-script.js       # backend syntax
-node test-sheet-setup.js                 # 308 assertions: setup, labels, per-unit
+node test-sheet-setup.js                 # 309 assertions: setup, labels, per-unit
                                          # targeting, order approval, booking rules
-node test-sheets-coercion.js             # 37 assertions: the ones that only fail live
+node test-sheets-coercion.js             # 43 assertions: the ones that only fail live
 node test-storage-layer.js > after.json  # behaviour snapshot — see below
 ```
 
