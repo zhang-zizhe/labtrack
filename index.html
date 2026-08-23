@@ -2658,7 +2658,7 @@ class ErrorBoundary extends React.Component {
 // feed, it does not expire, and it keeps working after somebody leaves. The modal
 // says so rather than burying it, because the one thing people do with a link like
 // this is paste it somewhere convenient.
-const SubscribeModal = ({url, onClose, onRotate, busy}) => {
+const SubscribeModal = ({url, onClose, onRotate, busy, preview}) => {
   const [copied, setCopied] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const copy = async () => {
@@ -2681,13 +2681,28 @@ const SubscribeModal = ({url, onClose, onRotate, busy}) => {
         Every booking in the lab, in your own calendar. It updates by itself and is
         read-only — nothing you do there changes anything here.
       </p>
-      <Fld label="Your personal address">
-        <div style={{display:"flex",gap:8}}>
-          <Inp id="ics-url" readOnly value={url} onFocus={e=>e.target.select()}
-               style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:12.5}}/>
-          <Btn onClick={copy} style={{whiteSpace:"nowrap"}}>{copied ? "Copied" : "Copy"}</Btn>
-        </div>
-      </Fld>
+      {preview ? (
+        // Preview has no backend to mint an address with, and handing out a made-up
+        // one would be worse than saying so — it would be pasted into a calendar
+        // that then stays empty for ever. The rest of the modal is shown anyway,
+        // because the point of preview is to see what the app does.
+        <Fld label="Your personal address">
+          <div style={{background:"var(--bg3)",border:"1px dashed var(--border)",borderRadius:8,
+                       padding:"12px 14px",fontSize:13.5,lineHeight:1.6,color:"var(--sub)"}}>
+            Signed in, this is where your own address appears. Preview keeps everything
+            in this browser and never reaches the lab, so there is nothing to hand out —
+            the address has to be issued by the lab's system, to you.
+          </div>
+        </Fld>
+      ) : (
+        <Fld label="Your personal address">
+          <div style={{display:"flex",gap:8}}>
+            <Inp id="ics-url" readOnly value={url} onFocus={e=>e.target.select()}
+                 style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:12.5}}/>
+            <Btn onClick={copy} style={{whiteSpace:"nowrap"}}>{copied ? "Copied" : "Copy"}</Btn>
+          </div>
+        </Fld>
+      )}
 
       <div style={{background:"var(--bg3)",border:"1px solid var(--border)",borderRadius:10,padding:"12px 14px",marginTop:14}}>
         <div style={{fontSize:13.5,lineHeight:1.6,color:"var(--sub)"}}>
@@ -2708,7 +2723,7 @@ const SubscribeModal = ({url, onClose, onRotate, busy}) => {
       </p>
 
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:12,marginTop:20,paddingTop:16,borderTop:"1px solid var(--border)"}}>
-        {confirming ? (
+        {preview ? <span/> : confirming ? (
           <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
             <span style={{fontSize:13,color:"var(--red)"}}>The address above stops working immediately.</span>
             <Btn sm v="danger" onClick={()=>{setConfirming(false);onRotate();}} disabled={busy}>Replace it</Btn>
@@ -3076,8 +3091,11 @@ function LabInventory(){
   // handlers
   // The address is minted on first use, so this is a request rather than a lookup.
   const openSubscribe = async (rotate) => {
+    // Preview opens the modal to explain itself rather than firing an error toast.
+    // The feature works; it is this session that has no lab behind it, and a red
+    // error reads as broken to the one audience preview exists for.
     if (!APP_CONFIG.apps_script_url || user?.token === "local") {
-      addToast("error", "Subscribing needs the live lab — this is the offline preview");
+      setIcsUrl(""); setModal("subscribe");
       return;
     }
     setIcsBusy(true);
@@ -4335,6 +4353,7 @@ function LabInventory(){
 
       {/* MODALS */}
       {modal==="subscribe" && <SubscribeModal url={icsUrl} busy={icsBusy}
+        preview={!APP_CONFIG.apps_script_url || user?.token === "local"}
         onClose={()=>setModal(null)} onRotate={()=>openSubscribe(true)}/>}
       {modal==="delivery" && <DeliveryModal onClose={()=>setModal(null)} onAdd={handleDelivery} userName={user?.name||""}/>}
       {useItem && <UseModal item={useItem} onClose={()=>setUseItem(null)} onUse={handleUseConsumable}/>}
