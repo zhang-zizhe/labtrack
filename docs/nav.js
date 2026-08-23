@@ -55,12 +55,12 @@
   var isAdmin = false;
   try { isAdmin = localStorage.getItem("labtrack_role") === "admin"; } catch (e) {}
 
-  var here = (location.pathname.split("/").pop() || "index.html");
-  var hash = location.hash;
-
   var nav = document.querySelector("nav.site");
   if (!nav) return;
 
+  function render() {
+  var here = (location.pathname.split("/").pop() || "index.html");
+  var hash = location.hash;
   var html = "";
   TREE.forEach(function (group) {
     if (group.admin && !isAdmin) return;
@@ -77,6 +77,13 @@
     html += "</ul></div>";
   });
   nav.innerHTML = html;
+  }
+
+  render();
+  // Clicking a section moves the hash without reloading, so without this the mark
+  // stays where the page was opened — a highlight sitting somewhere you are not,
+  // which is worse than no highlight.
+  window.addEventListener("hashchange", render);
 
   // The right-hand rail is this page's own headings, built from the page rather
   // than listed by hand, so it cannot fall behind the writing.

@@ -45,14 +45,21 @@ code,kbd,.mono{font-family:"IBM Plex Mono",ui-monospace,Menlo,monospace}
   border-bottom:1px solid var(--edge); padding:12px 24px;
   display:flex; align-items:center; gap:14px; flex-wrap:wrap;
 }
-.top .brand{display:flex; align-items:center; border:none; padding:0}
-.top .brand img{display:block; height:21px; width:auto}
-.top .mark{font-family:Roboto,sans-serif; font-weight:900; letter-spacing:-.02em; font-size:17px; color:var(--ink)}
-.top .which{
-  font-family:"IBM Plex Mono",monospace; font-size:11px; letter-spacing:.1em; text-transform:uppercase;
-  color:var(--accent); background:var(--accent-wash); border:1px solid var(--edge-hi);
-  border-radius:5px; padding:3px 8px;
+/* The app's own header, so the two read as one product. */
+.top .brand{display:flex; align-items:center; gap:11px; border:none; padding:0; text-decoration:none; color:inherit}
+.top .logo{
+  width:38px; height:38px; border-radius:10px; background:#ffffff; border:1px solid var(--edge);
+  display:flex; align-items:center; justify-content:center; flex-shrink:0; overflow:hidden;
 }
+.top .logo img{width:30px; height:30px; object-fit:contain; display:block}
+.top .chip{
+  font-family:"IBM Plex Mono",monospace; font-size:10px; letter-spacing:.1em; text-transform:uppercase;
+  color:var(--accent); background:var(--accent-wash); border:1px solid var(--edge-hi);
+  border-radius:5px; padding:3px 7px; white-space:nowrap;
+}
+.top .titles{display:flex; flex-direction:column; line-height:1.25}
+.top .t1{font-family:Roboto,sans-serif; font-weight:900; font-size:16px; letter-spacing:-.02em; white-space:nowrap; color:var(--ink)}
+.top .t2{color:var(--ink-dim); font-size:10px; font-family:"IBM Plex Mono",monospace}
 .top .spacer{flex:1}
 .top a{font-size:14px}
 
@@ -76,9 +83,11 @@ nav.site a{
   text-decoration:none; border:none; border-left:2px solid transparent;
 }
 nav.site a:hover{background:var(--sunk); color:var(--ink)}
+/* One way of saying "you are here", at both levels. It used to be a background at
+   the top level and a 2px bar at the section level, and two marks for one idea read
+   as a stray line rather than as a position. */
 nav.site a.here{background:var(--accent-wash); color:var(--accent); font-weight:500}
 nav.site .sub a{font-size:13.5px; padding-left:20px; color:var(--ink-dim)}
-nav.site .sub a.here{border-left-color:var(--accent); background:transparent}
 
 /* right rail — this page's headings */
 .rail{position:sticky; top:66px; align-self:start; max-height:calc(100vh - 90px); overflow-y:auto; padding:34px 0 40px}
