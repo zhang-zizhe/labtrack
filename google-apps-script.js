@@ -2411,6 +2411,77 @@ function smokePurge_() {
   return n;
 }
 
+// ─── TRY THE FEED BEFORE ANYBODY CAN SIGN IN ────────────────────────────────
+// Run from the editor. Mints your subscription address and writes three bookings
+// that cover the three shapes a calendar draws differently, so there is something
+// to look at. They use the same ZZSMOKE prefix as the smoke test, so
+// previewFeedClear() — or any smokeTest() run — removes them.
+//
+// This exists because one assumption cannot be checked from a laptop: whether
+// Google Calendar and Outlook actually accept a feed served by Apps Script, which
+// answers with a redirect to script.googleusercontent.com rather than the file.
+// Subscribing for real is the only way to find out.
+function previewFeed(email) {
+  var who = String(email || INITIAL_ADMINS[0] || "").trim().toLowerCase();
+  previewFeedClear();
+
+  var d = new Date();
+  var day = function (n) {
+    var x = new Date(d.getFullYear(), d.getMonth(), d.getDate() + n);
+    var p = function (v) { return String(v).padStart(2, "0"); };
+    return x.getFullYear() + "-" + p(x.getMonth() + 1) + "-" + p(x.getDate());
+  };
+
+  appendRow("Items", { id: SMOKE_ + "-I", name: "Demo Arm, 6-axis", cat: "Robots & Motors",
+    qty: 1, unit: "units", loc: "Hackerman 306", minQty: 0, img: "", desc: "", status: "Available",
+    usedBy: [], serial: "", displayId: SMOKE_ + "-D1", shared: true, consumable: false });
+
+  var base = { itemId: SMOKE_ + "-I", item: "Demo Arm, 6-axis", user: "Preview Booking",
+    status: "Active", checkedOutByEmail: who, groupEmails: "", qty: 1, notes: "" };
+  // 1 — a daily window: should draw as three separate 09:00-17:00 blocks
+  appendRow("Checkouts", Object.assign({}, base, { id: SMOKE_ + "-C1",
+    out: day(1) + " 09:00", ret: day(3) + " 17:00", fromTime: "09:00", toTime: "17:00" }));
+  // 2 — dates only: should draw as an all-day band across two days
+  appendRow("Checkouts", Object.assign({}, base, { id: SMOKE_ + "-C2",
+    out: day(5), ret: day(6), fromTime: "", toTime: "" }));
+  // 3 — pending, straight through: should draw tentative, marked awaiting approval
+  appendRow("Checkouts", Object.assign({}, base, { id: SMOKE_ + "-C3",
+    status: CHECKOUT_PENDING, out: day(8) + " 13:00", ret: day(9) + " 11:00",
+    fromTime: "", toTime: "" }));
+
+  var url = icsUrlFor_(who, false);
+  var token = String(url).split("ics=")[1] || "";
+  var msg = [
+    "Subscription address for " + who + ":",
+    "",
+    "  " + url,
+    "",
+    "If that URL does not end in /exec, build it by hand — getUrl() sometimes",
+    "hands back the /dev address, which only works while you are signed in:",
+    "",
+    "  <your web app /exec URL>?ics=" + token,
+    "",
+    "Three bookings were added so there is something to see:",
+    "  " + day(1) + " to " + day(3) + "  09:00-17:00 daily  -> three separate blocks",
+    "  " + day(5) + " to " + day(6) + "  no times           -> one all-day band",
+    "  " + day(8) + " to " + day(9) + "  pending            -> tentative, marked",
+    "",
+    "Paste it into Google Calendar (Other calendars -> + -> From URL).",
+    "When you are done: run previewFeedClear().",
+  ].join("\n");
+  Logger.log(msg);
+  return msg;
+}
+
+// Removes everything previewFeed() added. Leaves your subscription address alone —
+// rotate it in the app, or clear the ics_tokens row, if you want that gone too.
+function previewFeedClear() {
+  var n = smokePurge_();
+  var msg = "Removed " + n + " preview row(s).";
+  Logger.log(msg);
+  return msg;
+}
+
 function smokeTest() {
   var out = [], pass = 0, fail = 0;
   function ok(label, cond, got) {
