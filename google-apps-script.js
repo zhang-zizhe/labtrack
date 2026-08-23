@@ -62,7 +62,7 @@ const WEB_APP_URL = "https://script.google.com/macros/s/AKfycbzBrg3dcycZZ7u2uX6P
 // pasting is manual, and stale code fails in whatever way the missing fix was
 // supposed to prevent — twice in one day, the only clue was that a log message had
 // different wording than expected. That was luck, not a check.
-const CODE_STAMP = "cbb8f48f2b8d862e";
+const CODE_STAMP = "b09309ef7e07d13e";
 const SOURCE_URL = "https://raw.githubusercontent.com/zhang-zizhe/labtrack/main/google-apps-script.js";
 
 // Where subscription addresses point, if that is not the web app itself. Set it to
@@ -2660,7 +2660,12 @@ function smokeTest() {
       if (!sheet) { ok("tab " + name + " exists", false, null); return; }
       var have = sheetHeaders_(sheet, name).map(String);
       var missing = TABLE_HEADERS[name].filter(function (h) { return have.indexOf(h) < 0; });
-      ok("tab " + name + " has every column", missing.length === 0, missing);
+      // Naming the fix, because the fix is one click and the message otherwise reads
+      // like a fault. A column arrives whenever the code gains a field, and reads and
+      // writes both go by the sheet's own header row — so until the column exists,
+      // anything written to it is dropped without complaint.
+      ok("tab " + name + " has every column", missing.length === 0,
+         missing.length ? missing.join(", ") + "  \u2014 run setupNewLab() to add" : missing);
     });
 
     out.push("— what Sheets does to an item on the way in —");
