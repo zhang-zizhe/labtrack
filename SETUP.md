@@ -52,6 +52,7 @@ The backend uses a Google Sheet with these tabs:
 
 | key | value |
 |-----|-------|
+| `ics_tokens` | `{"<40 hex chars>":"<jhed>@jh.edu"}` — one calendar-subscription address per person, minted on demand. **Admin-only**, and a leaked entry is a readable feed until it is deleted. See [Calendar subscriptions](#calendar-subscriptions) |
 | `categories` | `["Robots & Motors","Sensors & Vision","Compute & Electronics","Wiring & Networking","Tools & Hardware","Consumables & Supplies","Safety & Facility","Other"]` |
 | `admins` | `["jdoe12@jh.edu"]` — use the **sign-in name** (`<JHED>@jh.edu`), not the `@jhu.edu` mail alias. This is the single easiest way to lock somebody out: the token carries the UPN, so seeding the address people know a colleague by produces a successful Microsoft sign-in followed by "not authorized", which reads like the consent failing rather than a typo. Seeded from `INITIAL_ADMINS` with the student and the PI both in it. Compared case-insensitively. Must be valid JSON: `isAdmin` treats a value it cannot parse as "nobody is an admin", and only the Settings tab itself can then put you back. Saving it through the app is checked for exactly that, and refuses a list that leaves you out. |
 | `members` | `["jdoe12@jh.edu","asmith3@jh.edu"]` — if present and non-empty, only these accounts can sign in; all other JHU accounts are rejected. Omit the key (or leave it as `[]`) to allow anyone in the JHU tenant. **Anyone in `admins` is a member whether or not they are listed here** — otherwise filling this in and forgetting yourself would lock you out of your own lab, settings included. |
@@ -411,7 +412,7 @@ const DEV_NO_AUTH_EMAIL = "zzhan409@jh.edu";   // identity the backend assumes
 8. Copy the Web app URL into `LAB_CONFIG.apps_script_url` in `index.html`
 9. **Run → `smokeTest`.** Checks the storage layer against the real spreadsheet —
    see [Tests](#tests) for why that is a different question from the other suites.
-   Expect `✅ smoke test: 45 passed`.
+   Expect `✅ smoke test: 54 passed`.
 
 > **After a code update, redeploy via Deploy → Manage deployments → ✏️ → Version:
 > New version.** *Not* "New deployment" — that mints a **different** `/exec` URL and
@@ -463,6 +464,67 @@ One more, which is a policy question rather than a technical one: the Sheet hold
 lab members' names and `@jh.edu` sign-in addresses on a service the university does
 not administer. It is equipment records rather than research data, but it is worth
 knowing that is the question a compliance review would ask.
+
+## Calendar subscriptions
+
+Every member can subscribe to the lab's bookings from their own calendar —
+**Calendar tab → Subscribe**. Google Calendar, Outlook and Apple Calendar all take
+the same address. A subscribed calendar is read-only in all three, so nobody can
+edit those events, and nothing in the feed can write back into LabTrack.
+
+### The thing to understand before turning it on
+
+**This is the only path into the backend that does not verify a Microsoft token,
+and it cannot be otherwise.** A subscription is fetched by *Google's* or
+*Microsoft's* servers on their own schedule — no browser, no session, nobody
+present to sign in — and the subscribe dialog accepts a URL and nothing else. There
+is no field for a credential and no way to run an OAuth flow. So the URL *is* the
+credential.
+
+Three properties follow, and none of them can be engineered away:
+
+| | |
+|---|---|
+| It never expires | An ID token dies in an hour. This address works until somebody deletes it |
+| It survives the person | Losing a JHU account kills sign-in. It does not kill an address already minted |
+| Forwarding it grants access | Whoever holds the link can read the feed |
+
+What holds the damage down:
+
+- **160 bits of randomness.** Not guessable; the only way in is to be given it
+- **One per person.** Revoke one without disturbing anyone else — in the app,
+  Subscribe → *Replace this address*, which kills the old one the same second and
+  writes an `IcsUrlRotated` line to `AuditLog`
+- **No email addresses in the feed.** An item, a display name, dates, a location.
+  Names are the point of it; addresses are not, and a test asserts they never appear
+- **Active and pending bookings only.** Returned ones leave the calendar — a
+  calendar answers what is *claimed*, and the Usage tab is where the record lives
+
+To revoke everyone at once, clear the `ics_tokens` row in the Settings tab. Every
+address dies and each person mints a new one next time they open Subscribe.
+
+### What subscribers actually see
+
+- A booking with a **daily window** (9–5 across three days) becomes a *recurring*
+  event — three 9-to-5 blocks. Drawn as one 80-hour slab it would read as the item
+  being gone overnight, which is the opposite of what booking by the hour means.
+- A booking with **dates and no times** becomes an all-day band.
+- A **pending** request is marked ⏳ and carries `STATUS:TENTATIVE`, so a calendar
+  draws it as provisional. It is not a promise and should not look like one.
+- Everything is `TRANSP:TRANSPARENT`, so somebody else's booking does not make the
+  subscriber show as busy in their own free/busy.
+- Times go out in **UTC**, so every client renders them in the reader's own zone
+  without a hand-written `VTIMEZONE` block.
+
+### The catch to tell people about
+
+**A subscription is not a live view.** The calendar app decides how often to check,
+and Google in particular can take several hours. The feed asks for hourly refresh
+(`REFRESH-INTERVAL`), which Outlook and Apple partly respect and Google largely
+ignores.
+
+So it is good for *"is the arm claimed next Tuesday"* and useless for *"is the arm
+free right now"*. The app answers the second question; the modal says so.
 
 ### Slack Notification Modes
 
@@ -904,7 +966,7 @@ changed**; these are only the record of *why*.
 
 ```bash
 node --check google-apps-script.js       # backend syntax
-node test-sheet-setup.js                 # 253 assertions: setup, labels, per-unit
+node test-sheet-setup.js                 # 287 assertions: setup, labels, per-unit
                                          # targeting, order approval, booking rules
 node test-sheets-coercion.js             # 37 assertions: the ones that only fail live
 node test-storage-layer.js > after.json  # behaviour snapshot — see below

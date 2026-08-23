@@ -51,9 +51,29 @@ function load(ss) {
     LockService: { getScriptLock: () => ({ waitLock() {}, releaseLock() {} }) },
     UrlFetchApp: { fetch: () => ({}) },
     CacheService: { getScriptCache: () => ({ get: () => null, put() {} }) },
-    ContentService: { MimeType: { JSON: "json" }, createTextOutput: t => ({ __text: t, setMimeType() { return this; } }) },
-    Utilities: { base64DecodeWebSafe: s => Buffer.from(String(s), "base64"), formatDate: () => "x" },
+    ContentService: { MimeType: { JSON: "json", ICAL: "ical" }, createTextOutput: t => ({ __text: t, setMimeType(m) { this.__mime = m; return this; } }) },
+    // A real one, not a placeholder: the calendar feed is almost entirely date
+    // formatting, so a stub that returns "x" would assert nothing. Supports the two
+    // patterns the backend actually asks for. TZ is pinned to America/New_York for
+    // the whole file, so "local" here means what it means in Apps Script.
+    Utilities: {
+      base64DecodeWebSafe: s => Buffer.from(String(s), "base64"),
+      formatDate: (d, tz, pattern) => {
+        const p = n => String(n).padStart(2, "0");
+        const utc = tz === "UTC";
+        const Y = utc ? d.getUTCFullYear() : d.getFullYear();
+        const M = p((utc ? d.getUTCMonth() : d.getMonth()) + 1);
+        const D = p(utc ? d.getUTCDate() : d.getDate());
+        const h = p(utc ? d.getUTCHours() : d.getHours());
+        const m = p(utc ? d.getUTCMinutes() : d.getMinutes());
+        const s2 = p(utc ? d.getUTCSeconds() : d.getSeconds());
+        if (pattern === "yyyyMMdd") return `${Y}${M}${D}`;
+        if (pattern === "yyyyMMdd'T'HHmmss'Z'") return `${Y}${M}${D}T${h}${m}${s2}Z`;
+        throw new Error("test stub has no pattern: " + pattern);
+      },
+    },
     Session: { getScriptTimeZone: () => "America/New_York" },
+    ScriptApp: { getService: () => ({ getUrl: () => "https://script.google.com/macros/s/AKtest/exec" }) },
     DriveApp: {}, Logger: { log() {} }, console: { log() {}, error() {} },
     JSON, Math, String, Number, Boolean, Array, Object, RegExp, Error, Date: FrozenDate, parseInt, parseFloat, isNaN,
   };
@@ -1090,6 +1110,111 @@ console.log("settings come back as what was written");
   cE.writeSetting("note", "=IMPORTRANGE(\"key\",\"A1\")");
   check("a formula in a setting stays text",
         cE.readSettings().note === '=IMPORTRANGE("key","A1")');
+}
+
+console.log("a calendar subscription is a feed, and a feed is a parser's problem");
+{
+  const ssI = fresh();
+  const cI = load(ssI);
+  cI.setupNewLab();
+  cI.writeSetting("admins", JSON.stringify(["zzhan409@jh.edu"]));
+  const post = p => JSON.parse(cI.doPost({ postData:{ contents: JSON.stringify(Object.assign({token:"t"}, p)) } }).__text);
+  const asAdmin  = () => { cI.verifyToken = () => ({ email:"zzhan409@jh.edu", name:"Z", oid:"a" }); };
+  const asMember = () => { cI.verifyToken = () => ({ email:"ana@jh.edu", name:"Ana Lee", oid:"m" }); };
+  asAdmin();
+  const item = (id, name, loc) => post({ action:"addItem", item:{ id, name, cat:"Robots & Motors",
+    qty:1, unit:"units", loc, minQty:0, img:"", desc:"", status:"Available", usedBy:[], serial:"",
+    displayId:"", shared:true, consumable:false } });
+  item("arm", "UR5e Arm, 6-axis; long reach", "Hackerman 306");
+  item("scope", "Oscilloscope", "3-14");
+  const book = (id, itemId, out, ret, from, to) => post({ action:"addCheckout", checkout:{
+    id, itemId, item:"x", user:"Ana Lee", out, ret, status:"Active",
+    checkedOutByEmail:"ana@jh.edu", groupEmails:"bob@jh.edu", qty:1,
+    fromTime:from||"", toTime:to||"", notes:"" } });
+
+  book("w1", "arm",   "2026-08-18 09:00", "2026-08-20 17:00", "09:00", "17:00");  // daily window
+  book("t1", "scope", "2026-08-18 13:00", "2026-08-19 10:00");                    // straight through
+  book("d1", "arm",   "2026-08-24",       "2026-08-26");                          // dates only
+
+  const feed = cI.buildIcs_();
+  const line = re => (feed.split("\r\n").find(l => re.test(l)) || "");
+  const ev = id => feed.split("BEGIN:VEVENT").find(b => b.indexOf("labtrack-" + id + "@") >= 0) || "";
+
+  check("it is a calendar", feed.startsWith("BEGIN:VCALENDAR\r\n") && feed.trimEnd().endsWith("END:VCALENDAR"));
+  check("lines end CRLF, never bare LF", !/[^\r]\n/.test(feed));
+  check("no line exceeds 75 octets",
+        feed.split("\r\n").every(l => Buffer.byteLength(l, "utf8") <= 75));
+  check("it carries the lab's name", line(/^X-WR-CALNAME:/).indexOf("Alliance AI Lab") > 0);
+
+  // A comma or a semicolon in an item name ends the property value early, and the
+  // rest of the name is parsed as another property. Same shape as the Slack bug.
+  const summary = (ev("w1").split("\r\n").find(l => l.startsWith("SUMMARY:")) || "");
+  check("a comma in an item name is escaped", summary.indexOf("Arm\\,") > 0);
+  check("a semicolon in an item name is escaped", summary.indexOf("axis\\;") > 0);
+  check("the person is named", summary.indexOf("Ana Lee") > 0);
+
+  // 9-5 across three days is three blocks, not one 80-hour slab.
+  check("a daily window recurs rather than spanning", /RRULE:FREQ=DAILY;COUNT=3/.test(ev("w1")));
+  check("and starts at the window's start, in UTC", /DTSTART:20260818T130000Z/.test(ev("w1")));
+  check("and ends the same day", /DTEND:20260818T210000Z/.test(ev("w1")));
+
+  check("a booking with no window does not recur", ev("t1").indexOf("RRULE") < 0);
+  check("and runs straight through", /DTSTART:20260818T170000Z/.test(ev("t1")) && /DTEND:20260819T140000Z/.test(ev("t1")));
+
+  // DTEND is exclusive for an all-day event: through the 26th ends on the 27th.
+  check("dates without times become an all-day band", /DTSTART;VALUE=DATE:20260824/.test(ev("d1")));
+  check("and the band covers its last day", /DTEND;VALUE=DATE:20260827/.test(ev("d1")));
+
+  check("the item's location travels with it", ev("w1").indexOf("LOCATION:Hackerman 306") > 0);
+  check("a location Sheets would call a date is intact", ev("t1").indexOf("LOCATION:3-14") > 0);
+  check("somebody else's booking does not make you busy", (ev("w1").match(/TRANSP:TRANSPARENT/g)||[]).length === 1);
+
+  // The feed is a capability URL. Names are the point of it; addresses are not.
+  check("no email address appears anywhere in the feed", feed.indexOf("@jh.edu") < 0);
+
+  // Pending is not a promise, and a calendar should not draw it as one.
+  asMember();
+  post({ action:"addCheckout", checkout:{ id:"p1", itemId:"arm", item:"x", user:"Ana Lee",
+    out:"2026-09-01 09:00", ret:"2026-09-14 17:00", status:"Active",
+    checkedOutByEmail:"ana@jh.edu", groupEmails:"", qty:1, fromTime:"", toTime:"", notes:"" } });
+  const feed2 = cI.buildIcs_();
+  const p1 = feed2.split("BEGIN:VEVENT").find(b => b.indexOf("labtrack-p1@") >= 0) || "";
+  check("a request awaiting approval is tentative", p1.indexOf("STATUS:TENTATIVE") > 0);
+  check("and says so where a person will read it", p1.indexOf("awaiting approval") > 0);
+
+  asAdmin();
+  post({ action:"returnItem", checkoutId:"t1" });
+  check("a returned booking leaves the calendar", cI.buildIcs_().indexOf("labtrack-t1@") < 0);
+
+  // ── the address itself ──
+  asMember();
+  const u1 = post({ action:"getIcsUrl" });
+  check("a member can fetch their own address", u1.ok === true && /\?ics=[0-9a-f]{40}$/.test(u1.url));
+  check("asking twice gives the same one", post({ action:"getIcsUrl" }).url === u1.url);
+  const tok = u1.url.split("ics=")[1];
+  check("the token is not exposed to members through doGet",
+        JSON.parse(cI.doGet({ parameter:{ token:"t" } }).__text).settings.ics_tokens === undefined);
+  asAdmin();
+  const u2 = post({ action:"getIcsUrl" });
+  check("two people get different addresses", u2.url !== u1.url);
+
+  const served = cI.doGet({ parameter:{ ics: tok } });
+  check("the address serves the calendar", served.__text.startsWith("BEGIN:VCALENDAR") && served.__mime === "ical");
+  check("and it is served as a calendar, not JSON", served.__mime === "ical");
+
+  const bad = cI.doGet({ parameter:{ ics: "0".repeat(40) } });
+  check("an unknown address does not serve the lab's data", bad.__text.indexOf("labtrack-arm") < 0 && bad.__text.indexOf("Ana Lee") < 0);
+  check("and says so in the one place its owner is looking", bad.__text.indexOf("no longer valid") > 0);
+
+  asMember();
+  const u3 = post({ action:"getIcsUrl", rotate:true });
+  check("rotating mints a new address", u3.url !== u1.url);
+  check("and the old one goes dead at once",
+        cI.doGet({ parameter:{ ics: tok } }).__text.indexOf("no longer valid") > 0);
+  check("while the new one works", cI.doGet({ parameter:{ ics: u3.url.split("ics=")[1] } }).__text.indexOf("BEGIN:VEVENT") > 0);
+  check("and the other person's address is untouched",
+        cI.doGet({ parameter:{ ics: u2.url.split("ics=")[1] } }).__text.indexOf("BEGIN:VEVENT") > 0);
+  check("revoking is written down", cI.readTable("AuditLog").some(r => r.action === "IcsUrlRotated"));
 }
 
 console.log("\n" + pass + " passed, " + fail + " failed");

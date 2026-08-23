@@ -36,6 +36,10 @@ const ALLOWED_UPN_DOMAINS = [];
 
 const SLACK_WEBHOOK_URL = "YOUR_SLACK_WEBHOOK_URL_HERE";
 
+// Shown as the calendar's name in Google, Outlook and Apple once somebody
+// subscribes. It is the only place the lab is named on the backend.
+const ICS_CAL_NAME = "Alliance AI Lab — Equipment";
+
 // ─── DEV ESCAPE HATCH ────────────────────────────────────────────────────────
 // Set to a random string to accept "dev:<key>" as a token and skip Entra
 // verification entirely, so the app can be exercised end-to-end before admin
@@ -1291,9 +1295,269 @@ function idsMatch(sheetVal, targetId) {
   return false;
 }
 
+
+// ─── CALENDAR SUBSCRIPTION FEED ──────────────────────────────────────────────
+// One address per person, pasted into Google Calendar, Outlook or Apple Calendar.
+// A subscribed calendar is read-only in all three: nobody can edit these events,
+// and nothing here can write back into LabTrack.
+//
+// ⚠️  THIS IS THE ONLY PATH INTO THIS BACKEND THAT DOES NOT VERIFY A MICROSOFT
+//     TOKEN, and it cannot be otherwise. A subscription is fetched by Google's or
+//     Microsoft's servers on their own schedule — no browser, no session, nobody
+//     present to sign in — and the subscribe dialog takes a URL and nothing else.
+//     So the URL is the credential.
+//
+//     What that costs, stated plainly: the address never expires, it keeps working
+//     after somebody leaves JHU, and anyone it is forwarded to can read the feed.
+//     Three things hold the blast radius down. The token is 160 bits of randomness,
+//     so it cannot be guessed. It is per-person, so one can be revoked without
+//     disturbing anyone else — icsUrlFor_(email, true) mints a new one and the old
+//     address goes dead the same second. And the feed carries no email addresses:
+//     an item, a display name, and dates.
+var ICS_TOKENS_KEY_ = "ics_tokens";
+
+// RFC 5545 gives , ; \ and newline structural meaning inside a text value. An item
+// called "Cable, 1m" ends the value early and the rest of the line is parsed as
+// another property — the same shape of bug as the Slack one, in a different syntax.
+function icsEsc_(v) {
+  return String(v == null ? "" : v)
+    .replace(/\\/g, "\\\\").replace(/;/g, "\\;").replace(/,/g, "\\,")
+    .replace(/\r\n|\r|\n/g, "\\n");
+}
+
+// Content lines are limited to 75 octets, continued with CRLF + one space. Folding
+// walks code points and measures their UTF-8 width, because breaking in the middle
+// of a multi-byte character produces a file some parsers reject outright — and lab
+// item names are exactly where a non-ASCII character turns up.
+function icsWidth_(cp) {
+  return cp < 0x80 ? 1 : cp < 0x800 ? 2 : cp < 0x10000 ? 3 : 4;
+}
+
+// UTF-8 length without Utilities.newBlob, so the folder and anything checking it
+// agree by construction rather than by two implementations happening to match.
+function icsBytes_(str) {
+  var n = 0;
+  for (var i = 0; i < str.length; i++) {
+    var cp = str.codePointAt(i);
+    if (cp > 0xFFFF) i++;
+    n += icsWidth_(cp);
+  }
+  return n;
+}
+
+function icsFold_(line) {
+  var out = "", width = 0, first = true;
+  for (var i = 0; i < line.length; i++) {
+    var cp = line.codePointAt(i);
+    var ch = String.fromCodePoint(cp);
+    if (cp > 0xFFFF) i++;                                  // surrogate pair
+    var n = icsWidth_(cp);
+    var limit = first ? 75 : 74;                           // the leading space counts
+    if (width + n > limit) { out += "\r\n "; width = 1; first = false; }
+    out += ch; width += n;
+  }
+  return out;
+}
+
+// Times go out in UTC. The alternative is a TZID plus a hand-written VTIMEZONE
+// block, which is long and easy to get subtly wrong; UTC needs neither and every
+// client renders it in the reader's own zone.
+function icsUtc_(ms) {
+  return Utilities.formatDate(new Date(ms), "UTC", "yyyyMMdd'T'HHmmss'Z'");
+}
+
+function icsDate_(ms) {
+  return Utilities.formatDate(new Date(ms), Session.getScriptTimeZone(), "yyyyMMdd");
+}
+
+function icsDateOnly_(v) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(String(v || "").trim());
+}
+
+// Calendar days from one date to another, inclusive. Deliberately not a division
+// by 86400000: a booking that crosses the March or November clock change is 23 or
+// 25 hours long that day, and the naive count is off by one for the rest of it.
+function icsDaySpan_(aMs, bMs) {
+  var a = new Date(aMs), b = new Date(bMs);
+  var d = Date.UTC(b.getFullYear(), b.getMonth(), b.getDate())
+        - Date.UTC(a.getFullYear(), a.getMonth(), a.getDate());
+  return Math.round(d / 86400000) + 1;
+}
+
+// One booking becomes one VEVENT, in one of three shapes, because a calendar draws
+// them completely differently:
+//
+//   a daily window   "9-5 on the 1st, 2nd and 3rd" is three 9-5 blocks, written as
+//                    one event with a daily recurrence. Drawn as one 72-hour slab
+//                    it would read as the item being gone overnight, which is the
+//                    opposite of what booking by the hour means.
+//   dates only       an all-day band across the days, not a 00:00-to-00:00 block.
+//   anything else    a single event from one instant to another.
+function icsEvent_(c, item, stamp) {
+  var startMs = bookingMs_(c.out), endMs = bookingMs_(c.ret);
+  if (startMs === null || endMs === null) return "";        // badRange_ refuses these on the way in
+
+  var pending = c.status === CHECKOUT_PENDING;
+  var who = String(c.user || "").trim();
+  var name = String(c.item || "").trim() || "Equipment";
+  var summary = (pending ? "\u23F3 " : "") + name + (who ? " \u2014 " + who : "")
+              + (pending ? " (awaiting approval)" : "");
+
+  var desc = [];
+  desc.push("Status: " + (pending ? "Awaiting an admin's approval" : "Checked out"));
+  if (c.qty && Number(c.qty) > 1) desc.push("Quantity: " + c.qty);
+  if (c.fromTime && c.toTime) desc.push("Daily window: " + c.fromTime + "\u2013" + c.toTime);
+  if (c.notes) desc.push("Notes: " + c.notes);
+  desc.push("Booked in LabTrack. This calendar is read-only \u2014 change it in the app.");
+
+  var lines = [];
+  lines.push("BEGIN:VEVENT");
+  // Stable, so a client replaces the event it already has rather than adding a
+  // second copy every time the feed is fetched.
+  lines.push("UID:labtrack-" + icsEsc_(c.id) + "@alliance-ai-lab");
+  lines.push("DTSTAMP:" + stamp);
+
+  var hasWindow = String(c.fromTime || "") !== "" && String(c.toTime || "") !== "";
+  if (hasWindow) {
+    var fm = minutes_(c.fromTime), tm = minutes_(c.toTime);
+    var d0 = new Date(startMs);
+    var s0 = new Date(d0.getFullYear(), d0.getMonth(), d0.getDate(), Math.floor(fm / 60), fm % 60);
+    var e0 = new Date(d0.getFullYear(), d0.getMonth(), d0.getDate(), Math.floor(tm / 60), tm % 60);
+    lines.push("DTSTART:" + icsUtc_(s0.getTime()));
+    lines.push("DTEND:" + icsUtc_(e0.getTime()));
+    var n = icsDaySpan_(startMs, endMs);
+    // COUNT rather than UNTIL: UNTIL has to be given in UTC while DTSTART is local,
+    // and clients disagree about the off-by-one at the boundary. A count cannot be
+    // misread.
+    if (n > 1) lines.push("RRULE:FREQ=DAILY;COUNT=" + n);
+  } else if (icsDateOnly_(c.out) && icsDateOnly_(c.ret)) {
+    // DTEND is exclusive for an all-day event: a booking through the 3rd ends on
+    // the 4th, or the calendar draws it one day short.
+    var endPlus = new Date(endMs); endPlus.setDate(endPlus.getDate() + 1);
+    lines.push("DTSTART;VALUE=DATE:" + icsDate_(startMs));
+    lines.push("DTEND;VALUE=DATE:" + icsDate_(endPlus.getTime()));
+  } else {
+    lines.push("DTSTART:" + icsUtc_(startMs));
+    lines.push("DTEND:" + icsUtc_(endMs));
+  }
+
+  lines.push("SUMMARY:" + icsEsc_(summary));
+  lines.push("DESCRIPTION:" + icsEsc_(desc.join("\n")));
+  if (item && item.loc) lines.push("LOCATION:" + icsEsc_(item.loc));
+  // What these two words are for: a request nobody has approved is tentative, and
+  // somebody else's booking must not mark the reader busy in their own free/busy.
+  lines.push("STATUS:" + (pending ? "TENTATIVE" : "CONFIRMED"));
+  lines.push("TRANSP:TRANSPARENT");
+  lines.push("END:VEVENT");
+  return lines.map(icsFold_).join("\r\n");
+}
+
+// Active and pending only. A returned booking is a finished fact, and the Usage tab
+// is where facts live; a calendar answers what is claimed.
+function buildIcs_() {
+  var byId = {};
+  readTable("Items").forEach(function (i) { byId[String(i.id)] = i; });
+  var stamp = icsUtc_(new Date().getTime());
+
+  var head = [
+    "BEGIN:VCALENDAR", "VERSION:2.0",
+    "PRODID:-//LabTrack//Alliance AI Lab//EN",
+    "CALSCALE:GREGORIAN", "METHOD:PUBLISH",
+    "X-WR-CALNAME:" + icsEsc_(ICS_CAL_NAME),
+    "X-WR-TIMEZONE:" + Session.getScriptTimeZone(),
+    // A request, not a promise. Google refreshes external feeds on its own schedule
+    // — hours, sometimes most of a day — and ignores this. Outlook and Apple pay it
+    // some attention, so it costs one line to ask.
+    "REFRESH-INTERVAL;VALUE=DURATION:PT1H", "X-PUBLISHED-TTL:PT1H",
+  ].map(icsFold_);
+
+  var events = readTable("Checkouts")
+    .filter(function (c) { return c.status === "Active" || c.status === CHECKOUT_PENDING; })
+    .map(function (c) { return icsEvent_(c, byId[String(c.itemId)], stamp); })
+    .filter(Boolean);
+
+  return head.concat(events, ["END:VCALENDAR", ""]).join("\r\n");
+}
+
+// A dead link that silently shows nothing is worse than one that says so, and the
+// only surface this person is looking at is their calendar. So say it there.
+function icsNotice_(text) {
+  var stamp = icsUtc_(new Date().getTime());
+  var today = icsDate_(new Date().getTime());
+  return [
+    "BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//LabTrack//Alliance AI Lab//EN",
+    "CALSCALE:GREGORIAN", "METHOD:PUBLISH",
+    "X-WR-CALNAME:" + icsEsc_(ICS_CAL_NAME),
+    "BEGIN:VEVENT",
+    "UID:labtrack-notice@alliance-ai-lab", "DTSTAMP:" + stamp,
+    "DTSTART;VALUE=DATE:" + today, "DTEND;VALUE=DATE:" + today,
+    "SUMMARY:" + icsEsc_(text),
+    "DESCRIPTION:" + icsEsc_("Open LabTrack and use Subscribe on the Calendar tab to get a working address, then remove this one."),
+    "STATUS:CONFIRMED", "TRANSP:TRANSPARENT", "END:VEVENT",
+    "END:VCALENDAR", "",
+  ].map(icsFold_).join("\r\n");
+}
+
+function icsResponse_(body) {
+  return ContentService.createTextOutput(body).setMimeType(ContentService.MimeType.ICAL);
+}
+
+// token → email. Admin-only by omission: it is not in MEMBER_SETTINGS_, so a member
+// never receives it from doGet. Each person fetches only their own, through
+// getIcsUrl.
+function icsTokens_() {
+  var raw = readSettings()[ICS_TOKENS_KEY_];
+  if (!raw) return {};
+  try { var m = JSON.parse(raw); return (m && typeof m === "object" && !Array.isArray(m)) ? m : {}; }
+  catch (e) { return {}; }
+}
+
+function icsMintToken_() {
+  var hex = "";
+  while (hex.length < 40) hex += Math.floor(Math.random() * 0x100000000).toString(16);
+  return hex.slice(0, 40);          // 160 bits
+}
+
+// Returns this person's subscription address, minting one the first time. Under the
+// script lock because the whole map lives in a single cell: two people subscribing
+// at once would otherwise read the same map and write back two versions of it, and
+// whoever finished second would erase the other's token.
+function icsUrlFor_(email, rotate) {
+  var lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    var who = String(email || "").trim().toLowerCase();
+    if (!who) return "";
+    var map = icsTokens_(), mine = "";
+    Object.keys(map).forEach(function (t) {
+      if (String(map[t]).toLowerCase() === who) { if (rotate) delete map[t]; else mine = t; }
+    });
+    if (!mine) {
+      mine = icsMintToken_();
+      map[mine] = who;
+      writeSetting(ICS_TOKENS_KEY_, JSON.stringify(map));
+    }
+    var base = "";
+    try { base = ScriptApp.getService().getUrl() || ""; } catch (e) { base = ""; }
+    return base ? base + "?ics=" + mine : "?ics=" + mine;
+  } finally {
+    lock.releaseLock();
+  }
+}
+
 // ─── GET ─────────────────────────────────────────────────────────────────────
 function doGet(e) {
   try {
+    // Before the token check, and only this one branch. A calendar client cannot
+    // present a Microsoft token — see the warning above buildIcs_() for why, and
+    // for what the URL being the credential costs.
+    const ics = (e && e.parameter && e.parameter.ics) || "";
+    if (ics) {
+      const owner = icsTokens_()[ics];
+      if (!owner) return icsResponse_(icsNotice_("LabTrack: this calendar link is no longer valid"));
+      return icsResponse_(buildIcs_());
+    }
+
     const token = (e && e.parameter && e.parameter.token) || "";
     const user = verifyToken(token);
     if (!user) {
@@ -1999,6 +2263,17 @@ function doPost(e) {
     return jsonResponse({ ok: true });
   }
 
+  // ── Calendar subscription address ─────────────────────────────────────────
+  // Yours and only yours: the caller's identity comes from the verified token, so
+  // there is no parameter here to point at somebody else. rotate kills the old
+  // address the moment the new one is minted, which is the whole revocation story.
+  if (action === "getIcsUrl") {
+    var icsUrl = icsUrlFor_(userEmail, !!body.rotate);
+    if (!icsUrl) return jsonResponse({ error: "No address", detail: "Could not work out who you are" });
+    if (body.rotate) logAudit(userName, userEmail, "IcsUrlRotated", "previous calendar link revoked");
+    return jsonResponse({ ok: true, url: icsUrl });
+  }
+
   // ── Backup Now (admin only) ───────────────────────────────────────────────
   if (action === "backupNow") {
     if (!admin) return jsonResponse({ error: "Forbidden", detail: "Admin only" });
@@ -2204,6 +2479,30 @@ function smokeTest() {
     writeSetting(SMOKE_ + "-ts", "2026-08-20 5:42 PM");
     ok("a timestamp stays the text that was written",
        readSettings()[SMOKE_ + "-ts"] === "2026-08-20 5:42 PM", readSettings()[SMOKE_ + "-ts"]);
+
+    out.push("— the calendar feed, built by the real Utilities and the real clock —");
+    // Everything else about the feed is tested against a stubbed formatDate. This is
+    // the only place the real one runs, in the real project timezone, so the UTC
+    // conversion is checked here or nowhere.
+    var ics = buildIcs_();
+    var icsLines = ics.split("\r\n");
+    ok("the feed is a calendar",        ics.indexOf("BEGIN:VCALENDAR\r\n") === 0, ics.slice(0, 30));
+    ok("lines end CRLF, never bare LF", !/[^\r]\n/.test(ics), null);
+    ok("no line exceeds 75 octets",     icsLines.every(function (l) { return icsBytes_(l) <= 75; }),
+                                        icsLines.filter(function (l) { return icsBytes_(l) > 75; })[0]);
+    // The address is a key anyone can hold, so this is the line that matters most.
+    ok("no email address anywhere in the feed", ics.indexOf("@jh.edu") < 0 && ics.indexOf("smoke@") < 0, null);
+
+    var smokeEv = ics.split("BEGIN:VEVENT").filter(function (b) { return b.indexOf(SMOKE_ + "-CO-1@") >= 0; })[0] || "";
+    ok("the smoke booking is in the feed", !!smokeEv, null);
+    if (smokeEv) {
+      // 09:00-17:00 on 1-3 September is three blocks, and 09:00 in New York is
+      // 13:00Z while daylight time is in force.
+      ok("a daily window recurs, not spans", /RRULE:FREQ=DAILY;COUNT=3/.test(smokeEv), smokeEv.match(/RRULE:[^\r]*/));
+      ok("local 09:00 is written as 13:00Z", /DTSTART:20260901T130000Z/.test(smokeEv), smokeEv.match(/DTSTART:[^\r]*/));
+      ok("and 17:00 as 21:00Z",             /DTEND:20260901T210000Z/.test(smokeEv), smokeEv.match(/DTEND:[^\r]*/));
+      ok("somebody else's booking is transparent", smokeEv.indexOf("TRANSP:TRANSPARENT") > 0, null);
+    }
 
     out.push("— readTable sees what findRow sees —");
     var fromTable = readTable("Items").filter(function (r) { return r.id === SMOKE_ + "-0012"; })[0];

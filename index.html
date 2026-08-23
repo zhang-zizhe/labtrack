@@ -2653,9 +2653,81 @@ class ErrorBoundary extends React.Component {
   }
 }
 
+// ─── SUBSCRIBE TO THE CALENDAR ───────────────────────────────────────────────
+// The address is one per person and it is a key: whoever holds it can read the
+// feed, it does not expire, and it keeps working after somebody leaves. The modal
+// says so rather than burying it, because the one thing people do with a link like
+// this is paste it somewhere convenient.
+const SubscribeModal = ({url, onClose, onRotate, busy}) => {
+  const [copied, setCopied] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(url); }
+    catch(e) {
+      const el = document.getElementById("ics-url");
+      if (el) { el.focus(); el.select(); document.execCommand && document.execCommand("copy"); }
+    }
+    setCopied(true); setTimeout(()=>setCopied(false), 1800);
+  };
+  const How = ({app, steps}) => (
+    <div style={{marginTop:14}}>
+      <div style={{fontSize:12,fontWeight:700,letterSpacing:".04em",textTransform:"uppercase",color:"var(--sub)",marginBottom:5}}>{app}</div>
+      <div style={{fontSize:13.5,lineHeight:1.55,color:"var(--sub)"}}>{steps}</div>
+    </div>
+  );
+  return (
+    <Modal onClose={onClose} title="Subscribe to the lab calendar" mw={620}>
+      <p style={{margin:"0 0 14px",fontSize:14,lineHeight:1.6,color:"var(--sub)"}}>
+        Every booking in the lab, in your own calendar. It updates by itself and is
+        read-only — nothing you do there changes anything here.
+      </p>
+      <Fld label="Your personal address">
+        <div style={{display:"flex",gap:8}}>
+          <Inp id="ics-url" readOnly value={url} onFocus={e=>e.target.select()}
+               style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:12.5}}/>
+          <Btn onClick={copy} style={{whiteSpace:"nowrap"}}>{copied ? "Copied" : "Copy"}</Btn>
+        </div>
+      </Fld>
+
+      <div style={{background:"var(--bg3)",border:"1px solid var(--border)",borderRadius:10,padding:"12px 14px",marginTop:14}}>
+        <div style={{fontSize:13.5,lineHeight:1.6,color:"var(--sub)"}}>
+          <strong style={{color:"var(--text)"}}>Treat it like a key.</strong> Anyone you send it
+          to can read the lab's bookings without signing in, and it does not expire. Don't post it
+          in a channel — send people here to get their own.
+        </div>
+      </div>
+
+      <How app="Google Calendar" steps={<>Left sidebar → <strong>Other calendars</strong> → <strong>+</strong> → <strong>From URL</strong> → paste → Add.</>}/>
+      <How app="Outlook" steps={<>Calendar → <strong>Add calendar</strong> → <strong>Subscribe from web</strong> → paste → name it → Import.</>}/>
+      <How app="Apple Calendar" steps={<>File → <strong>New Calendar Subscription</strong> → paste → Subscribe.</>}/>
+
+      <p style={{margin:"16px 0 0",fontSize:13,lineHeight:1.55,color:"var(--sub)"}}>
+        One catch worth knowing: your calendar app decides how often to check, and Google in
+        particular can take several hours. Come back here when you need to know whether something
+        is free <em>right now</em>.
+      </p>
+
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:12,marginTop:20,paddingTop:16,borderTop:"1px solid var(--border)"}}>
+        {confirming ? (
+          <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+            <span style={{fontSize:13,color:"var(--red)"}}>The address above stops working immediately.</span>
+            <Btn sm v="danger" onClick={()=>{setConfirming(false);onRotate();}} disabled={busy}>Replace it</Btn>
+            <Btn sm v="ghost" onClick={()=>setConfirming(false)}>Keep it</Btn>
+          </div>
+        ) : (
+          <Btn sm v="ghost" onClick={()=>setConfirming(true)} disabled={busy}>Replace this address</Btn>
+        )}
+        <Btn v="ghost" onClick={onClose}>Done</Btn>
+      </div>
+    </Modal>
+  );
+};
+
 // ─── MAIN APP ────────────────────────────────────────────────────────────────
 function LabInventory(){
   const [user, setUser] = useState(null);
+  const [icsUrl, setIcsUrl] = useState("");
+  const [icsBusy, setIcsBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [fetchingData, setFetchingData] = useState(false);
 
@@ -3002,6 +3074,19 @@ function LabInventory(){
   },{});
 
   // handlers
+  // The address is minted on first use, so this is a request rather than a lookup.
+  const openSubscribe = async (rotate) => {
+    if (!APP_CONFIG.apps_script_url || user?.token === "local") {
+      addToast("error", "Subscribing needs the live lab — this is the offline preview");
+      return;
+    }
+    setIcsBusy(true);
+    const res = await postAction("getIcsUrl", rotate ? { rotate: true } : {});
+    setIcsBusy(false);
+    if (res?.url) { setIcsUrl(res.url); setModal("subscribe"); if (rotate) addToast("success", "New address minted — the old one is dead"); }
+    else if (!res?.error) addToast("error", "Could not get a calendar address");
+  };
+
   const postAction = (action, payload) => {
     // Mark data type as locally modified → suppress poll override for 60s
     const now = Date.now();
@@ -4234,7 +4319,12 @@ function LabInventory(){
         {/* ════════ CALENDAR TAB ════════ */}
         {tab==="calendar"&&(
           <div style={{animation:"fadeUp .3s ease"}}>
-            <h2 style={{margin:"0 0 20px",fontFamily:"'Roboto',sans-serif",fontSize:18,fontWeight:700}}>Activity Calendar</h2>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,margin:"0 0 20px",flexWrap:"wrap"}}>
+              <h2 style={{margin:0,fontFamily:"'Roboto',sans-serif",fontSize:18,fontWeight:700}}>Activity Calendar</h2>
+              <Btn sm v="ghost" onClick={()=>openSubscribe(false)} disabled={icsBusy}>
+                <Ico n="calendar" s={12}/>{icsBusy ? "Working…" : "Subscribe"}
+              </Btn>
+            </div>
             <div style={{background:"var(--bg1)",border:"1px solid var(--border)",borderRadius:14,padding:24}}>
               <CalView checkouts={checkouts} deliveries={deliveries}/>
             </div>
@@ -4244,6 +4334,8 @@ function LabInventory(){
       )}
 
       {/* MODALS */}
+      {modal==="subscribe" && <SubscribeModal url={icsUrl} busy={icsBusy}
+        onClose={()=>setModal(null)} onRotate={()=>openSubscribe(true)}/>}
       {modal==="delivery" && <DeliveryModal onClose={()=>setModal(null)} onAdd={handleDelivery} userName={user?.name||""}/>}
       {useItem && <UseModal item={useItem} onClose={()=>setUseItem(null)} onUse={handleUseConsumable}/>}
       {notifyItem && <NotifyModal item={notifyItem} onClose={()=>setNotifyItem(null)} onNotify={handleNotifyLowStock}/>}

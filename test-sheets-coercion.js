@@ -122,9 +122,29 @@ function build() {
     LockService: { getScriptLock: () => ({ waitLock() {}, releaseLock() {} }) },
     UrlFetchApp: { fetch: (u, o) => { slack.push({ u, o }); return { getResponseCode: () => 200, getContentText: () => "ok" }; } },
     CacheService: { getScriptCache: () => ({ get: () => null, put() {} }) },
-    ContentService: { MimeType: { JSON: "json" }, createTextOutput: t => ({ __text: t, setMimeType() { return this; } }) },
-    Utilities: { base64DecodeWebSafe: s => Buffer.from(String(s), "base64"), formatDate: () => "x" },
+    ContentService: { MimeType: { JSON: "json", ICAL: "ical" }, createTextOutput: t => ({ __text: t, setMimeType(m) { this.__mime = m; return this; } }) },
+    // A real one, not a placeholder: the calendar feed is almost entirely date
+    // formatting, so a stub that returns "x" would assert nothing. Supports the two
+    // patterns the backend actually asks for. TZ is pinned to America/New_York for
+    // the whole file, so "local" here means what it means in Apps Script.
+    Utilities: {
+      base64DecodeWebSafe: s => Buffer.from(String(s), "base64"),
+      formatDate: (d, tz, pattern) => {
+        const p = n => String(n).padStart(2, "0");
+        const utc = tz === "UTC";
+        const Y = utc ? d.getUTCFullYear() : d.getFullYear();
+        const M = p((utc ? d.getUTCMonth() : d.getMonth()) + 1);
+        const D = p(utc ? d.getUTCDate() : d.getDate());
+        const h = p(utc ? d.getUTCHours() : d.getHours());
+        const m = p(utc ? d.getUTCMinutes() : d.getMinutes());
+        const s2 = p(utc ? d.getUTCSeconds() : d.getSeconds());
+        if (pattern === "yyyyMMdd") return `${Y}${M}${D}`;
+        if (pattern === "yyyyMMdd'T'HHmmss'Z'") return `${Y}${M}${D}T${h}${m}${s2}Z`;
+        throw new Error("test stub has no pattern: " + pattern);
+      },
+    },
     Session: { getScriptTimeZone: () => "America/New_York" },
+    ScriptApp: { getService: () => ({ getUrl: () => "https://script.google.com/macros/s/AKtest/exec" }) },
     DriveApp: {}, Logger: { log() {} }, console: { log() {}, error() {} },
     JSON, Math, String, Number, Boolean, Array, Object, RegExp, Error, Date: FrozenDate, parseInt, parseFloat, isNaN,
   };
