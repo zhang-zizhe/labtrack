@@ -1,0 +1,420 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LabTrack — Member Guide</title>
+<meta name="description" content="How to find, borrow, return and request lab equipment in LabTrack.">
+<meta name="robots" content="noindex">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;700;900&family=Outfit:wght@300;400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="guide.css">
+</head>
+<body>
+
+<div class="top">
+  <span class="mark">LabTrack</span>
+  <span class="which">Member guide</span>
+  <span class="spacer"></span>
+  <a href="../">← Back to the app</a>
+</div>
+
+<div class="shell">
+<nav class="toc">
+  <h2>On this page</h2>
+  <ol>
+    <li><a href="#in">Getting in</a></li>
+    <li><a href="#around">Finding your way around</a></li>
+    <li><a href="#find">Finding a thing</a></li>
+    <li><a href="#borrow">Borrowing something</a></li>
+    <li><a href="#rules">Why a booking waits</a></li>
+    <li><a href="#back">Giving it back</a></li>
+    <li><a href="#supplies">Supplies you use up</a></li>
+    <li><a href="#add">Adding and correcting</a></li>
+    <li><a href="#buy">Asking to buy something</a></li>
+    <li><a href="#cal">The calendar</a></li>
+    <li><a href="#wrong">When something looks wrong</a></li>
+  </ol>
+</nav>
+
+<main>
+
+<h1>LabTrack for lab members</h1>
+<p class="dek">
+  What the lab owns, where it is, who has it, and how to book it for Tuesday.
+  This is everything you need; nothing here requires being an admin.
+</p>
+
+<h2 id="in">Getting in</h2>
+
+<p>
+  Open the app and click <strong>Sign in with Microsoft</strong>. Pick your Johns Hopkins
+  account. That is the whole of it — there is no separate LabTrack password to keep.
+</p>
+
+<div class="warn">
+  <span class="lbl">The one thing that trips people up</span>
+  <p>
+    Use your <strong>JHED sign-in name</strong> — <code>jdoe1@jh.edu</code> — not the
+    mail alias <code>@jhu.edu</code>. They look interchangeable and they are not: the lab's
+    roster is keyed to the sign-in name, so the alias produces a <em>successful</em>
+    Microsoft sign-in followed by "not authorized", which looks like something being
+    broken rather than like a typo.
+  </p>
+</div>
+
+<p>
+  If you are refused, the message names the exact address it saw. Read it — that address
+  is usually the answer. Send it to an admin and ask to be added.
+</p>
+
+<h3>Trying it without signing in</h3>
+<p>
+  The sign-in page offers three sample identities — <strong>Member One</strong>,
+  <strong>Member Two</strong> and <strong>Admin</strong>. They open a small pretend lab
+  that lives entirely in your browser and never touches the real one. Nothing you do
+  there is real; nothing real leaks in. It is a good way to click around before you have
+  to get anything right.
+</p>
+
+<h3>Your session</h3>
+<p>
+  Sign-in lasts about an hour and renews itself quietly in the background. If renewal
+  fails you get a dark red bar with <strong>Sign In Again</strong>. Click it. Finish
+  anything half-typed first — a form still open when the session lapses cannot be saved.
+</p>
+
+<h2 id="around">Finding your way around</h2>
+
+<h3>The padlock</h3>
+<p>
+  The app opens read-only. The red padlock in the header unlocks editing, and it re-locks
+  every time the page loads — so the first time you click <strong>Add Item</strong> in a
+  session, it will often just tell you editing is locked. Click the padlock, then click
+  again.
+</p>
+
+<div class="note">
+  <span class="lbl">What the padlock is and is not</span>
+  <p>
+    It guards against a stray click, not against people. It lives in your browser only,
+    it does not travel with your account, and it does not cover everything — checking
+    out, returning, logging a delivery and moving an order along all work while it is
+    locked. Treat it as a lid, not a permission.
+  </p>
+</div>
+
+<h3>Everything updates itself</h3>
+<p>
+  The app re-reads the lab every 30 seconds, so a colleague's checkout appears on your
+  screen without a refresh. Changes you make are protected from being overwritten for a
+  minute afterwards, so your own edit will not flicker back.
+</p>
+
+<h3>The header</h3>
+<div class="tw">
+<table>
+  <tr><th>What you see</th><th>What it means</th></tr>
+  <tr><td>Your name, with a badge</td><td>An amber <strong>ADMIN</strong> badge means you can approve things. No badge means you are a member.</td></tr>
+  <tr><td>A red overdue count</td><td>Items out past their return date — <strong>lab-wide</strong>, not just yours. The banner underneath is the personalised one.</td></tr>
+  <tr><td>☀ / 🌙</td><td>Light or dark. Remembered in this browser.</td></tr>
+  <tr><td>?</td><td>A quick reference, and the way back to this guide.</td></tr>
+</table>
+</div>
+
+<h2 id="find">Finding a thing</h2>
+
+<p>
+  Search matches the name, the location, the category, the tags, the serial number and
+  the <strong>Label ID</strong> — so if you are holding the object, type the number on
+  its sticker.
+</p>
+
+<p>
+  The coloured chips under the search box filter by category, and the dropdown after them
+  sorts. Switch between photo cards and a dense table with the toggle at the right. The
+  list starts at 24 items and loads more as you scroll — in table view the scrolling
+  happens <em>inside</em> the table, which is easy to miss.
+</p>
+
+<h3>Label IDs</h3>
+<p>
+  Every trackable item carries a short ID printed on a sticker: <span class="tag">RM-001</span>
+  — a per-category prefix and a number. Click the chip on any card to copy it. Where one
+  model has several units they get a suffix each: <span class="tag">RM-001-01</span>,
+  <span class="tag">RM-001-02</span>. Those are separate items with separate histories,
+  even though they share a name.
+</p>
+
+<div class="note">
+  <span class="lbl">Worth knowing</span>
+  <p>
+    Supplies you consume — solder, gloves, zip ties — get no label. Nothing is stickered,
+    so there is no number to print.
+  </p>
+</div>
+
+<h3>What a status means</h3>
+<div class="tw">
+<table>
+  <tr><th>Status</th><th>Meaning</th></tr>
+  <tr><td><strong>Available</strong></td><td>On the shelf. It may still be booked for later — check the calendar before you count on next week.</td></tr>
+  <tr><td><strong>In Use</strong></td><td>Somebody has it <em>right now</em>. A booking that has not started yet does not put an item here.</td></tr>
+  <tr><td><strong>Maintenance</strong> / <strong>Broken</strong></td><td>Somebody's judgement about the object. Returning something never clears these.</td></tr>
+  <tr><td><strong>Low Stock</strong> / <strong>Out of Stock</strong></td><td>A count that has fallen to or below the threshold someone set for it.</td></tr>
+</table>
+</div>
+
+<h2 id="borrow">Borrowing something</h2>
+
+<ol class="steps">
+  <li>Click the item, then <strong>Check Out</strong> — or use <strong>Check Out</strong> in the header to book several things at once.</li>
+  <li>Pick the dates. If the item is shared you can also give a daily window — 09:00 to 17:00 — and it is yours only during those hours each day.</li>
+  <li>Add a note if it helps someone find you. Add colleagues' addresses under <strong>Group members</strong> if they should be able to return it too.</li>
+  <li>Submit. You will either have it, or you will be told it is waiting for an admin, and why.</li>
+</ol>
+
+<div class="note">
+  <span class="lbl">Whose name it goes in</span>
+  <p>
+    Yours. The Person field is filled from your sign-in and the server rewrites it to
+    match, so a booking cannot be filed under someone else by accident — or on purpose.
+    An admin logging a checkout on somebody's behalf is the exception.
+  </p>
+</div>
+
+<h3>Group members</h3>
+<p>
+  Anyone you list can <strong>return</strong> the item. That is all it grants — they
+  cannot edit or withdraw your request. Use the same <code>@jh.edu</code> sign-in
+  addresses, comma-separated; capitals do not matter.
+</p>
+
+<h3>Quantity</h3>
+<div class="warn">
+  <span class="lbl">Not what you would expect</span>
+  <p>
+    The quantity on a checkout is a <em>note about how many you took</em>. It does not
+    reduce stock and it does not leave the rest for anyone else — the item is booked for
+    those dates either way. If two people genuinely need to hold different units at the
+    same time, they need to be separate tracked units, which an admin can set up.
+  </p>
+</div>
+
+<h2 id="rules">Why a booking waits</h2>
+
+<p>
+  Most bookings go straight through. Two things send one to an admin, and the app tells
+  you which:
+</p>
+
+<div class="tw">
+<table>
+  <tr><th>Reason</th><th>What it means</th></tr>
+  <tr><td><strong>Longer than 7 days</strong></td><td>A long hold takes something out of circulation, so somebody looks at it.</td></tr>
+  <tr><td><strong>Someone is already waiting</strong></td><td>Another request is pending for an overlapping slot. Whoever asked first has their claim looked at, rather than being quietly overtaken by a shorter booking.</td></tr>
+</table>
+</div>
+
+<p>And three things are refused outright:</p>
+
+<div class="tw">
+<table>
+  <tr><th>Refusal</th><th>Why</th></tr>
+  <tr><td><strong>Already booked</strong></td><td>An <em>active</em> booking owns its dates. This applies to shared items too — sharing means several people over a week, not several people in the same hour.</td></tr>
+  <tr><td><strong>Too far ahead</strong></td><td>Nothing may start more than <strong>31 days</strong> from today.</td></tr>
+  <tr><td><strong>The dates do not make sense</strong></td><td>A return before the checkout, a window that ends before it starts, half a window, or a hold longer than <strong>90 days</strong> — usually one wrong digit in a year.</td></tr>
+</table>
+</div>
+
+<div class="warn">
+  <span class="lbl">While you wait, nothing is held for you</span>
+  <p>
+    A pending request reserves nothing. Several people may ask for the same week and an
+    admin picks between them. And when yours is approved the clash test runs again — if
+    somebody took the slot in the meantime, approval comes back
+    <em>"taken while this was waiting"</em>. It is not lost work; it is the honest answer.
+  </p>
+</div>
+
+<h3>Changing your mind</h3>
+<p>
+  While a request is still waiting you can <strong>Edit</strong> it — move the dates or
+  the window, change the group — or <strong>Withdraw</strong> it, which removes it rather
+  than leaving a rejection on the record. Both are in the Usage tab under
+  <em>Waiting for approval</em>. Once it is approved, editing is closed: return it and
+  book again.
+</p>
+
+<h2 id="back">Giving it back</h2>
+
+<p>
+  Find the item — or its row in <strong>Usage → All Records</strong> — and click
+  <strong>Return</strong>. To do several, tick them and use <strong>Bulk Return</strong>.
+  Shift-click selects a range.
+</p>
+
+<p>
+  You can return anything you booked, anything you were listed on as a group member, and
+  an admin can return anything. If the button is missing, the booking is in somebody
+  else's name.
+</p>
+
+<div class="note">
+  <span class="lbl">Overdue</span>
+  <p>
+    Past its return date with nothing given back, an item is <strong>overdue</strong> —
+    and it stays yours until somebody actually returns it. The clock does not hand it
+    back for you. You will see a red banner on the way in, and the lab gets a reminder
+    each morning.
+  </p>
+</div>
+
+<h2 id="supplies">Supplies you use up</h2>
+
+<p>
+  Consumables — solder, gloves, wipes — are not checked out. Their card has a
+  <strong>Use</strong> button: enter how many you took and the count drops. There is
+  nothing to give back.
+</p>
+
+<p>
+  Some supplies are not counted at all. Those show <strong>Notify</strong> instead, which
+  tells whoever restocks that it is running low. Say what you noticed — "down to the last
+  roll" is more useful than a number nobody is tracking.
+</p>
+
+<h2 id="add">Adding and correcting things</h2>
+
+<p>
+  <span class="who who-member">member</span> You do not need an admin to add something to
+  the inventory, or to fix a record that is wrong. Unlock the padlock and use
+  <strong>Add Item</strong>, or open an item and click <strong>Edit</strong>.
+</p>
+
+<p>You can change what an item is <em>like</em>:</p>
+<p>
+  name · category · quantity · unit · location · minimum stock · photo · tags · serial number
+</p>
+
+<p>Only an admin can change what an item <em>is</em>:</p>
+<p>
+  its status · its Label ID · whether it is shared · whether it is a consumable
+</p>
+
+<p>
+  Those four decide how every rule treats the object, and its Label ID is already on a
+  sticker in the room. If you edit them the app tells you they were left alone rather
+  than pretending to save them.
+</p>
+
+<div class="note">
+  <span class="lbl">Adding several of the same model</span>
+  <p>
+    Set the quantity above 1 and a box appears offering to
+    <strong>track each unit individually</strong> — it is ticked by default. Ticked, you
+    get five separate items with their own labels and serials, which is what you want for
+    five cameras. Unticked, you get one row with a count, which is what you want for five
+    HDMI cables. If you are not sure: can they be borrowed separately?
+  </p>
+</div>
+
+<h2 id="buy">Asking to buy something</h2>
+
+<ol class="steps">
+  <li><strong>Order Requests → New Request.</strong> One store per request; add as many items to it as you like.</li>
+  <li>Fill in what it is, how many, a link if you have one, and the price. Say why in the reason box — that is what an admin reads.</li>
+  <li>Set the urgency honestly. <strong>Urgent</strong> and <strong>High</strong> jump the list and are marked in the lab's daily summary.</li>
+  <li>Submit. It goes in as <em>Pending</em> and an admin decides.</li>
+</ol>
+
+<div class="note">
+  <span class="lbl">About the price box</span>
+  <p>
+    Type it however you like — <code>$14.99</code>, <code>1,000</code>,
+    <code>10-15</code>, <code>ask Bob</code>. Anything that is a single number is added to
+    the total; anything else is shown to the buyer exactly as you typed it and left out of
+    the arithmetic, with the total saying how many it left out. A range is a range, not a
+    thousand-dollar item.
+  </p>
+</div>
+
+<p>
+  You can edit or delete your own request while it is still pending. Once an admin has
+  approved it, it is theirs.
+</p>
+
+<h2 id="cal">The calendar</h2>
+
+<p>
+  The <strong>Calendar</strong> tab shows the lab's bookings by month or by week. A
+  booking spanning several days is drawn as a band across them; a pending request is
+  drawn differently from a confirmed one; deliveries show up too. <strong>Today</strong>
+  brings you back.
+</p>
+
+<h3>Putting it in your own calendar</h3>
+
+<p>
+  <strong>Calendar → Subscribe</strong> gives you a personal address. Paste it into Google
+  Calendar (<em>Other calendars → + → From URL</em>), Outlook
+  (<em>Add calendar → Subscribe from web</em>) or Apple Calendar
+  (<em>File → New Calendar Subscription</em>). Every booking in the lab then appears in
+  your own calendar and keeps itself up to date.
+</p>
+
+<p>It is read-only. Nothing you do in your calendar changes anything here.</p>
+
+<div class="stop">
+  <span class="lbl">Treat the address like a key</span>
+  <p>
+    Anyone you send it to can read the lab's bookings without signing in, and it does not
+    expire. Do not paste it into a channel — send people here to get their own. If it does
+    get out, <strong>Subscribe → Replace this address</strong> kills the old one
+    immediately.
+  </p>
+</div>
+
+<div class="warn">
+  <span class="lbl">It is not a live view</span>
+  <p>
+    Your calendar app decides how often to check, and Google in particular can be several
+    hours behind. It is good for <em>"is the arm claimed next Tuesday"</em> and no use for
+    <em>"is the arm free right now"</em>. Come back to the app for that.
+  </p>
+</div>
+
+<p>
+  Notes you put on a checkout stay in the app and are not carried into the feed — but
+  item names, people's names, dates and locations are. That is the shape of what somebody
+  holding the address can see.
+</p>
+
+<h2 id="wrong">When something looks wrong</h2>
+
+<div class="tw">
+<table>
+  <tr><th>What you see</th><th>What to do</th></tr>
+  <tr><td>"Your account is not authorized"</td><td>Check the address in the message. It is nearly always <code>@jhu.edu</code> where <code>@jh.edu</code> was needed. Otherwise ask an admin to add you.</td></tr>
+  <tr><td>"Editing is locked"</td><td>Click the red padlock in the header. It re-locks on every page load.</td></tr>
+  <tr><td>A red bar saying your session expired</td><td>Click <strong>Sign In Again</strong>. Save anything half-typed first.</td></tr>
+  <tr><td>An error toast after a change</td><td>The change did not happen and the screen has been put back. Read the message — "already booked", "not pending", "too far ahead" are answers, not faults.</td></tr>
+  <tr><td>Your change reappears wrong a minute later</td><td>The app re-read the lab and yours was not there. Something refused the write; try again and read the message.</td></tr>
+  <tr><td>An item you expected is missing</td><td>Clear the category chip and the search box. A category with nothing in it shows no chip at all.</td></tr>
+  <tr><td>Nothing at all, a blank page</td><td>Tell an admin. That is a bug, not something you did.</td></tr>
+</table>
+</div>
+
+<footer>
+  <p>
+    LabTrack · Alliance AI Lab, Johns Hopkins University.
+    Something here wrong or missing? Tell an admin — this guide is part of the repository
+    and gets corrected.
+  </p>
+</footer>
+
+</main>
+</div>
+</body>
+</html>

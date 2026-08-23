@@ -73,7 +73,8 @@ jobs:
           git fetch origin gh-pages --depth=1
           git worktree add ../ghp origin/gh-pages
           cp index.html ../ghp/index.html
-          if [ -d docs ]; then mkdir -p ../ghp/docs && cp docs/*.html ../ghp/docs/; fi
+          # The whole directory, not just the html — the guides share a stylesheet.
+          if [ -d docs ]; then mkdir -p ../ghp/docs && cp -R docs/. ../ghp/docs/; fi
           cd ../ghp
           git switch -c publish
           if git diff --quiet; then
