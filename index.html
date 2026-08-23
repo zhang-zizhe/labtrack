@@ -333,6 +333,12 @@ const isUntracked = it => it && (it.qty === "" || it.qty === null || it.qty === 
 // empty shelf. Low stock therefore stops at one.
 const isOutOfStock = i => i && !isUntracked(i) && Number(i.qty)<=0;
 const isLowStock = i => i && !isUntracked(i) && Number(i.qty)>0 && Number(i.minQty)>0 && Number(i.qty)<=Number(i.minQty);
+// What belongs on a restock list. isLowStock deliberately excludes zero, because a
+// card showing "Out of Stock" should not also say "Low Stock" — but the admin's
+// banner and header chip were built on it too, so the moment something ran all the
+// way out it dropped off the list of things to order. The one item that most needs
+// reordering was the one that disappeared.
+const needsRestock = i => i && !isUntracked(i) && Number(i.minQty)>0 && Number(i.qty)<=Number(i.minQty);
 // The badge a quantity implies, if any — otherwise the item's own status.
 const stockStatus = i => isOutOfStock(i) ? "Out of Stock" : isLowStock(i) ? "Low Stock" : null;
 
@@ -498,6 +504,10 @@ const STATUS_C = {
 // straight off a phone, a renamed .txt, a truncated download. Without the error
 // paths the promise simply never settled and the upload sat there forever with
 // nothing on screen to say why.
+// Google Sheets caps a cell at 50,000 characters; the margin is for the rest of the
+// row's overhead and for the apostrophe the text guard adds.
+const IMG_CELL_LIMIT = 45000;
+
 const compressImage = (file) => new Promise((resolve) => {
   const reader = new FileReader();
   reader.onerror = () => resolve("");
@@ -512,7 +522,21 @@ const compressImage = (file) => new Promise((resolve) => {
         canvas.width = w; canvas.height = h;
         const ctx = canvas.getContext("2d");
         ctx.drawImage(img, 0, 0, w, h);
-        resolve(canvas.toDataURL("image/jpeg", 0.7));
+        // A spreadsheet cell holds 50,000 characters, and a detailed 400px JPEG at
+        // quality 0.7 can pass that — a cluttered bench, a portrait phone shot. The
+        // save then failed with a raw Apps Script message, after the Add dialog had
+        // already closed and taken everything typed with it. Step the quality down,
+        // then the size, until it fits; give up rather than hand over something that
+        // cannot be stored.
+        let out = canvas.toDataURL("image/jpeg", 0.7);
+        for (const q of [0.5, 0.35, 0.25]) { if (out.length <= IMG_CELL_LIMIT) break; out = canvas.toDataURL("image/jpeg", q); }
+        if (out.length > IMG_CELL_LIMIT && w > 200) {
+          const c2 = document.createElement("canvas");
+          c2.width = 200; c2.height = Math.max(1, Math.round(h * 200 / w));
+          c2.getContext("2d").drawImage(img, 0, 0, c2.width, c2.height);
+          out = c2.toDataURL("image/jpeg", 0.5);
+        }
+        resolve(out.length <= IMG_CELL_LIMIT ? out : "");
       } catch { resolve(""); }
     };
     img.src = e.target.result;
@@ -559,6 +583,7 @@ const P = {
   unlock:'<rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 019.9-1"/>',
   eye:'<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>',
   user:'<path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/>',
+  book:'<path d="M4 19.5A2.5 2.5 0 016.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z"/>',
   help:'<circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 015.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/>',
 };
 const Ico = ({n,s=16,col="currentColor"}) => (
@@ -1451,7 +1476,11 @@ const AddItemModal = ({onClose,onAdd,categories,allItems,onShowLabel}) => {
     ?allItems.filter(i=>dupWords.some(w=>(i.name||"").toLowerCase().includes(w)))
     :[];
   const submit=async()=>{
-    if(!f.name||!f.qty||submitting)return;
+    // The same condition the button is disabled on. It was `!f.qty`, which is true
+    // for an untracked supply — whose quantity is deliberately empty, as the line
+    // below says — so the button was enabled, the click did nothing at all, and
+    // there was no error to see. Zip ties simply could not be added.
+    if(!f.name||(!f.untracked&&!f.qty)||submitting)return;
     if(!f.loc.trim()&&!warnNoLoc){setWarnNoLoc(true);return;}
     setWarnNoLoc(false);
     setSubmitting(true);
@@ -1909,7 +1938,15 @@ const GroupDetail = ({group,checkouts,onClose,onEdit,onQuickCheckout,onReturn,ed
           const inUse=toArr(unit.usedBy).length>0;
           // Match on itemId. Matching on name picked whichever sibling came first,
           // and c.displayId never existed on a checkout record at all.
-          const activeCheckout=checkouts.find(c=>c.status==="Active"&&(c.itemId?String(c.itemId)===String(unit.id):c.item===unit.name));
+          // The one that is actually out, not the first Active row in sheet order.
+          // A unit can carry a live loan and a reservation for next month at once —
+          // rule 2 judges by date, so both are Active — and returning picked
+          // whichever the sheet happened to list first. Pressing Return on the unit
+          // somebody had in their hands cancelled a colleague's future booking
+          // instead, and said "returned" about it.
+          const activeCheckout=checkouts
+            .filter(c=>c.status==="Active"&&isCheckoutTarget(unit,c)&&bookingHoldsItem(c))
+            .sort((a,b)=>(bookingMs(a.out)??0)-(bookingMs(b.out)??0))[0];
           return(
             <div key={unit.id} style={{background:"var(--bg2)",border:"1px solid var(--border)",borderRadius:10,padding:"12px 14px",display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
               <div style={{minWidth:120}}>
@@ -1962,7 +1999,10 @@ const GroupDetail = ({group,checkouts,onClose,onEdit,onQuickCheckout,onReturn,ed
 // ─── ITEM DETAIL MODAL ──────────────────────────────────────────────────────
 const ItemDetail = ({item,checkouts,onClose,onReturn,onQuickCheckout,onUse,onNotify,onEdit,categories,editLocked}) => {
   const [confirmId,setConfirmId]=useState(null);
-  const hist=checkouts.filter(c=>c.item===item.name);
+  // By id, not by name. Two items may share a name — the Add form warns and does not
+  // block — and split units always do, so this listed somebody else's loan under
+  // this item, with a Return button that ended it.
+  const hist=checkouts.filter(c=>isCheckoutTarget(item,c));
   const ac=getCatAccent(item.cat,categories);
   return(
     <>
@@ -2613,26 +2653,60 @@ function getBaseId(displayId) {
   return p && p.sub !== null ? mainId(p.prefix, p.num) : String(displayId||"");
 }
 
+// ─── PRICES PEOPLE ACTUALLY TYPE ──────────────────────────────────────────────
+// The price box is free text, and it gets "$14.99", "1,000", "~20", "10-15" and
+// "ask Bob". Reading it by deleting every character that is not a digit or a dot
+// turned a range into a number: "10-15" became 1015, which was then multiplied by
+// the quantity and added to a grand total that somebody would have ordered against.
+//
+// So: a price is a single number, optionally with a currency symbol and thousands
+// separators, or it is not a price. Anything else is shown to the reader exactly as
+// it was typed and left out of the arithmetic, with the total saying how many it
+// left out.
+const PRICE_RE = /^\s*[$£€¥]?\s*(\d{1,3}(?:,\d{3})*|\d+)(\.\d+)?\s*$/;
+
+function priceNumber(p) {
+  if (typeof p === "number") return isFinite(p) ? p : null;
+  const s = String(p ?? "");
+  if (!PRICE_RE.test(s)) return null;
+  const n = parseFloat(s.replace(/[^0-9.]/g, ""));
+  return isNaN(n) ? null : n;
+}
+
+// What to print beside the item: the tidy form when we understood it, otherwise the
+// exact words the requester used, so whoever is buying can see what they meant.
+function priceText(p) {
+  const n = priceNumber(p);
+  if (n !== null) return "$" + n.toFixed(2);
+  const raw = String(p ?? "").trim();
+  return raw || null;
+}
+
+function lineTotal(price, qty) {
+  const p = priceNumber(price);
+  const q = parseFloat(qty) || 0;
+  return (p !== null && q) ? p * q : null;
+}
+
 // ─── PURCHASE TEXT GENERATOR ──────────────────────────────────────────────────
 function generateEmailText(orders) {
-  const fmtP = p => {
-    if(!p && p!==0) return null;
-    const n = typeof p==="number" ? p : parseFloat(String(p).replace(/[^0-9.]/g,""));
-    return isNaN(n) ? null : "$"+n.toFixed(2);
-  };
-  const calcTotal = (price,qty) => {
-    const p = typeof price==="number" ? price : parseFloat(String(price||"").replace(/[^0-9.]/g,""));
-    const q = parseFloat(qty)||0;
-    return (!isNaN(p)&&q) ? p*q : null;
-  };
   const lines = orders.map(o=>{
     const qty = o.qty||"";
-    const price = fmtP(o.price);
-    const meta = [`Quantity: ${qty}`, ...(price?[`Price/Item: ${price}`]:[])].join(", ");
+    const shown = priceText(o.price);
+    const meta = [`Quantity: ${qty}`, ...(shown?[`Price/Item: ${shown}`]:[])].join(", ");
     return `- ${qty} ${o.item}  ${o.link||""}  (${meta})`;
   });
-  const grand = orders.reduce((a,o)=>{const t=calcTotal(o.price,o.qty);return t!==null?a+t:a;},0);
-  return lines.join("\n") + (grand>0 ? `\n\nGrand Total: $${grand.toFixed(2)}` : "");
+  const counted = orders.filter(o=>lineTotal(o.price,o.qty)!==null);
+  const skipped = orders.length - counted.length;
+  const grand = counted.reduce((a,o)=>a+lineTotal(o.price,o.qty),0);
+  // The count of what was left out is not a detail. Silently summing some of the
+  // lines and calling the result a grand total is how somebody orders against a
+  // number that was never the price of anything.
+  const total = grand>0
+    ? `\n\nGrand Total: $${grand.toFixed(2)}` +
+      (skipped ? `  (${skipped} item${skipped>1?"s":""} not counted \u2014 the price is not a single number)` : "")
+    : (skipped ? `\n\nNo total: ${skipped} price${skipped>1?"s are":" is"} not a single number.` : "");
+  return lines.join("\n") + total;
 }
 
 
@@ -3077,7 +3151,7 @@ function LabInventory(){
   },[user,modal,detail,confirm,labelItem,editOrder,useItem,notifyItem,editReq,pendingItem,editItem]);
 
   // computed
-  const lowStock = items.filter(isLowStock);
+  const lowStock = items.filter(needsRestock);   // banner + header chip: includes zero
   const activeOut = checkouts.filter(c=>c.status==="Active");
   const overdues = checkouts.filter(c=>isOverdue(c));
   const pendingCos = checkouts.filter(c=>c.status===CO_PENDING);
@@ -3276,7 +3350,18 @@ function LabInventory(){
     // call about the object that giving it back must not quietly undo.
     setItems(p=>p.map(i=>isCheckoutTarget(i,co)?{...i,...deriveItemState(i,settled)}:i));
     addToast("success",`${co.item} returned`);
-    await postAction("returnItem", {checkoutId: coId});
+    // The server refuses a return that is not a live loan — already returned, still
+    // waiting for approval, somebody else's — and it refuses when it cannot be
+    // reached at all. The answer was thrown away, so the row read Returned and the
+    // item read back on the shelf while the sheet still had it out. The next poll
+    // would put it back sixty seconds later, by which time the person had walked off.
+    const res=await postAction("returnItem",{checkoutId:coId});
+    if(!res||res.error){
+      const rolled=checkouts.map(c=>c.id===coId?co:c);
+      setCheckouts(rolled);
+      setItems(p=>p.map(i=>isCheckoutTarget(i,co)?{...i,...deriveItemState(i,rolled)}:i));
+      addToast("error",(res&&(res.detail||res.error))||"Could not reach the lab sheet — nothing was returned");
+    }
   };
 
   // effectiveRole: in admin preview mode, show UI as a regular member would see it
@@ -3310,7 +3395,20 @@ function LabInventory(){
       ids.some(id=>coMap[id]&&isCheckoutTarget(i,coMap[id])) ? {...i,...deriveItemState(i,settled)} : i));
     setSelected(new Set());
     addToast("success",`${ids.length} item${ids.length>1?"s":""} returned`);
-    ids.forEach(id=>postAction("returnItem",{checkoutId:id}));
+    // Each row is its own request and any of them can be refused on its own, so the
+    // ones that failed are put back rather than the whole batch. Fired off together
+    // and never looked at, a bulk return of five could write two and still say five.
+    (async()=>{
+      const results=await Promise.all(ids.map(id=>postAction("returnItem",{checkoutId:id})));
+      const failed=ids.filter((id,n)=>!results[n]||results[n].error);
+      if(!failed.length) return;
+      setCheckouts(prev=>{
+        const back=prev.map(c=>failed.includes(c.id)&&coMap[c.id]?coMap[c.id]:c);
+        setItems(items=>items.map(i=>failed.some(id=>coMap[id]&&isCheckoutTarget(i,coMap[id]))?{...i,...deriveItemState(i,back)}:i));
+        return back;
+      });
+      addToast("error",`${failed.length} of ${ids.length} could not be returned — put back as they were`);
+    })();
   };
 
   const handleQuickCheckout=(itemId)=>{ setPreItem(itemId); setModal("checkout"); };
@@ -3396,6 +3494,11 @@ function LabInventory(){
   const handleSendDigest = async () => {
     const tid2 = addToast("info", "Sending digest to Slack…");
     const result = await postAction("sendDigest", {});
+    // postAction answers {ok:true, offline:true} when there is no backend, so that
+    // optimistic edits are not rolled back in preview. For an action whose whole
+    // effect is on the server that reads as success, and the toast said a digest had
+    // been sent to a channel nothing was posted to.
+    if (result && result.offline) { addToast("error", "Preview only — no lab to send a digest to"); return; }
     if (result && result.ok) addToast("success", "Slack digest sent! Check your channel.");
     else if (!result || result.error) addToast("error", "Digest failed — check webhook config.");
   };
@@ -3406,6 +3509,7 @@ function LabInventory(){
     addToast("info","Creating backup in Google Drive…");
     const result = await postAction("backupNow", {});
     setBackingUp(false);
+    if(result && result.offline){ addToast("error","Preview only — nothing to back up"); return; }
     if(result && result.ok){
       const now=new Date();
       const pad=n=>String(n).padStart(2,"0");
@@ -3454,7 +3558,16 @@ function LabInventory(){
     setItems(p=>[newItem,...p]);
     addToast("success",`"${newItem.name}" added to inventory!`);
     const res = await postAction("addItem", {item: newItem});
-    if(res?.displayId && res.displayId !== newItem.displayId)
+    // The staging form has already closed by now, taking the location, the label and
+    // the serial with it. Saying "added" and leaving the row on screen meant the poll
+    // quietly removed it a minute later, and whoever had just received the delivery
+    // had no idea it had not been recorded and nothing left to retype from.
+    if(!res||res.error){
+      setItems(p=>p.filter(i=>i.id!==newItem.id));
+      addToast("error",`"${newItem.name}" was NOT added — ${(res&&(res.detail||res.error))||"could not reach the lab sheet"}. Add it by hand from the Inventory tab.`);
+      return;
+    }
+    if(res.displayId && res.displayId !== newItem.displayId)
       setItems(p=>p.map(i=>i.id===newItem.id?{...i,displayId:res.displayId}:i));
   };
 
@@ -3463,14 +3576,23 @@ function LabInventory(){
     let f = items.filter(i=>{
       const q=search.toLowerCase();
       const s = v => String(v==null?"":v).toLowerCase();
-      return(s(i.name).includes(q)||s(i.loc).includes(q)||s(i.cat).includes(q)||s(i.desc).includes(q)||s(i.serial).includes(q))
+      // displayId included, because it is the number printed on the sticker and the
+      // first thing anybody types when they are holding the object. Searching
+      // everything except the label is a strange place to draw the line.
+      return(s(i.name).includes(q)||s(i.loc).includes(q)||s(i.cat).includes(q)||s(i.desc).includes(q)
+        ||s(i.serial).includes(q)||s(i.displayId).includes(q))
         &&(catF==="All"||i.cat===catF);
     });
     // Sort
     const srt = v => String(v==null?"":v);
     if(sortBy==="name-az") f.sort((a,b)=>srt(a.name).localeCompare(srt(b.name)));
     else if(sortBy==="name-za") f.sort((a,b)=>srt(b.name).localeCompare(srt(a.name)));
-    else if(sortBy==="newest") f.sort((a,b)=>Number(b.id)-Number(a.id));
+    // By when the server says it was added. Falling back to the id for rows written
+    // before the column existed — an id is Date.now() plus up to a billion of
+    // randomness, so it holds roughly eleven days of noise and only orders things
+    // added further apart than that, which is the best those rows can offer.
+    else if(sortBy==="newest") f.sort((a,b)=>
+      (String(b.created||"")).localeCompare(String(a.created||"")) || (Number(b.id)-Number(a.id)));
     else if(sortBy==="qty-low") f.sort((a,b)=>a.qty-b.qty);
     else if(sortBy==="qty-high") f.sort((a,b)=>b.qty-a.qty);
     return f;
@@ -4375,6 +4497,34 @@ function LabInventory(){
       </Modal>}
       {pendingItem && <PendingItemModal order={pendingItem} allItems={items} categories={categories} onClose={()=>setPendingItem(null)} onConfirm={handleConfirmPendingItem}/>}
       {modal==="help" && <Modal onClose={()=>setModal(null)} title="LabTrack — Help & Guide" mw={640}>
+        {/* The full guides first, the quick reference below. A relative path, so the
+            links keep working when the site moves to the lab's own domain. The admin
+            guide is only offered to admins — not as a boundary, since both pages are
+            public and in the repository, but because sending a member to a page about
+            rosters and backups is sending them to the wrong page. */}
+        <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:20}}>
+          <a href="docs/user.html" target="_blank" rel="noopener" style={{textDecoration:"none",flex:"1 1 220px"}}>
+            <div style={{background:"var(--cyan-d)",border:"1px solid var(--border-hi)",borderRadius:10,padding:"12px 14px"}}>
+              <div style={{display:"flex",alignItems:"center",gap:7,marginBottom:3}}>
+                <Ico n="book" s={14} col="var(--cyan)"/>
+                <strong style={{color:"var(--cyan)",fontFamily:"'Roboto',sans-serif",fontSize:14}}>Member guide</strong>
+              </div>
+              <div style={{color:"var(--sub)",fontSize:12,lineHeight:1.5}}>Finding, borrowing, returning, requesting. Everything you need.</div>
+            </div>
+          </a>
+          {effectiveRole==="admin"&&(
+            <a href="docs/admin.html" target="_blank" rel="noopener" style={{textDecoration:"none",flex:"1 1 220px"}}>
+              <div style={{background:"var(--amber-d)",border:"1px solid var(--amber)",borderRadius:10,padding:"12px 14px"}}>
+                <div style={{display:"flex",alignItems:"center",gap:7,marginBottom:3}}>
+                  <Ico n="settings" s={14} col="var(--amber)"/>
+                  <strong style={{color:"var(--amber)",fontFamily:"'Roboto',sans-serif",fontSize:14}}>Admin guide</strong>
+                </div>
+                <div style={{color:"var(--sub)",fontSize:12,lineHeight:1.5}}>Rosters, approvals, purchasing, notifications, backups.</div>
+              </div>
+            </a>
+          )}
+        </div>
+        <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10.5,letterSpacing:".1em",textTransform:"uppercase",color:"var(--dim)",marginBottom:12}}>Quick reference</div>
         <div style={{display:"flex",flexDirection:"column",gap:20,fontSize:13}}>
           {[
             {icon:"box",title:"Inventory Tab",color:"var(--cyan)",items:["Add items with the + button. Fill in name, category, location, and quantity.","Set Min Stock to get a red Low Stock badge when qty drops to or below that number.","Shared items (e.g. toolboxes) stay Available when checked out — multiple people can use them simultaneously.","Consumable items (e.g. stickers, reagents) show a Use button on the card — enter the quantity used and it is deducted, no checkout involved. Consumables get no Label ID; nothing is stickered.","Each tracked item gets a Label ID (e.g. RM-001), numbered per category. Print it on a sticker and attach it to the item. Configure prefixes in Settings → Manage Categories.","Supplies you don\u2019t count (zip ties, tape) can be added with \u2018Quantity not tracked\u2019 — they show a Notify button instead, which pings whoever restocks.","When adding multiple cameras, laptops, or robots, check 'Track each unit individually' to create separate items with sub-IDs (e.g. CE-042-01, CE-042-002), each with its own serial number.","Click any item card to see full details, checkout history, and quick actions."]},

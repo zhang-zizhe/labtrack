@@ -1,0 +1,477 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LabTrack — Admin Guide</title>
+<meta name="description" content="Running LabTrack: rosters, approvals, purchasing, notifications, backups and the audit trail.">
+<meta name="robots" content="noindex">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;700;900&family=Outfit:wght@300;400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="guide.css">
+</head>
+<body>
+
+<div class="top">
+  <span class="mark">LabTrack</span>
+  <span class="which">Admin guide</span>
+  <span class="spacer"></span>
+  <a href="user.html">Member guide</a>
+  <a href="../">← Back to the app</a>
+</div>
+
+<div class="shell">
+<nav class="toc">
+  <h2>On this page</h2>
+  <ol>
+    <li><a href="#adds">What admin adds</a></li>
+    <li><a href="#sheet">The Settings tab</a></li>
+    <li><a href="#roster">Who gets in</a></li>
+    <li><a href="#approve">Approving bookings</a></li>
+    <li><a href="#items">Items only you can change</a></li>
+    <li><a href="#labels">Labels and prefixes</a></li>
+    <li><a href="#orders">Purchase requests</a></li>
+    <li><a href="#deliveries">Deliveries</a></li>
+    <li><a href="#slack">Notifications</a></li>
+    <li><a href="#calendar">Calendar addresses</a></li>
+    <li><a href="#trail">The audit trail</a></li>
+    <li><a href="#backup">Backups</a></li>
+    <li><a href="#account">Keeping the lab account</a></li>
+    <li><a href="#diag">When something looks wrong</a></li>
+  </ol>
+</nav>
+
+<main>
+
+<h1>Running LabTrack</h1>
+<p class="dek">
+  Everything in the <a href="user.html">member guide</a> applies to you too — an admin is
+  a member with more buttons. This covers the rest.
+</p>
+
+<div class="note">
+  <span class="lbl">Two places called Settings</span>
+  <p>
+    Almost everything here lives in the <strong>Settings tab of the spreadsheet</strong> —
+    one of the tabs along the bottom of the Sheet, next to Items and Checkouts. Apps
+    Script has a page called <em>Project Settings</em> as well, holding the time zone and
+    the script id, and it holds none of this. Wherever this guide says "the Settings tab",
+    it means the spreadsheet one.
+  </p>
+</div>
+
+<h2 id="adds">What being an admin adds</h2>
+
+<div class="tw">
+<table>
+  <tr><th>You can</th><th>Where</th></tr>
+  <tr><td>Approve or reject long bookings and queued requests</td><td>Usage tab, at the top</td></tr>
+  <tr><td>Return, edit or withdraw <em>anyone's</em> booking</td><td>Anywhere a member sees their own</td></tr>
+  <tr><td>Change an item's status, Label ID, shared and consumable flags</td><td>Edit Item</td></tr>
+  <tr><td>Split an existing item into individually tracked units</td><td>Edit Item, above quantity</td></tr>
+  <tr><td>Manage categories and their label prefixes</td><td>Gear at the end of the category chips</td></tr>
+  <tr><td>Move a purchase request along, and delete one</td><td>Order Requests</td></tr>
+  <tr><td>Build a purchase summary sheet</td><td>Order Requests</td></tr>
+  <tr><td>Send the daily summary now, and take a backup now</td><td>Header</td></tr>
+  <tr><td>See the low-stock count and the restock list</td><td>Header chip and the banner under it</td></tr>
+  <tr><td>See the whole Settings tab through the app</td><td>Members receive only the few keys the app needs to draw itself</td></tr>
+</table>
+</div>
+
+<p>
+  Admins are always members, even if nobody put them on the member list — a lab cannot
+  lock its own admins out by tidying the roster.
+</p>
+
+<h3>Looking at it as a member does</h3>
+<p>
+  The sign-in page's <strong>Admin</strong> preview identity shows the app with admin
+  powers against sample data. To see what a <em>member</em> sees, sign in normally and use
+  preview from the header — it drops you to a member's view of the real lab. Nothing is
+  editable and no request reaches the backend, so the Digest and Backup buttons say
+  "preview only" rather than pretending to work.
+</p>
+
+<h2 id="sheet">The Settings tab</h2>
+
+<p>Two columns, <code>key</code> and <code>value</code>. Every value must be exactly what its row expects.</p>
+
+<div class="tw">
+<table>
+  <tr><th>Key</th><th>What it holds</th></tr>
+  <tr><td><code>admins</code></td><td>A JSON array of sign-in names: <code>["jdoe1@jh.edu","asmith3@jh.edu"]</code></td></tr>
+  <tr><td><code>members</code></td><td>The same shape. <strong>Empty means anyone with a JHU account can sign in.</strong></td></tr>
+  <tr><td><code>categories</code></td><td>A JSON array of category names. Edit through the app instead.</td></tr>
+  <tr><td><code>cat_prefixes</code></td><td>Category → label prefix. Edit through the app instead.</td></tr>
+  <tr><td><code>slack_mode</code></td><td><code>all</code>, <code>important</code>, <code>digest</code> or <code>off</code></td></tr>
+  <tr><td><code>last_backup</code></td><td>Written by the app. Do not edit.</td></tr>
+  <tr><td><code>ics_tokens</code></td><td>Calendar addresses, one per person. See <a href="#calendar">Calendar addresses</a>.</td></tr>
+</table>
+</div>
+
+<div class="stop">
+  <span class="lbl">Valid JSON, or nobody is an admin</span>
+  <p>
+    <code>admins</code> and <code>members</code> are parsed as JSON. A missing bracket or a
+    smart quote makes the value unreadable, and an unreadable admin list reads as
+    <em>nobody is an admin</em> — after which the only way back is this tab. Keep the
+    square brackets, the double quotes and the commas. Editing the roster through the app
+    is checked and refuses a list that would leave you out; editing the cell by hand is not.
+  </p>
+</div>
+
+<h2 id="roster">Who gets in</h2>
+
+<p>
+  Add a person by putting their sign-in name in <code>members</code>. Make them an admin
+  by putting it in <code>admins</code>.
+</p>
+
+<div class="warn">
+  <span class="lbl">Sign-in name, not mail alias</span>
+  <p>
+    <code>jdoe1@jh.edu</code>, not <code>john.doe@jhu.edu</code>. The token carries the
+    sign-in name, so seeding the address you know a colleague by produces a successful
+    Microsoft sign-in followed by "not authorized" — which reads like the system being
+    broken rather than like one wrong word. It is the most common way to lock somebody out.
+  </p>
+</div>
+
+<h3>Someone leaving</h3>
+<p>
+  Take them out of both lists. That is enough: their sign-in stops, and their calendar
+  subscription stops too, because the feed rechecks the roster on every fetch. Their
+  bookings and their name stay on the record, which is the point of a record.
+</p>
+
+<h3>Deciding whether to fill in <code>members</code></h3>
+<p>
+  Left empty, anyone in the university tenant who finds the URL can sign in and start
+  editing the inventory. Filled in, only the people you list can. There is no third
+  option, and it is easier to decide before people are relying on it than to take access
+  away afterwards.
+</p>
+
+<h2 id="approve">Approving bookings</h2>
+
+<p>
+  Requests waiting on you appear at the top of the <strong>Usage</strong> tab, grouped by
+  item so you can see everyone competing for one thing in one place. Each shows who,
+  which dates, how long, and why it is waiting — <em>longer than 7 days</em>, or
+  <em>somebody was already in the queue</em>.
+</p>
+
+<ol class="steps">
+  <li>Read the group, not the request. If three people want the arm next week, the point is to choose.</li>
+  <li><strong>Approve</strong> the one that should have it. The clash test runs again at that moment — if the slot went in the meantime, you get <em>"taken while this was waiting"</em> and nothing changes.</li>
+  <li><strong>Reject</strong> the others. Rejecting is not unkind; leaving them pending forever is.</li>
+</ol>
+
+<div class="note">
+  <span class="lbl">Approving one does not reject the rest</span>
+  <p>
+    The others stay pending and simply stop being approvable, because the slot is now
+    taken. The confirmation tells you how many will be left in that state. Clear them.
+  </p>
+</div>
+
+<p>
+  Nothing is reserved while a request waits, on purpose: a rejected request would
+  otherwise have quietly held an item hostage until you got to it.
+</p>
+
+<h2 id="items">Items only you can change</h2>
+
+<p>
+  Members can correct anything about what an item is <em>like</em>. Four fields describe
+  what it <em>is</em>, and each changes how every rule treats the object:
+</p>
+
+<div class="tw">
+<table>
+  <tr><th>Field</th><th>Why it is yours</th></tr>
+  <tr><td><strong>Status</strong></td><td><em>Maintenance</em> and <em>Broken</em> are judgements about the object that a return must not quietly undo. <em>In Use</em> is derived from bookings, not set by hand.</td></tr>
+  <tr><td><strong>Label ID</strong></td><td>It is already printed on a sticker in the room. Changing it in the app does not change the room.</td></tr>
+  <tr><td><strong>Shared</strong></td><td>Decides whether the thing can be booked by the hour or is one person's for the whole range.</td></tr>
+  <tr><td><strong>Consumable</strong></td><td>Decides whether it is borrowed and returned or drawn down and restocked.</td></tr>
+</table>
+</div>
+
+<p>
+  When a member edits one of these, the app tells them it was left alone rather than
+  appearing to save it. These are set when the item is <em>created</em> — anyone adding
+  something says what kind of thing it is — and only an admin can change them afterwards.
+</p>
+
+<h3>Splitting an item into units</h3>
+<p>
+  <span class="who who-admin">admin</span> One row with a count of five becomes five rows
+  with their own labels, serials, locations and histories. Open the item, click Edit, set
+  the quantity above 1, leave <strong>Track each unit individually</strong> ticked, fill
+  in the per-unit details and confirm. The original becomes unit <span class="tag">-01</span>.
+</p>
+<p>
+  It is admin-only because splitting has to move the base row's Label ID, and that is a
+  sticker in the room.
+</p>
+
+<h2 id="labels">Labels and prefixes</h2>
+
+<p>
+  The gear at the end of the category chips opens <strong>Manage Categories</strong>. Add,
+  rename or remove a category, and set the prefix that goes on its stickers.
+</p>
+
+<p>
+  A prefix defaults to the category's initials — <em>Robots &amp; Motors</em> becomes
+  <span class="tag">RM</span>. Numbers count up <strong>per prefix</strong>, so the first
+  sensor is <span class="tag">SV-001</span> even when the robots are already at
+  <span class="tag">RM-004</span>. The number is assigned by the server as the item is
+  saved, so two people adding at once cannot be handed the same one.
+</p>
+
+<div class="warn">
+  <span class="lbl">Changing a prefix does not relabel anything</span>
+  <p>
+    Existing items keep their old IDs, which is correct — those stickers are on shelves.
+    You will have two series running in one category until they age out. Choose a prefix
+    once, early.
+  </p>
+</div>
+
+<div class="warn">
+  <span class="lbl">Removing a category leaves its items behind</span>
+  <p>
+    They keep the category name but lose their filter chip, so they are reachable only
+    through <em>All</em> or search. Move them first.
+  </p>
+</div>
+
+<h2 id="orders">Purchase requests</h2>
+
+<p>The status a request carries is what tells everyone where it is:</p>
+
+<div class="tw">
+<table>
+  <tr><th>Status</th><th>Means</th></tr>
+  <tr><td><strong>Pending</strong></td><td>Asked for. Waiting on you.</td></tr>
+  <tr><td><strong>Approved</strong></td><td>You said yes. Nobody has bought it.</td></tr>
+  <tr><td><strong>Ordered</strong></td><td>Actually purchased. Waiting on a box.</td></tr>
+  <tr><td><strong>Received</strong></td><td>It arrived. Add it to the inventory from here.</td></tr>
+</table>
+</div>
+
+<p>
+  Only an admin moves a request between these. A member can edit or delete their own
+  request while it is still pending.
+</p>
+
+<h3>Getting the order out</h3>
+<p>
+  Select the approved requests and use <strong>Copy Text</strong> for a list you can paste
+  into an email to whoever buys, or <strong>Purchase Summary</strong> to build a formatted
+  sheet in the spreadsheet with quantities, prices and a total.
+</p>
+
+<div class="note">
+  <span class="lbl">Prices that are not numbers</span>
+  <p>
+    The price box is free text and people write <code>10-15</code> or <code>ask Bob</code>
+    in it. Anything that is a single number is totalled; anything else is shown to you
+    exactly as it was typed and left out of the arithmetic, with the total saying how many
+    it left out. Read that note before you order against the number.
+  </p>
+</div>
+
+<h2 id="deliveries">Deliveries</h2>
+
+<p>
+  <strong>Log Delivery</strong> records something that arrived. If it answers an order,
+  use <strong>Mark Received</strong> on the order instead — it carries the details across
+  and offers to put the thing straight into the inventory, where you give it a location, a
+  label and a serial.
+</p>
+
+<div class="note">
+  <span class="lbl">Receiving does not add to a count</span>
+  <p>
+    It creates a new item, or you skip it. Restocking an existing consumable means editing
+    that item's quantity — the delivery is a record of a box arriving, not an adjustment.
+  </p>
+</div>
+
+<h2 id="slack">Notifications</h2>
+
+<p>Set <code>slack_mode</code> in the Settings tab:</p>
+
+<div class="tw">
+<table>
+  <tr><th>Mode</th><th>What gets posted</th></tr>
+  <tr><td><code>all</code></td><td>Every event as it happens.</td></tr>
+  <tr><td><code>important</code></td><td>Only deletions, urgent orders, overdue items and approvals.</td></tr>
+  <tr><td><code>digest</code></td><td>Nothing during the day; it all arrives in the 5pm summary. Anything urgent still goes out at once.</td></tr>
+  <tr><td><code>off</code></td><td>Nothing, including the daily summary.</td></tr>
+</table>
+</div>
+
+<p>
+  Capitals do not matter — <code>Off</code> and <code>off</code> are the same. A value the
+  app does not recognise falls back to <code>all</code> rather than to silence, since the
+  only place a wrong value could announce itself is the channel you are trying to quieten.
+</p>
+
+<p>
+  Everything goes to <strong>one channel</strong>. There is no per-person routing: nobody
+  is told individually that their order was approved or their loan is late. Say so, or
+  people will assume they will be chased.
+</p>
+
+<h3>What runs on its own</h3>
+<div class="tw">
+<table>
+  <tr><th>When</th><th>What</th></tr>
+  <tr><td>Every day, 5pm</td><td>The summary: orders needing you, overdue items, low stock, the day's activity.</td></tr>
+  <tr><td>Every day, 8am</td><td>Overdue reminder, if anything is overdue.</td></tr>
+  <tr><td>Every day, 6am</td><td>Re-derives every item's In Use flag from live bookings. Yesterday's bookings ended and today's began while nobody was looking.</td></tr>
+  <tr><td>Sundays, 3am</td><td>A copy of the whole spreadsheet.</td></tr>
+</table>
+</div>
+
+<p>
+  <strong>Digest</strong> in the header sends the 5pm summary now — useful before a lab
+  meeting.
+</p>
+
+<h2 id="calendar">Calendar addresses</h2>
+
+<p>
+  Each person's <strong>Subscribe</strong> button issues them their own address, recorded
+  in <code>ics_tokens</code>. You do not need to hand these out and you should not collect
+  them.
+</p>
+
+<div class="stop">
+  <span class="lbl">The address is the credential</span>
+  <p>
+    A calendar app cannot sign in — it is fetched by Google's or Microsoft's servers on a
+    schedule, with nobody present — so holding the address <em>is</em> the permission. It
+    does not expire. Anyone it is forwarded to can read the lab's bookings: item names,
+    people's names, dates and locations. No email addresses, and no checkout notes.
+  </p>
+</div>
+
+<h3>Revoking</h3>
+<div class="tw">
+<table>
+  <tr><th>To revoke</th><th>Do this</th></tr>
+  <tr><td>Your own</td><td><strong>Subscribe → Replace this address.</strong> The old one dies immediately.</td></tr>
+  <tr><td>One person's, for them</td><td>Ask them to do the above. If they cannot sign in, an admin can replace it from the Apps Script editor.</td></tr>
+  <tr><td>Somebody who has left</td><td>Take them off <code>members</code>. The feed rechecks the roster every fetch.</td></tr>
+  <tr><td>Everyone's, at once</td><td>Clear the <code>ics_tokens</code> value. Each person mints a new one next time they open Subscribe.</td></tr>
+</table>
+</div>
+
+<p>Replacing an address is written to the audit log.</p>
+
+<h2 id="trail">The audit trail</h2>
+
+<p>Two tabs in the spreadsheet, neither shown in the app:</p>
+
+<div class="tw">
+<table>
+  <tr><th>Tab</th><th>Holds</th></tr>
+  <tr><td><strong>AuditLog</strong></td><td>Who did what: items added, edited and deleted, checkouts and approvals, order decisions, settings changes, calendar addresses replaced. Name <em>and</em> verified sign-in address.</td></tr>
+  <tr><td><strong>DeleteLog</strong></td><td>What was removed, with enough of the record to reconstruct it.</td></tr>
+</table>
+</div>
+
+<p>
+  The identity in both comes from the verified sign-in, not from anything the browser
+  claimed. When a non-admin unlocks the padlock that is recorded too.
+</p>
+
+<h2 id="backup">Backups</h2>
+
+<p>
+  A copy of the whole spreadsheet is taken every Sunday at 3am into a folder in the lab
+  account's Drive. <strong>Backup</strong> in the header takes one now — worth doing before
+  anything bulk.
+</p>
+
+<div class="warn">
+  <span class="lbl">What a backup does not protect you from</span>
+  <p>
+    The copies live in the <em>same</em> Drive as the original. They cover a bad edit and a
+    deleted tab. They do not cover losing the account — which is the failure that would
+    take the inventory with it. Share the Sheet with a second person, or pull a copy down
+    now and then.
+  </p>
+</div>
+
+<h2 id="account">Keeping the lab account</h2>
+
+<p>
+  The Sheet, the backend and the calendar proxy all belong to one Google account, and it
+  is an ordinary consumer account — Johns Hopkins does not run Google Workspace. There is
+  no administrator anywhere who can recover it for you.
+</p>
+
+<div class="stop">
+  <span class="lbl">Four things, none optional</span>
+  <p>
+    Point account recovery at the <strong>PI</strong>, not a student. Turn on two-factor
+    authentication and keep the backup codes wherever the lab keeps shared credentials.
+    <strong>Share the Sheet itself with a second person as an editor</strong> — the cheap
+    insurance that keeps the data reachable if the account is ever lost. And sign in
+    occasionally: an unused consumer account can be deleted after two years, and since
+    everyone signs in with <em>Microsoft</em>, human sign-ins to this account can be zero
+    for years while the lab uses it daily.
+  </p>
+</div>
+
+<p>
+  One more, which is a policy question rather than a technical one: the Sheet holds lab
+  members' names and sign-in addresses on a service the university does not administer.
+  It is equipment records rather than research data, but that is the question a compliance
+  review would ask.
+</p>
+
+<h2 id="diag">When something looks wrong</h2>
+
+<div class="tw">
+<table>
+  <tr><th>Symptom</th><th>Where to look</th></tr>
+  <tr><td>Somebody cannot sign in</td><td>Ask them to read the address in the refusal. Nine times out of ten it is <code>@jhu.edu</code> where <code>@jh.edu</code> belongs. Otherwise check <code>members</code>.</td></tr>
+  <tr><td>Nobody is an admin any more</td><td><code>admins</code> is not valid JSON. Fix the brackets and quotes in the Settings tab.</td></tr>
+  <tr><td>Slack has gone quiet</td><td>Check <code>slack_mode</code>, then that the webhook is still configured. Both are in the deployment notes, not here.</td></tr>
+  <tr><td>Slack will not go quiet</td><td><code>slack_mode</code> must be <code>off</code>. Anything unrecognised means <code>all</code>.</td></tr>
+  <tr><td>An item reads In Use with nobody holding it</td><td>Usually an unreturned loan — that is what overdue means. The 6am sweep re-derives every flag; it can be run early from the editor.</td></tr>
+  <tr><td>A subscribed calendar stopped updating</td><td>The address was replaced, or the person came off <code>members</code>. Their calendar will be showing an event saying the link is no longer valid.</td></tr>
+  <tr><td>A change did not stick</td><td>Everything writes to the Sheet. Open it and look at the row. AuditLog says whether the write was attempted.</td></tr>
+  <tr><td>A blank page</td><td>Not something a person can cause. It goes to whoever maintains the code.</td></tr>
+</table>
+</div>
+
+<div class="note">
+  <span class="lbl">Not in this guide, on purpose</span>
+  <p>
+    Deployment ids, script ids, webhook URLs and subscription addresses are credentials —
+    anything holding one can act without signing in. They live in the deployment notes in
+    the repository, not on a page anyone can open. This guide only ever tells you which
+    row to edit.
+  </p>
+</div>
+
+<footer>
+  <p>
+    LabTrack · Alliance AI Lab, Johns Hopkins University.
+    The <a href="user.html">member guide</a> covers everything this one assumes.
+    Corrections belong in the repository, so they survive.
+  </p>
+</footer>
+
+</main>
+</div>
+</body>
+</html>
