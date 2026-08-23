@@ -498,9 +498,23 @@ What holds the damage down:
 - **Membership is rechecked on every fetch.** A token is minted once and fetched for
   years; taking somebody off the `members` roster ends their calendar too, or
   offboarding quietly does not
-- **One per person.** Revoke one without disturbing anyone else — in the app,
-  Subscribe → *Replace this address*, which kills the old one the same second and
-  writes an `IcsUrlRotated` line to `AuditLog`
+- **One per person.** Revoke one without disturbing anyone else. Three ways, in
+  order of how normal they are:
+
+  | | |
+  |---|---|
+  | In the app | Subscribe → **Replace this address**. Where it belongs, and what people will use |
+  | From the editor | `rotateIcsUrl("someone@jh.edu")` — for somebody who cannot sign in, or an admin acting for them |
+  | In the sheet | Clear the `ics_tokens` value to revoke **everyone** at once |
+
+  The first two kill the old address the same second and write an `IcsUrlRotated`
+  line to `AuditLog`. Anyone still subscribed to a dead address does not get an
+  error — they get a calendar holding one event that says the link is no longer
+  valid, which is the only surface they are looking at.
+
+  **To revoke without issuing a replacement — somebody leaving — take them off the
+  `members` roster instead.** The feed rechecks membership on every fetch, so their
+  calendar stops whether or not the token still exists
 - **No email addresses in the feed.** An item, a display name, dates, a location.
   Names are the point of it; addresses are not, and a test asserts they never appear
 - **Active and pending bookings only.** Returned ones leave the calendar — a
@@ -1120,7 +1134,7 @@ changed**; these are only the record of *why*.
 
 ```bash
 node --check google-apps-script.js       # backend syntax
-node test-sheet-setup.js                 # 309 assertions: setup, labels, per-unit
+node test-sheet-setup.js                 # 314 assertions: setup, labels, per-unit
                                          # targeting, order approval, booking rules
 node test-sheets-coercion.js             # 43 assertions: the ones that only fail live
 node test-storage-layer.js > after.json  # behaviour snapshot — see below

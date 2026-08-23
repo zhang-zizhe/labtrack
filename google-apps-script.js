@@ -2460,6 +2460,30 @@ function smokePurge_() {
   return n;
 }
 
+// Replace one person's calendar address from the editor. The old one stops working
+// the moment this returns, and whatever they had subscribed goes quiet — a client
+// keeps fetching, gets the "no longer valid" notice, and shows that instead.
+//
+// The app has a button for this, which is where it belongs: Subscribe -> Replace
+// this address. This exists for the cases the button cannot reach — somebody who
+// cannot sign in, or an admin acting for somebody else — and for now, when nobody
+// can sign in at all.
+//
+// To revoke without issuing a replacement, take the person off the members roster
+// instead: the feed rechecks membership on every fetch, so their calendar stops
+// whether or not their token still exists. That is the offboarding answer.
+function rotateIcsUrl(email) {
+  var who = String(email || INITIAL_ADMINS[0] || "").trim().toLowerCase();
+  if (!who) { Logger.log("Pass an address: rotateIcsUrl(\"someone@jh.edu\")"); return ""; }
+  var url = icsUrlFor_(who, true);
+  logAudit("Editor", who, "IcsUrlRotated", "calendar link replaced from the Apps Script editor");
+  var msg = "New calendar address for " + who + ":\n\n  " + url
+          + "\n\nThe previous one is dead. Anyone still subscribed to it now sees a"
+          + "\ncalendar containing one event saying the link is no longer valid.";
+  Logger.log(msg);
+  return msg;
+}
+
 // ─── TRY THE FEED BEFORE ANYBODY CAN SIGN IN ────────────────────────────────
 // Run from the editor. Mints your subscription address and writes three bookings
 // that cover the three shapes a calendar draws differently, so there is something

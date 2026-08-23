@@ -1275,6 +1275,18 @@ console.log("a calendar subscription is a feed, and a feed is a parser's problem
   cI.writeSetting("members", JSON.stringify(["someone.else@jh.edu"]));
   check("and stops the moment she is off the roster",
         cI.doGet({ parameter:{ ics: anaTok } }).__text.indexOf("no longer valid") > 0);
+  // The editor helper, for the people the in-app button cannot reach.
+  cI.writeSetting("members", JSON.stringify([]));
+  const before = cI.doGet({ parameter:{ ics: anaTok } }).__text;
+  const rot = cI.rotateIcsUrl("ana@jh.edu");
+  const newTok = rot.split("ics=")[1].split(/\s/)[0];
+  check("rotateIcsUrl issues a different address", newTok !== anaTok);
+  check("the old one is dead", cI.doGet({ parameter:{ ics: anaTok } }).__text.indexOf("no longer valid") > 0);
+  check("the new one serves", cI.doGet({ parameter:{ ics: newTok } }).__text.indexOf("BEGIN:VEVENT") > 0);
+  check("and it is written down", cI.readTable("AuditLog").filter(r => r.action === "IcsUrlRotated").length >= 2);
+  check("nobody else was disturbed",
+        cI.doGet({ parameter:{ ics: u2.url.split("ics=")[1] } }).__text.indexOf("BEGIN:VEVENT") > 0);
+
   check("while the admin's own address still works",
         cI.doGet({ parameter:{ ics: u2.url.split("ics=")[1] } }).__text.indexOf("BEGIN:VEVENT") > 0);
 }
