@@ -52,7 +52,7 @@ const ICS_CAL_NAME = "Alliance AI Lab — Equipment";
 // Left empty, subscription addresses still work when they are minted through the app
 // itself (getUrl() is correct inside a real web app request); only previewFeed() from
 // the editor gets it wrong.
-const WEB_APP_URL = "";
+const WEB_APP_URL = "https://script.google.com/macros/s/AKfycbzBrg3dcycZZ7u2uX6PYWq455ngl6CojS3w-Qcno6i3rKh1uvg2e9fTKxXWs9p5rF8LRQ/exec";
 
 // Where subscription addresses point, if that is not the web app itself.
 //
