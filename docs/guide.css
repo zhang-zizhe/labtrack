@@ -96,8 +96,14 @@ nav.site .sub a{font-size:13.5px; padding-left:20px; color:var(--ink-dim)}
   color:var(--ink-dim); margin:0 0 9px; border:none; padding:0;
 }
 .rail ol{list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:2px}
-.rail a{display:block; font-size:13px; color:var(--ink-dim); text-decoration:none; border:none; padding:2px 0 2px 10px; border-left:2px solid var(--edge)}
-.rail a:hover{color:var(--ink); border-left-color:var(--accent)}
+.rail a{
+  display:block; font-size:13px; color:var(--ink-dim); text-decoration:none; border:none;
+  padding:2px 0 2px 10px; border-left:2px solid var(--edge); transition:color .1s, border-color .1s;
+}
+.rail a:hover{color:var(--ink); border-left-color:var(--edge-hi)}
+/* Here the bar IS the mark, and the only one — a rail is a position indicator, which
+   is exactly what the sidebar's stray bar was not. */
+.rail a.here{color:var(--accent); border-left-color:var(--accent); font-weight:500}
 
 main{padding:32px 0 96px; max-width:68ch}
 
