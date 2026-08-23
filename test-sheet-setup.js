@@ -81,6 +81,7 @@ function load(ss) {
         const h = p(utc ? d.getUTCHours() : d.getHours());
         const m = p(utc ? d.getUTCMinutes() : d.getMinutes());
         const s2 = p(utc ? d.getUTCSeconds() : d.getSeconds());
+        if (pattern === "yyyy-MM-dd HH:mm:ss") return `${Y}-${M}-${D} ${h}:${m}:${s2}`;
         if (pattern === "yyyyMMdd") return `${Y}${M}${D}`;
         if (pattern === "yyyyMMdd'T'HHmmss'Z'") return `${Y}${M}${D}T${h}${m}${s2}Z`;
         throw new Error("test stub has no pattern: " + pattern);
@@ -112,7 +113,7 @@ ctx.setupNewLab();
 // Asserted independently of the source, so a wrong TABLE_HEADERS is caught
 // rather than compared against itself. Must match SETUP.md's documented schema.
 const SCHEMA = {
-  Items:      ["id","name","cat","qty","unit","loc","minQty","img","desc","status","usedBy","serial","displayId","shared","consumable"],
+  Items:      ["id","name","cat","qty","unit","loc","minQty","img","desc","status","usedBy","serial","displayId","shared","consumable","created"],
   Deliveries: ["id","item","qty","unit","from","receivedBy","date","tracking","status"],
   Checkouts:  ["id","itemId","item","user","out","ret","status","checkedOutByEmail","groupEmails","qty","fromTime","toTime","notes"],
   Orders:     ["id","store","item","link","qty","unit","price","cat","requestedBy","reason","urgency","date","status","requestedByEmail"],
@@ -1299,6 +1300,46 @@ console.log("a calendar subscription is a feed, and a feed is a parser's problem
 
   check("while the admin's own address still works",
         cI.doGet({ parameter:{ ics: u2.url.split("ics=")[1] } }).__text.indexOf("BEGIN:VEVENT") > 0);
+}
+
+console.log("a price is a single number, or it is not a price");
+{
+  const ssP = fresh();
+  const cP = load(ssP);
+  cP.setupNewLab();
+  // "10-15" is how somebody writes a price they have not confirmed. Read by deleting
+  // every non-digit it became 1015, which was multiplied by the quantity and put in
+  // a grand total the lab would have ordered against.
+  const cases = [["$14.99", 14.99], ["1,000", 1000], ["20", 20], ["0.20", 0.2], [12.5, 12.5],
+                 ["10-15", null], ["about 20", null], ["ask Bob", null], ["", null], ["  ", null],
+                 ["1e5", null], ["--5", null]];
+  cases.forEach(([raw, want]) => {
+    check(`price ${JSON.stringify(raw)} reads as ${want === null ? "not a number" : want}`,
+          cP.priceNumber_(raw) === want);
+  });
+}
+
+console.log("off means off, however it was typed");
+{
+  const ssS = fresh();
+  const cS = load(ssS);
+  cS.setupNewLab();
+  // The webhook is a placeholder in the repo, so sendSlack returns before it can
+  // queue anything. getSlackMode is the part under test and it is pure.
+  ["off", "Off", "OFF", " off ", "oFf"].forEach(v => {
+    cS.writeSetting("slack_mode", v);
+    check(`slack_mode ${JSON.stringify(v)} reads as off`, cS.getSlackMode() === "off");
+  });
+  ["digest", "Digest", "IMPORTANT"].forEach(v => {
+    cS.writeSetting("slack_mode", v);
+    check(`slack_mode ${JSON.stringify(v)} reads as ${v.toLowerCase()}`, cS.getSlackMode() === v.toLowerCase());
+  });
+  // An unrecognised value falls back to all rather than to silence: the only place
+  // a wrong value could announce itself is the channel somebody is trying to quiet.
+  cS.writeSetting("slack_mode", "quiet-ish");
+  check("an unrecognised mode is not silently treated as off", cS.getSlackMode() !== "off");
+  cS.writeSetting("slack_mode", "");
+  check("an empty mode falls back to all", cS.getSlackMode() === "all");
 }
 
 console.log("\n" + pass + " passed, " + fail + " failed");

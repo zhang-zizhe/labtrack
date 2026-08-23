@@ -160,6 +160,7 @@ function build() {
         const h = p(utc ? d.getUTCHours() : d.getHours());
         const m = p(utc ? d.getUTCMinutes() : d.getMinutes());
         const s2 = p(utc ? d.getUTCSeconds() : d.getSeconds());
+        if (pattern === "yyyy-MM-dd HH:mm:ss") return `${Y}-${M}-${D} ${h}:${m}:${s2}`;
         if (pattern === "yyyyMMdd") return `${Y}${M}${D}`;
         if (pattern === "yyyyMMdd'T'HHmmss'Z'") return `${Y}${M}${D}T${h}${m}${s2}Z`;
         throw new Error("test stub has no pattern: " + pattern);
@@ -334,6 +335,21 @@ console.log("\ntext a spreadsheet would rather was a number, a date or a price")
     unit:"ea", price:"10-15", cat:"Compute & Electronics", requestedBy:"Alice", reason:"",
     urgency:"Normal", date:"2026-08-20", status:"Pending", requestedByEmail:"alice@jh.edu" } });
   check("a price range is still a price range", rows("Orders").find(x => x.id === "o2").price === "10-15");
+
+  // "2026-08-23 12:34:56" is exactly the shape Sheets parses into a Date, and the
+  // Newest sort compares these as strings — a Date would sort as "Sun Aug 23 2026…".
+  post("a", "addItem", { item: { id:"t2", name:"Stamped", cat:"Compute & Electronics",
+    qty:1, unit:"units", loc:"L", minQty:0, img:"", desc:"", status:"Available",
+    usedBy:[], serial:"", displayId:"CE-002", shared:false, consumable:false } });
+  const stamped = rows("Items").find(i => i.id === "t2");
+  check("created is stamped by the server", /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(stamped.created));
+  check("and comes back as text, not a date", typeof stamped.created === "string");
+  // Whatever the browser claims, the server's clock is what is recorded — two
+  // laptops that disagree would otherwise interleave in the list.
+  post("a", "addItem", { item: { id:"t3", name:"Liar", cat:"Compute & Electronics",
+    qty:1, unit:"units", loc:"L", minQty:0, img:"", desc:"", status:"Available", usedBy:[],
+    serial:"", displayId:"CE-003", shared:false, consumable:false, created:"1999-01-01 00:00:00" } });
+  check("a browser cannot backdate an item", rows("Items").find(i => i.id === "t3").created !== "1999-01-01 00:00:00");
 }
 
 console.log("\nthe calendar feed, on a sheet that parses what you write");

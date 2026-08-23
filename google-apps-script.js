@@ -62,7 +62,7 @@ const WEB_APP_URL = "https://script.google.com/macros/s/AKfycbzBrg3dcycZZ7u2uX6P
 // pasting is manual, and stale code fails in whatever way the missing fix was
 // supposed to prevent — twice in one day, the only clue was that a log message had
 // different wording than expected. That was luck, not a check.
-const CODE_STAMP = "1df13aa16d424426";
+const CODE_STAMP = "f2215ad078087b86";
 const SOURCE_URL = "https://raw.githubusercontent.com/zhang-zizhe/labtrack/main/google-apps-script.js";
 
 // Where subscription addresses point, if that is not the web app itself. Set it to
@@ -356,10 +356,16 @@ function mainId_(prefix, num) {
 // slack_mode in Settings tab: "all" | "important" | "digest" | "off"
 // "important" = only deletions, urgent/high orders, overdue returns
 // "digest" = queues to SlackQueue tab, sent by daily trigger (sendDailyDigest)
+// Lower-cased, because the value is typed into a spreadsheet cell by a person and
+// "Off" is what a person types. Compared case-sensitively it matched nothing, fell
+// through to the default, and posted everything — while the admin who had just
+// turned notifications off watched them carry on. An unrecognised value still means
+// "all": failing loud is not an option here, since the only place it would be loud
+// is the Slack channel somebody is trying to quieten.
 function getSlackMode() {
   try {
     var mode = readSettings()["slack_mode"];
-    if (mode !== undefined) return String(mode).trim() || "all";
+    if (mode !== undefined) return String(mode).trim().toLowerCase() || "all";
   } catch(e) {}
   return "all";
 }
@@ -472,6 +478,11 @@ function formatOrderLine_(o) {
 // ─── DAILY DIGEST (Trigger: sendDailyDigest → Day timer → 5pm–6pm, timezone: America/New_York) ─
 function sendDailyDigest() {
   if (!SLACK_WEBHOOK_URL || SLACK_WEBHOOK_URL === "YOUR_SLACK_WEBHOOK_URL_HERE") return;
+  // "off" means off. This function assembles its own message and posts it directly,
+  // so it never passed through the check in sendSlack() — and a daily summary
+  // arriving every evening is the most visible thing there is to be wrong about
+  // when somebody believes they switched notifications off.
+  if (getSlackMode() === "off") return;
 
   var now = new Date();
   var dateStr = now.toLocaleDateString("en-US", {weekday:"long", month:"short", day:"numeric", year:"numeric"});
@@ -1016,7 +1027,7 @@ function logAudit(userName, userEmail, action, details) {
 // Canonical column order. Sheets are positional, so this is authoritative for
 // writes. A typed store would use it only as the field list.
 const TABLE_HEADERS = {
-  Items:      ["id","name","cat","qty","unit","loc","minQty","img","desc","status","usedBy","serial","displayId","shared","consumable"],
+  Items:      ["id","name","cat","qty","unit","loc","minQty","img","desc","status","usedBy","serial","displayId","shared","consumable","created"],
   Deliveries: ["id","item","qty","unit","from","receivedBy","date","tracking","status"],
   Checkouts:  ["id","itemId","item","user","out","ret","status","checkedOutByEmail","groupEmails","qty","fromTime","toTime","notes"],
   Orders:     ["id","store","item","link","qty","unit","price","cat","requestedBy","reason","urgency","date","status","requestedByEmail"],
@@ -1055,7 +1066,7 @@ function getOrCreateSheet(name, headers) {
 // excludes qty/minQty, which are numbers, and out/ret/date/fromTime/toTime, which
 // are stored as real dates so the tabs stay sortable by a human and converted back
 // on the way out.
-var TEXT_FIELDS_ = ["name","loc","cat","desc","serial","unit","status","displayId","tags","item","store","requestedBy","reason","link","from","receivedBy","tracking","user","checkedOutByEmail","groupEmails","requestedByEmail","notes","price","urgency"];
+var TEXT_FIELDS_ = ["name","loc","cat","desc","serial","unit","status","displayId","tags","item","store","requestedBy","reason","link","from","receivedBy","tracking","user","checkedOutByEmail","groupEmails","requestedByEmail","notes","price","urgency","created"];
 
 function normalizeRow_(headers, row) {
   var pad = function (n) { return String(n).padStart(2, "0"); };
@@ -1345,6 +1356,21 @@ function dict_(src) {
   var d = Object.create(null);
   if (src) Object.keys(src).forEach(function (k) { d[k] = src[k]; });
   return d;
+}
+
+// The price box is free text and it gets "$14.99", "1,000", "~20", "10-15" and "ask
+// Bob". Reading it by deleting everything that is not a digit or a dot turned a
+// range into a number — "10-15" became 1015 — which was then multiplied by the
+// quantity and put in a grand total somebody would have ordered against. A price is
+// a single number or it is not a price; anything else is left out of the sum and
+// the sheet shows the words that were typed instead.
+var PRICE_RE_ = /^\s*[$£€¥]?\s*(\d{1,3}(?:,\d{3})*|\d+)(\.\d+)?\s*$/;
+function priceNumber_(p) {
+  if (typeof p === "number") return isFinite(p) ? p : null;
+  var str = String(p == null ? "" : p);
+  if (!PRICE_RE_.test(str)) return null;
+  var n = parseFloat(str.replace(/[^0-9.]/g, ""));
+  return isNaN(n) ? null : n;
 }
 
 function idsMatch(sheetVal, targetId) {
@@ -1721,6 +1747,12 @@ function doPost(e) {
       // can change them afterwards. Status is not describing anything: a new item is
       // on the shelf, and In Use is derived from bookings that cannot exist yet.
       if (!admin) it.status = "Available";
+      // When it was added, from the server's clock. Sorting by id was standing in for
+      // this, and id is Date.now() plus up to a billion of randomness — about eleven
+      // and a half days of noise on top of the timestamp — so "Newest" was close to
+      // a coin flip for anything added in the same fortnight. A browser's clock is
+      // not an option either: two people whose laptops disagree would interleave.
+      it.created = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd HH:mm:ss");
       if (idTaken_("Items", it.id)) {
         return jsonResponse({ error: "Duplicate id",
             detail: "Something already has that id. Reload and try again." });
@@ -2280,6 +2312,8 @@ function doPost(e) {
   }
 
   // ── Generate Purchase Summary sheet ──────────────────────────────────────
+  // (priceNumber_ is defined near the storage helpers; the same rule as the
+  //  browser's, because the two produce numbers people compare against each other.)
   // SHEETS-ONLY — builds a formatted spreadsheet as an output artifact rather
   // than storing data, so it deliberately bypasses the storage layer. On a
   // migration this becomes a generated file/export, not a ported function.
@@ -2315,14 +2349,16 @@ function doPost(e) {
     var firstDataRow = 3;
     var dataRows = orders.map(function(o) {
       var qty = parseFloat(o.qty) || 0;
-      var price = parseFloat(String(o.price || "").replace(/[^0-9.]/g, "")) || null;
+      var price = priceNumber_(o.price);
       // item, link and store are whatever the requester typed. They are inert in
       // the Orders tab because appendRow guards them, but this sheet is built from
       // scratch and an admin opens it — so guard them again on the way in here.
       return [
         qty || o.qty || "",
         guardText_(o.item || ""),
-        price !== null ? price : "",  // numeric — formatted as currency below
+        // A number when it is one, otherwise the words that were typed — visible to
+        // the admin doing the buying, and excluded from the column's =SUM().
+        price !== null ? price : guardText_(String(o.price == null ? "" : o.price)),
         "",                           // Total: filled with formula per row below
         guardText_(o.link || ""),
         guardText_(o.store || "")

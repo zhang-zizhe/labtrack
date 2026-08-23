@@ -67,6 +67,9 @@ git fetch -q origin gh-pages
 git checkout -q gh-pages
 git pull -q --ff-only origin gh-pages
 git checkout "$SOURCE_BRANCH" -- index.html
+# The guides, if this branch has them. Tolerated as absent so the script still works
+# on a branch from before they existed.
+git checkout "$SOURCE_BRANCH" -- docs 2>/dev/null || true
 
 if git diff --cached --quiet; then
   echo "  gh-pages already matches $SOURCE_BRANCH — nothing to do."

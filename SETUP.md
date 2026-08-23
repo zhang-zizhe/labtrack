@@ -63,7 +63,8 @@ The backend uses a Google Sheet with these tabs:
 | `admins` | `["jdoe12@jh.edu"]` — use the **sign-in name** (`<JHED>@jh.edu`), not the `@jhu.edu` mail alias. This is the single easiest way to lock somebody out: the token carries the UPN, so seeding the address people know a colleague by produces a successful Microsoft sign-in followed by "not authorized", which reads like the consent failing rather than a typo. Seeded from `INITIAL_ADMINS` with the student and the PI both in it. Compared case-insensitively. Must be valid JSON: `isAdmin` treats a value it cannot parse as "nobody is an admin", and only the Settings tab itself can then put you back. Saving it through the app is checked for exactly that, and refuses a list that leaves you out. |
 | `members` | `["jdoe12@jh.edu","asmith3@jh.edu"]` — if present and non-empty, only these accounts can sign in; all other JHU accounts are rejected. Omit the key (or leave it as `[]`) to allow anyone in the JHU tenant. **Anyone in `admins` is a member whether or not they are listed here** — otherwise filling this in and forgetting yourself would lock you out of your own lab, settings included. |
 | `cat_prefixes` | `{"Robots & Motors":"RM","Sensors & Vision":"SV"}` — the label prefix per category, set from **Manage Categories** in the app. Written here as well as cached per-browser, because it decides what gets printed on a sticker: when it lived only in `localStorage`, the admin's machine and everyone else's produced two label series for one category, and clearing site data started a third |
-| `slack_mode` | `all` or `important` or `digest` or `off` |
+| `slack_mode` | Compared **case-insensitively** — `Off`, `OFF` and `off` all mean off. It used to be case-sensitive, so `Off` matched nothing, fell through to the default and posted everything while the admin believed notifications were off. An unrecognised value still means `all`: the only place a wrong value could announce itself is the channel somebody is trying to quieten. |
+| `slack_mode` (values) | `all` or `important` or `digest` or `off` |
 
 **DeleteLog** (auto-created) — `date | type | name | details | deletedBy`
 
@@ -1156,9 +1157,9 @@ changed**; these are only the record of *why*.
 
 ```bash
 node --check google-apps-script.js       # backend syntax
-node test-sheet-setup.js                 # 314 assertions: setup, labels, per-unit
+node test-sheet-setup.js                 # 336 assertions: setup, labels, per-unit
                                          # targeting, order approval, booking rules
-node test-sheets-coercion.js             # 45 assertions: the ones that only fail live
+node test-sheets-coercion.js             # 48 assertions: the ones that only fail live
 node test-storage-layer.js > after.json  # behaviour snapshot — see below
 ```
 

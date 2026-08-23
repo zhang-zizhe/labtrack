@@ -73,13 +73,14 @@ jobs:
           git fetch origin gh-pages --depth=1
           git worktree add ../ghp origin/gh-pages
           cp index.html ../ghp/index.html
+          if [ -d docs ]; then mkdir -p ../ghp/docs && cp docs/*.html ../ghp/docs/; fi
           cd ../ghp
           git switch -c publish
-          if git diff --quiet -- index.html; then
+          if git diff --quiet; then
             echo "gh-pages already matches main — nothing to publish."
             exit 0
           fi
-          git add index.html
-          git commit -m "Publish index.html from ${GITHUB_SHA:0:7}"
+          git add -A index.html docs
+          git commit -m "Publish from ${GITHUB_SHA:0:7}"
           git push origin HEAD:gh-pages
           echo "published."
