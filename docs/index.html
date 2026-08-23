@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LabTrack Docs</title>
+<meta name="description" content="Documentation for LabTrack — the Alliance AI Lab's inventory and equipment booking system.">
+<meta name="robots" content="noindex">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;700;900&family=Outfit:wght@300;400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="guide.css">
+</head>
+<body>
+<!-- Cloudflare rewrites anything shaped like an email address into
+     "[email protected]" plus a decoder script. On these pages the example
+     addresses ARE the instruction — the whole point is the difference between
+     @jh.edu and @jhu.edu — so the pages opt out. Cloudflare's own marker; nothing
+     has to be switched off in a dashboard. -->
+<!--email_off-->
+
+<div class="top">
+  <span class="mark">LabTrack</span>
+  <span class="which">Docs</span>
+  <span class="spacer"></span>
+  <a href="../">← Back to the app</a>
+</div>
+
+<div class="shell">
+<nav class="site">
+  <ul>
+    <li><a href="index.html">Overview</a></li>
+    <li><a href="user.html">Member guide</a></li>
+    <li><a href="admin.html">Admin guide</a></li>
+  </ul>
+</nav>
+
+<main>
+
+<h1>LabTrack docs</h1>
+<p class="dek">
+  What the lab owns, where it is, who has it, and how to book it for Tuesday.
+  Two guides: one for using the lab, one for running it.
+</p>
+
+<div class="cards">
+  <a class="card" href="user.html">
+    <div class="ct">Member guide →</div>
+    <div class="cd">Finding things, borrowing them, giving them back, asking to buy something, and putting the lab's calendar in your own.</div>
+  </a>
+  <a class="card" href="admin.html" data-admin>
+    <div class="ct">Admin guide →</div>
+    <div class="cd">Rosters, approvals, purchasing, labels, notifications, backups, and keeping hold of the account it all sits on.</div>
+  </a>
+</div>
+
+<h2 id="start">If you are new</h2>
+
+<p>
+  Read the <a href="user.html">member guide</a> once, end to end. It is short, and
+  most of what it covers is the kind of thing that only surprises you the first time —
+  why the padlock re-locks, why a booking waits for an admin, what a shared item
+  actually shares.
+</p>
+
+<p>Or jump to what you came for:</p>
+
+<div class="jump">
+  <a href="user.html#in">Signing in</a>
+  <a href="user.html#borrow">Borrowing something</a>
+  <a href="user.html#rules">Why my booking is waiting</a>
+  <a href="user.html#back">Giving something back</a>
+  <a href="user.html#supplies">Using up a supply</a>
+  <a href="user.html#buy">Asking to buy something</a>
+  <a href="user.html#cal">Subscribing to the calendar</a>
+  <a href="user.html#wrong">Something looks wrong</a>
+</div>
+
+<h2 id="quick">The five things worth knowing before anything else</h2>
+
+<div class="tw">
+<table>
+  <tr><th>&nbsp;</th><th>&nbsp;</th></tr>
+  <tr>
+    <td><strong>Sign in with <code>@jh.edu</code></strong></td>
+    <td>Your JHED sign-in name, not the <code>@jhu.edu</code> mail alias. They look interchangeable; the roster only knows one of them. It is the most common way to be locked out.</td>
+  </tr>
+  <tr>
+    <td><strong>The padlock re-locks</strong></td>
+    <td>Every page load. It is a lid against stray clicks, not a permission, and it does not cover checking out or returning.</td>
+  </tr>
+  <tr>
+    <td><strong>Nothing is held while you wait</strong></td>
+    <td>A pending request reserves nothing. Approval re-runs the clash test, so a slot can be gone by then.</td>
+  </tr>
+  <tr>
+    <td><strong>In Use means somebody has it</strong></td>
+    <td>Not that somebody booked it. A hold for next month sits on the calendar and leaves the thing on the shelf.</td>
+  </tr>
+  <tr>
+    <td><strong>The clock never returns anything</strong></td>
+    <td>Past its date with nothing given back, an item is <em>overdue</em> and still yours. Only returning it ends a loan.</td>
+  </tr>
+</table>
+</div>
+
+<h2 id="where">Where things actually live</h2>
+
+<p>
+  LabTrack is one page in your browser and a Google Sheet behind it. Everything you do
+  writes a row in that Sheet — which is why an admin can always go and look, and why a
+  change that did not stick is a question with an answer rather than a mystery.
+</p>
+
+<div class="tw">
+<table>
+  <tr><th>Thing</th><th>Lives in</th></tr>
+  <tr><td>Items, bookings, orders, deliveries</td><td>Tabs of the lab's Google Sheet</td></tr>
+  <tr><td>Who is an admin, who is a member, the categories</td><td>The <strong>Settings</strong> tab of that Sheet</td></tr>
+  <tr><td>Who did what, and what was deleted</td><td>The <strong>AuditLog</strong> and <strong>DeleteLog</strong> tabs</td></tr>
+  <tr><td>Your calendar subscription address</td><td>Issued to you by the app; revocable at any time</td></tr>
+  <tr><td>Your sign-in</td><td>Microsoft, with your Johns Hopkins account. There is no LabTrack password.</td></tr>
+</table>
+</div>
+
+<h2 id="fix">Found something wrong here?</h2>
+
+<p>
+  These pages are part of the repository, next to the code they describe, so a
+  correction survives. Tell an admin what is wrong and it gets fixed in the same place
+  as the thing it was wrong about.
+</p>
+
+<footer>
+  <p>LabTrack · Alliance AI Lab, Johns Hopkins University.</p>
+</footer>
+
+</main>
+
+<div class="rail"></div>
+</div>
+
+<script src="nav.js"></script>
+<script>
+  /* The admin card on this page, hidden for the same reason the sidebar's admin
+     section is: not to keep anybody out — the page is public — but because it is
+     the wrong page to hand a member. */
+  try {
+    if (localStorage.getItem("labtrack_role") !== "admin") {
+      var c = document.querySelector("[data-admin]");
+      if (c) c.remove();
+    }
+  } catch (e) {}
+</script>
+<!--email_on-->
+</body>
+</html>

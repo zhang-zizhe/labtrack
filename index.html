@@ -3164,6 +3164,17 @@ function LabInventory(){
 
   // handlers
   // The address is minted on first use, so this is a request rather than a lookup.
+  // The docs are static pages on the same origin, so this is how they know which
+  // guide to offer. It decides what is SHOWN, not what may be opened: both guides
+  // are public and neither holds a credential. Cleared on the way out so a shared
+  // browser does not keep offering the admin guide to whoever sits down next.
+  useEffect(()=>{
+    try{
+      if(user && userRole==="admin" && user.token!=="local") localStorage.setItem("labtrack_role","admin");
+      else localStorage.removeItem("labtrack_role");
+    }catch(e){}
+  },[user,userRole]);
+
   const openSubscribe = async (rotate) => {
     // Preview opens the modal to explain itself rather than firing an error toast.
     // The feature works; it is this session that has no lab behind it, and a red
@@ -3697,8 +3708,16 @@ function LabInventory(){
               <Ico n="alert" s={13} col="var(--amber)"/>{lowStock.length} low stock
             </div>
           )}
+          {/* Docs — the written guides, in their own place rather than inside the
+              help modal. The modal is for checking one thing; this is for reading. */}
+          <a href="docs/" target="_blank" rel="noopener" title="Documentation" className="ibtn"
+            style={{background:"var(--bg2)",border:"1px solid var(--border)",borderRadius:8,padding:"6px 11px",
+                    cursor:"pointer",display:"flex",alignItems:"center",gap:6,color:"var(--sub)",
+                    textDecoration:"none",fontSize:12.5,fontWeight:600,fontFamily:"'Roboto',sans-serif"}}>
+            <Ico n="book" s={14}/>Docs
+          </a>
           {/* Help */}
-          <button onClick={()=>setModal("help")} title="Help & Guide" className="ibtn"
+          <button onClick={()=>setModal("help")} title="Quick reference" className="ibtn"
             style={{background:"var(--bg2)",border:"1px solid var(--border)",borderRadius:8,padding:"7px 9px",cursor:"pointer",display:"flex",alignItems:"center",color:"var(--sub)"}}>
             <Ico n="help" s={14}/>
           </button>
@@ -4502,28 +4521,15 @@ function LabInventory(){
             guide is only offered to admins — not as a boundary, since both pages are
             public and in the repository, but because sending a member to a page about
             rosters and backups is sending them to the wrong page. */}
-        <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:20}}>
-          <a href="docs/user.html" target="_blank" rel="noopener" style={{textDecoration:"none",flex:"1 1 220px"}}>
-            <div style={{background:"var(--cyan-d)",border:"1px solid var(--border-hi)",borderRadius:10,padding:"12px 14px"}}>
-              <div style={{display:"flex",alignItems:"center",gap:7,marginBottom:3}}>
-                <Ico n="book" s={14} col="var(--cyan)"/>
-                <strong style={{color:"var(--cyan)",fontFamily:"'Roboto',sans-serif",fontSize:14}}>Member guide</strong>
-              </div>
-              <div style={{color:"var(--sub)",fontSize:12,lineHeight:1.5}}>Finding, borrowing, returning, requesting. Everything you need.</div>
+        <a href="docs/" target="_blank" rel="noopener" style={{textDecoration:"none",display:"block",marginBottom:20}}>
+          <div style={{background:"var(--cyan-d)",border:"1px solid var(--border-hi)",borderRadius:10,padding:"12px 14px",display:"flex",alignItems:"center",gap:10}}>
+            <Ico n="book" s={17} col="var(--cyan)"/>
+            <div style={{flex:1}}>
+              <strong style={{color:"var(--cyan)",fontFamily:"'Roboto',sans-serif",fontSize:14}}>Read the documentation →</strong>
+              <div style={{color:"var(--sub)",fontSize:12,lineHeight:1.5,marginTop:2}}>The full guides. This list is the short version.</div>
             </div>
-          </a>
-          {effectiveRole==="admin"&&(
-            <a href="docs/admin.html" target="_blank" rel="noopener" style={{textDecoration:"none",flex:"1 1 220px"}}>
-              <div style={{background:"var(--amber-d)",border:"1px solid var(--amber)",borderRadius:10,padding:"12px 14px"}}>
-                <div style={{display:"flex",alignItems:"center",gap:7,marginBottom:3}}>
-                  <Ico n="settings" s={14} col="var(--amber)"/>
-                  <strong style={{color:"var(--amber)",fontFamily:"'Roboto',sans-serif",fontSize:14}}>Admin guide</strong>
-                </div>
-                <div style={{color:"var(--sub)",fontSize:12,lineHeight:1.5}}>Rosters, approvals, purchasing, notifications, backups.</div>
-              </div>
-            </a>
-          )}
-        </div>
+          </div>
+        </a>
         <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10.5,letterSpacing:".1em",textTransform:"uppercase",color:"var(--dim)",marginBottom:12}}>Quick reference</div>
         <div style={{display:"flex",flexDirection:"column",gap:20,fontSize:13}}>
           {[
