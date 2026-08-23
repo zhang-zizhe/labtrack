@@ -50,6 +50,12 @@ The backend uses a Google Sheet with these tabs:
 
 **Settings** — `key | value`
 
+> **This is a tab in the spreadsheet, not Apps Script's Project Settings.** Open the
+> Sheet and look along the bottom: `Items · Deliveries · Checkouts · Orders ·
+> **Settings** · DeleteLog · AuditLog · SlackQueue`. Apps Script has a page called
+> Project Settings too — time zone, script id, GCP project — and it holds none of
+> this. Everywhere below, "the Settings tab" means the spreadsheet one.
+
 | key | value |
 |-----|-------|
 | `ics_tokens` | `{"<40 hex chars>":"<jhed>@jh.edu"}` — one calendar-subscription address per person, minted on demand. **Admin-only**, and a leaked entry is a readable feed until it is deleted. See [Calendar subscriptions](#calendar-subscriptions) |
