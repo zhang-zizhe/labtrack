@@ -45,6 +45,8 @@ code,kbd,.mono{font-family:"IBM Plex Mono",ui-monospace,Menlo,monospace}
   border-bottom:1px solid var(--edge); padding:12px 24px;
   display:flex; align-items:center; gap:14px; flex-wrap:wrap;
 }
+.top .brand{display:flex; align-items:center; border:none; padding:0}
+.top .brand img{display:block; height:21px; width:auto}
 .top .mark{font-family:Roboto,sans-serif; font-weight:900; letter-spacing:-.02em; font-size:17px; color:var(--ink)}
 .top .which{
   font-family:"IBM Plex Mono",monospace; font-size:11px; letter-spacing:.1em; text-transform:uppercase;
