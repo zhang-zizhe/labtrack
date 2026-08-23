@@ -1002,11 +1002,27 @@ SPA redirect URI on the app registration.
 
 ## Deploying the frontend
 
+**It publishes itself.** `.github/workflows/test-and-publish.yml` runs the suites on
+every push and, when they pass on `main`, copies `index.html` to `gh-pages`. The
+commands below are for doing it by hand — before pushing, or when Actions is not
+available.
+
 ```bash
 ./deploy.sh            # publish index.html to the site
 ./deploy.sh --check    # run the checks, change nothing
-npm test               # the three suites, the backend syntax, and those checks
+npm test               # the three suites, the backend syntax, the stamp, those checks
 ```
+
+> **One repository setting has to be right, once:** Settings → Actions → General →
+> Workflow permissions → **Read and write permissions**. New repositories default to
+> read-only, and the publish step then fails with a 403 that reads like a bug in the
+> workflow. Nothing else needs configuring — it uses the built-in `GITHUB_TOKEN`,
+> so there is no secret to manage or rotate.
+
+The checks **gate** the publish rather than merely preceding it. Serving Pages from
+`main` directly would also have made publishing automatic, and would have thrown the
+gate away: the app is one inline Babel block, so a JSX syntax error is a blank page
+with no stack trace, and nothing else catches that before somebody opens the site.
 
 > **GitHub Pages serves this site from the `gh-pages` branch, not from `main`.**
 > That branch holds four files — `index.html`, `CNAME`, `robots.txt`, `.nojekyll` —

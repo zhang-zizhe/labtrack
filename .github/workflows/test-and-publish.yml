@@ -1,0 +1,68 @@
+# Runs the suites on every push, and publishes the frontend when it changes.
+#
+# The site is served from the gh-pages branch, not from main, so pushing to main
+# publishes nothing — silently, with no error anywhere, because from git's point of
+# view the push succeeded. It ran three days behind that way, through changes that
+# were believed to be live, and what surfaced it was fetching the page and finding
+# yesterday's bytes. ./deploy.sh made publishing safe; it did not make anybody
+# remember to run it. This does.
+#
+# The checks gate the publish rather than merely preceding it. Serving from main
+# directly would also have made this automatic, and would have removed the gate: the
+# app is one inline Babel block, so a JSX syntax error is a blank page with no stack
+# trace, and nothing else catches that before a person opens the site.
+name: test and publish
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write          # only so the publish step can push to gh-pages
+
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # gh-pages has to be reachable for the publish step
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - run: npm install --no-audit --no-fund
+
+      # The three suites, the backend syntax, the source stamp, and the four
+      # refusals in deploy.sh --check.
+      - name: npm test
+        run: npm test
+
+      - name: Publish index.html to gh-pages
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          TZ: America/New_York
+        run: |
+          set -euo pipefail
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin gh-pages --depth=1
+          git worktree add ../ghp origin/gh-pages
+          cp index.html ../ghp/index.html
+          cd ../ghp
+          git switch -c publish
+          if git diff --quiet -- index.html; then
+            echo "gh-pages already matches main — nothing to publish."
+            exit 0
+          fi
+          git add index.html
+          git commit -m "Publish index.html from ${GITHUB_SHA:0:7}"
+          git push origin HEAD:gh-pages
+          echo "published."
