@@ -3166,11 +3166,19 @@ function LabInventory(){
   // The address is minted on first use, so this is a request rather than a lookup.
   // The docs are static pages on the same origin, so this is how they know which
   // guide to offer. It decides what is SHOWN, not what may be opened: both guides
-  // are public and neither holds a credential. Cleared on the way out so a shared
-  // browser does not keep offering the admin guide to whoever sits down next.
+  // are public, sit in a public repository and hold no credential.
+  //
+  // Preview counts. It was excluded at first, to keep a demo from leaving anything
+  // behind — but preview is how the admin side is shown to somebody, and until admin
+  // consent lands it is the only way to be an admin at all, so excluding it meant the
+  // admin guide was unreachable from the app by anyone. Nothing is protected by the
+  // exclusion, because nothing here is protected by the flag.
+  //
+  // Cleared on the way out, so a shared browser does not go on offering it to
+  // whoever sits down next.
   useEffect(()=>{
     try{
-      if(user && userRole==="admin" && user.token!=="local") localStorage.setItem("labtrack_role","admin");
+      if(user && userRole==="admin") localStorage.setItem("labtrack_role","admin");
       else localStorage.removeItem("labtrack_role");
     }catch(e){}
   },[user,userRole]);
