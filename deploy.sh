@@ -45,6 +45,17 @@ else
   printf '\033[33m  skip  \033[0mJSX not compiled (npm i @babel/standalone to enable this check)\n'
 fi
 
+# A path with a home directory in it runs everywhere that home directory exists and
+# nowhere else. It passed here, it passed in a fresh clone on this machine — because
+# the clone went on reading the original working tree — and it failed on CI, which
+# was the first honest test it had.
+if grep -rn "/Users/\|/home/[a-z]" --include="*.js" --include="*.mjs" --include="*.sh" . \
+     --exclude-dir=node_modules 2>/dev/null | grep -v "^\./deploy.sh:"; then
+  fail "a machine-specific absolute path is checked in (see above)"
+else
+  pass "no machine-specific paths"
+fi
+
 [ "$BAD" = "0" ] || { echo; echo "Refusing to deploy."; exit 1; }
 [ "$CHECK_ONLY" = "--check" ] && { echo; echo "Checks only — nothing deployed."; exit 0; }
 

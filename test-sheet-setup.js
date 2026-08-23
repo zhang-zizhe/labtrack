@@ -93,7 +93,11 @@ function load(ss) {
   };
   ctx.globalThis = ctx;
   vm.createContext(ctx);
-  vm.runInContext(fs.readFileSync("/Users/zizhe/labtrack/google-apps-script.js", "utf8"), ctx, { filename: "gas" });
+  // __dirname, not an absolute path. A path with a home directory in it works
+  // everywhere that home directory exists and nowhere else — including, quietly, in
+  // a fresh clone on the same machine, which goes on reading the original working
+  // tree and reports that the clone passes.
+  vm.runInContext(fs.readFileSync(__dirname + "/google-apps-script.js", "utf8"), ctx, { filename: "gas" });
   return ctx;
 }
 
