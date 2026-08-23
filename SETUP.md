@@ -506,27 +506,52 @@ What holds the damage down:
 - **Active and pending bookings only.** Returned ones leave the calendar — a
   calendar answers what is *claimed*, and the Usage tab is where the record lives
 
-### Why there is a proxy in front of it
+### Why addresses point at a proxy
 
-A calendar client cannot subscribe to an Apps Script web app. `/exec` answers with a
-302 to `script.googleusercontent.com` — an empty body typed `application/binary`,
-carrying a key that works exactly **once**; fetch that URL a second time and it is a
-redirect again. Neither Google Calendar nor Outlook follows it. Both refuse the
-address outright: *"couldn't add this calendar"*.
+Not because they have to. **Google Calendar and Outlook both subscribe to the
+`/exec` address directly, redirect and all** — it works, and it is the simpler
+system. An earlier version of this section said they refused it. They do not.
 
-The same bytes served with no redirect are accepted by both. That is what identified
-the transport rather than the file as the fault, and it was worth establishing before
-building anything: an independent parser (Mozilla's `ical.js`) reads the feed
-correctly, so nothing was wrong with what we generate.
+That claim came from a real failure with a wrong cause: both clients rejected the
+address, and the address had been mangled by a copy out of a wrapped terminal log.
+The experiment that appeared to settle it — serving the same bytes statically, which
+both clients accepted — changed two things at once. It removed the redirect *and*
+supplied a short, cleanly copied URL. It isolated nothing, and it was treated as
+decisive. Worth remembering the next time an experiment confirms what it was
+designed to confirm.
 
-So `worker/calendar-proxy.mjs` — about forty lines on Cloudflare Workers' free tier —
-follows the redirect and hands the client a plain `text/calendar` body.
+The reason to keep the proxy is **indirection**. A subscription address built
+against `/exec` contains the deployment id. That id changes if:
+
+- anyone presses **New deployment** instead of editing the existing one — a trap
+  this project has already come close to
+- the backend is ever redeployed from a different Google account
+- the backend moves off Apps Script at all — see
+  [Moving the backend off Google](#moving-the-backend-off-google)
+
+In every one of those cases, every subscription is **permanently and silently
+dead**: a calendar that stops updating does not say so. Behind the proxy, it is one
+constant to edit and nobody notices.
+
+`worker/calendar-proxy.mjs` also caches for five minutes, which matters more than it
+looks. The address is public and unauthenticated, and one stuck client polling in a
+loop could spend the lab's consumer-account Apps Script quota — taking the app down
+along with the calendar.
 
 **It lives on `*.workers.dev`, not under the site's own domain.** The site is expected
 to move to `labtrack.alliance-ai.cs.jhu.edu`, and a subscription that breaks on moving
 day is worse than one that never depended on the domain. The worker is tied to a
-Cloudflare *account* — register it with the **lab's** Google account, not a student's,
-for the same reason the Apps Script deployment runs as the lab.
+Cloudflare *account* — registered with the **lab's** Google account, for the same
+reason the Apps Script deployment runs as the lab.
+
+> **There is no automatic fallback.** A calendar client stores one URL; if it fails,
+> the calendar quietly stops updating and tries nothing else. So the `/exec` address
+> is a manual alternative to hand out if the worker ever goes away, not something
+> that takes over by itself:
+>
+> ```
+> https://script.google.com/macros/s/<deployment id>/exec?ics=<token>
+> ```
 
 Two properties of the worker are worth keeping if it is ever rewritten:
 

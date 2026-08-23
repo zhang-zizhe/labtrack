@@ -54,20 +54,26 @@ const ICS_CAL_NAME = "Alliance AI Lab — Equipment";
 // the editor gets it wrong.
 const WEB_APP_URL = "https://script.google.com/macros/s/AKfycbzBrg3dcycZZ7u2uX6PYWq455ngl6CojS3w-Qcno6i3rKh1uvg2e9fTKxXWs9p5rF8LRQ/exec";
 
-// Where subscription addresses point, if that is not the web app itself.
-//
-// It is not, and cannot be. Apps Script answers /exec with a 302 to
-// script.googleusercontent.com carrying a one-shot key — the second fetch of that
-// URL is already a redirect again — and neither Google Calendar nor Outlook will
-// follow it. Both refuse the address outright: "couldn't add this calendar". The
-// same bytes served with no redirect are accepted by both, which is what identified
-// the transport rather than the content as the fault.
-//
-// So a small proxy sits in front, follows the redirect, and hands the client a
-// plain text/calendar body. Set this to its address, path and all, with no query
-// string — the token is appended here:
+// Where subscription addresses point, if that is not the web app itself. Set it to
+// a proxy's address, path and all, with no query string — the token is appended
+// here:
 //
 //   https://labtrack-cal.<subdomain>.workers.dev/calendar.ics
+//
+// Leave it empty and addresses point straight at /exec, which works: Google
+// Calendar and Outlook both subscribe to it, redirect and all. An earlier version
+// of this comment said they refused it. They do not. The address had been mangled
+// by a copy out of a wrapped terminal log, and the experiment that seemed to prove
+// otherwise changed two things at once — it removed the redirect AND supplied a
+// short, cleanly copied URL — so it isolated nothing.
+//
+// The reason to point somewhere else anyway is indirection, not transport. A
+// subscription address baked against /exec contains the deployment id, and that id
+// changes if anyone ever presses "New deployment" instead of editing the existing
+// one, or if the backend is redeployed from a different Google account, or moved
+// off Apps Script altogether. Every subscription would then be permanently dead,
+// silently — a calendar that stops updating says nothing. Behind a proxy, that is
+// one constant to edit.
 //
 // Deliberately not a path under the site itself: the site moves to the lab's own
 // domain eventually, and a subscription that breaks on that day is worse than one

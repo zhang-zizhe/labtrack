@@ -1,16 +1,24 @@
 /**
  * LabTrack calendar proxy — a Cloudflare Worker.
  *
- * Calendar clients cannot subscribe to an Apps Script web app directly. /exec
- * answers with a 302 to script.googleusercontent.com, an empty body typed
- * application/binary, carrying a key that works exactly once — fetch the same URL
- * twice and the second is a redirect again. Google Calendar and Outlook both
- * refuse it: "couldn't add this calendar". Serving the identical bytes with no
- * redirect, both accept them, which is how the transport was identified as the
- * fault rather than the file.
+ * Calendar clients CAN subscribe to an Apps Script web app directly — Google
+ * Calendar and Outlook both accept /exec, redirect and all. This file was written
+ * believing otherwise, after both refused an address that had in fact been mangled
+ * by a copy out of a wrapped terminal log. The experiment that seemed to confirm it
+ * changed two things at once, removing the redirect and supplying a short cleanly
+ * copied URL, so it isolated nothing. Recorded here because the wrong reason is
+ * still written in a few places and this is the correction.
  *
- * All this does is follow that redirect on the client's behalf and hand back a
- * plain text/calendar body.
+ * What this is actually for is indirection. A subscription address built against
+ * /exec carries the deployment id, and that id changes if anyone presses "New
+ * deployment" rather than editing the existing one, if the backend is redeployed
+ * from another Google account, or if it moves off Apps Script. Every subscription
+ * would be permanently and silently dead — a calendar that stops updating says
+ * nothing. Behind this, that is one constant to edit.
+ *
+ * It also caches for five minutes, which matters more than it looks: the address is
+ * public and unauthenticated, and one stuck client polling in a loop could spend the
+ * lab's consumer-account Apps Script quota and take the app down with the calendar.
  *
  * It lives on workers.dev rather than under the site's own domain on purpose: the
  * site is expected to move to the lab's domain, and a subscription that breaks on
