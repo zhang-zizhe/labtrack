@@ -1,0 +1,12 @@
+{
+  "name": "labtrack",
+  "private": true,
+  "description": "Lab inventory and equipment booking for the JHU Alliance AI Lab",
+  "scripts": {
+    "test": "node test-sheet-setup.js && node test-sheets-coercion.js && node test-storage-layer.js > /dev/null && node --check google-apps-script.js && ./deploy.sh --check",
+    "deploy": "./deploy.sh"
+  },
+  "devDependencies": {
+    "@babel/standalone": "7.24.7"
+  }
+}

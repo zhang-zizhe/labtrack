@@ -5,3 +5,6 @@
 # were done — worth having, not worth publishing. See "Session logs" in SETUP.md.
 chat-log-*.md
 chat-log-*.txt
+
+# only @babel/standalone, and only so deploy.sh can compile the JSX
+node_modules/

@@ -897,6 +897,31 @@ MSAL derives its redirect URI from `location.origin + location.pathname`, so the
 app follows whatever host serves it — each origin just has to be registered as a
 SPA redirect URI on the app registration.
 
+## Deploying the frontend
+
+```bash
+./deploy.sh            # publish index.html to the site
+./deploy.sh --check    # run the checks, change nothing
+npm test               # the three suites, the backend syntax, and those checks
+```
+
+> **GitHub Pages serves this site from the `gh-pages` branch, not from `main`.**
+> That branch holds four files — `index.html`, `CNAME`, `robots.txt`, `.nojekyll` —
+> and nothing else. Pushing to `main` changes nothing anybody can see, and there is
+> no error to notice: the site simply goes on serving what it served before. It ran
+> three days behind once, through changes that were believed to be live, and the
+> only reason it surfaced was a fetch that returned yesterday's file.
+
+`deploy.sh` refuses to publish when any of these is wrong, because each is a way to
+ship something quietly broken:
+
+| Check | Why refusing is right |
+|---|---|
+| `LAB_CONFIG.dev_key` empty | A set key removes authentication from a web app deployed as "Anyone", and the key is readable in the page source |
+| `DEV_NO_AUTH_KEY` empty | The same hatch on the backend |
+| `demoData()` still gated on `user.token === "local"` | Sample data must never appear inside a signed-in session |
+| The JSX compiles | The app is one inline Babel block: a syntax error is a **blank page with no stack trace**, and compiling is the only way to know before a person opens it |
+
 ## Deployment
 
 GitHub Pages serves the app. The demo currently runs from the `gh-pages` branch,
