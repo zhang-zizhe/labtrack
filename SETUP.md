@@ -799,7 +799,7 @@ re-implements them so it can refuse before a round trip instead of after one. Th
 two halves have to be kept in step — the constants carry the same names on both
 sides (`MAX_DAYS_WITHOUT_APPROVAL`, `MAX_LEAD_DAYS`, `bookingsClash_`/`bookingsClash`,
 `waitReason_`/`waitReason`, `leadTooFar_`/`leadTooFar`, `badRange_`/`badRange`,
-`bookingMs_`/`bookingMs`, `bookingLiveNow_`/`bookingLiveNow`, `MAX_HOLD_DAYS`).
+`bookingMs_`/`bookingMs`, `bookingHoldsItem_`/`bookingHoldsItem`, `MAX_HOLD_DAYS`).
 
 **1. Shared items are booked by the hour.** Checking out an item marked *Shared*
 asks whether the hold is all day or the same window every day (`fromTime`,
@@ -824,10 +824,16 @@ handing something over at 12:00 is fine. Only `Active` blocks — see rule 4.
 > inside the range — which is what exclusive means.
 
 > **In Use now means somebody has it, not that somebody booked it.**
-> `bookingLiveNow_()` decides: a booking marks its item In Use only once its start
-> has arrived and while its end has not, so a hold for the tenth of next month sits
-> on the calendar rather than taking the arm off the shelf today, and a loan logged
-> after it finished does not hand the item to someone who has already given it back.
+> `bookingHoldsItem_()` decides, and it asks one question: **has this booking
+> started?** A hold for the tenth of next month therefore sits on the calendar
+> rather than taking the arm off the shelf today.
+>
+> It deliberately does **not** ask whether the booking is over. A booking past its
+> return date with nothing given back is not a finished loan, it is the definition of
+> an overdue one — the case where somebody most likely still has the thing. Releasing
+> the item then would have had the morning sweep put an unreturned arm back on the
+> shelf two lines before the same run told Slack that Alice was late with it. Only
+> `returnItem` ends a loan; the clock does not.
 > `syncItemStatuses()` runs each morning and derives every item's flag from the
 > bookings that are live at that moment — safe to run at any time and any number of
 > times, so a missed run costs a day of staleness and nothing else.

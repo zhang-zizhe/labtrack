@@ -1210,6 +1210,9 @@ console.log("a calendar subscription is a feed, and a feed is a parser's problem
 
   // The feed is a capability URL. Names are the point of it; addresses are not.
   check("no email address appears anywhere in the feed", feed.indexOf("@jh.edu") < 0);
+  // The address is a bearer credential people forward. The notes box is where
+  // somebody writes a door code.
+  check("checkout notes stay out of the feed", feed.indexOf("cabinet code") < 0 && feed.toLowerCase().indexOf("notes:") < 0);
 
   // Pending is not a promise, and a calendar should not draw it as one.
   asMember();

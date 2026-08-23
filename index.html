@@ -3575,7 +3575,11 @@ function LabInventory(){
     let f = items.filter(i=>{
       const q=search.toLowerCase();
       const s = v => String(v==null?"":v).toLowerCase();
-      return(s(i.name).includes(q)||s(i.loc).includes(q)||s(i.cat).includes(q)||s(i.desc).includes(q)||s(i.serial).includes(q))
+      // displayId included, because it is the number printed on the sticker and the
+      // first thing anybody types when they are holding the object. Searching
+      // everything except the label is a strange place to draw the line.
+      return(s(i.name).includes(q)||s(i.loc).includes(q)||s(i.cat).includes(q)||s(i.desc).includes(q)
+        ||s(i.serial).includes(q)||s(i.displayId).includes(q))
         &&(catF==="All"||i.cat===catF);
     });
     // Sort

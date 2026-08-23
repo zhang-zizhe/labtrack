@@ -62,7 +62,7 @@ const WEB_APP_URL = "https://script.google.com/macros/s/AKfycbzBrg3dcycZZ7u2uX6P
 // pasting is manual, and stale code fails in whatever way the missing fix was
 // supposed to prevent — twice in one day, the only clue was that a log message had
 // different wording than expected. That was luck, not a check.
-const CODE_STAMP = "f2215ad078087b86";
+const CODE_STAMP = "cbb8f48f2b8d862e";
 const SOURCE_URL = "https://raw.githubusercontent.com/zhang-zizhe/labtrack/main/google-apps-script.js";
 
 // Where subscription addresses point, if that is not the web app itself. Set it to
@@ -1503,7 +1503,10 @@ function icsEvent_(c, item, stamp) {
   desc.push("Status: " + (pending ? "Awaiting an admin's approval" : "Checked out"));
   if (c.qty && Number(c.qty) > 1) desc.push("Quantity: " + c.qty);
   if (c.fromTime && c.toTime) desc.push("Daily window: " + c.fromTime + "\u2013" + c.toTime);
-  if (c.notes) desc.push("Notes: " + c.notes);
+  // Notes deliberately stay in the app. A subscription address is a bearer
+  // credential with no expiry that people forward to each other, and the notes box
+  // is exactly where somebody writes a door code or where the key is kept. Anyone
+  // who needs the note can sign in and read it.
   desc.push("Booked in LabTrack. This calendar is read-only \u2014 change it in the app.");
 
   // Everything after the times is identical for every occurrence.
