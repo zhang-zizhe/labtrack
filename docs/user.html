@@ -12,6 +12,12 @@
 <link rel="stylesheet" href="guide.css">
 </head>
 <body>
+<!-- Cloudflare rewrites anything that looks like an email address into
+     "[email protected]" plus a decoder script. On this page the example
+     addresses ARE the instruction — the whole point is the difference between
+     @jh.edu and @jhu.edu — so the page opts out. This is Cloudflare's own
+     marker and needs nothing turned off in a dashboard. -->
+<!--email_off-->
 
 <div class="top">
   <span class="mark">LabTrack</span>
@@ -416,5 +422,6 @@
 
 </main>
 </div>
+<!--email_on-->
 </body>
 </html>
