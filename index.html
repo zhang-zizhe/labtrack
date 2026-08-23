@@ -2532,8 +2532,22 @@ const LoginPage = ({onSignIn, notice=""}) => {
             </button>
           </div>
           {!msalReady && !error && <p style={{color:"var(--dim)",fontSize:12}}>Loading sign-in...</p>}
-          <p style={{color:"var(--dim)",fontSize:12}}>Sign in with your {LAB.institution} account ({LAB.signin_hint})</p>
-          {error && <p style={{color:"var(--red)",fontSize:13,marginTop:12,background:"var(--red-d)",padding:"8px 14px",borderRadius:8,border:"1px solid color-mix(in srgb, var(--red) 30%, transparent)"}}>{error}</p>}
+          <p style={{color:"var(--dim)",fontSize:12}}>
+            Sign in with your {LAB.institution} account ({LAB.signin_hint})
+            {" · "}
+            <a href="docs/" style={{color:"var(--dim)",textDecoration:"underline",textUnderlineOffset:2}}>Docs</a>
+          </p>
+          {error && <div style={{color:"var(--red)",fontSize:13,marginTop:12,background:"var(--red-d)",padding:"8px 14px",borderRadius:8,border:"1px solid color-mix(in srgb, var(--red) 30%, transparent)",textAlign:"left"}}>
+            {error}
+            {/* The address in the message is nearly always @jhu.edu where @jh.edu
+                was needed, and the page that explains that is the one thing somebody
+                locked out cannot reach — the Docs button lives inside the app they
+                are being kept out of. So it is offered here, pointed at the section
+                rather than at the front door. */}
+            {/not authorized/i.test(error) && <div style={{marginTop:7,paddingTop:7,borderTop:"1px solid color-mix(in srgb, var(--red) 22%, transparent)"}}>
+              <a href="docs/user.html#in" style={{color:"var(--red)",fontWeight:600}}>Why this happens, and what to check →</a>
+            </div>}
+          </div>}
 
           {/* Offline sandbox. Never touches the backend — every API call is
               short-circuited on token === "local", and the server rejects that
