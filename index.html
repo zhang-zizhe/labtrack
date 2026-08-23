@@ -2539,12 +2539,15 @@ const LoginPage = ({onSignIn, notice=""}) => {
           </p>
           {error && <div style={{color:"var(--red)",fontSize:13,marginTop:12,background:"var(--red-d)",padding:"8px 14px",borderRadius:8,border:"1px solid color-mix(in srgb, var(--red) 30%, transparent)",textAlign:"left"}}>
             {error}
-            {/* The address in the message is nearly always @jhu.edu where @jh.edu
-                was needed, and the page that explains that is the one thing somebody
-                locked out cannot reach — the Docs button lives inside the app they
-                are being kept out of. So it is offered here, pointed at the section
-                rather than at the front door. */}
-            {/not authorized/i.test(error) && <div style={{marginTop:7,paddingTop:7,borderTop:"1px solid color-mix(in srgb, var(--red) 22%, transparent)"}}>
+            {/* Both refusals that are about an address get this: "not authorized"
+                (Microsoft let you in and the roster did not — nearly always @jhu.edu
+                where @jh.edu was needed) and "must use a Johns Hopkins account" (a
+                personal Microsoft account). A blocked popup and a pending admin
+                consent do not, because the guide has nothing to add about either.
+                It matters here specifically: the page explaining this is the one
+                thing somebody locked out cannot reach, since the Docs button lives
+                inside the app they are being kept out of. */}
+            {/not authorized|must use a/i.test(error) && <div style={{marginTop:7,paddingTop:7,borderTop:"1px solid color-mix(in srgb, var(--red) 22%, transparent)"}}>
               <a href="docs/user.html#in" style={{color:"var(--red)",fontWeight:600}}>Why this happens, and what to check →</a>
             </div>}
           </div>}
