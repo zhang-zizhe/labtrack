@@ -1250,6 +1250,12 @@ console.log("a calendar subscription is a feed, and a feed is a parser's problem
   const bad = cI.doGet({ parameter:{ ics: "0".repeat(64) } });
   check("an unknown address does not serve the lab's data", bad.__text.indexOf("labtrack-arm") < 0 && bad.__text.indexOf("Ana Lee") < 0);
   check("and says so in the one place its owner is looking", bad.__text.indexOf("no longer valid") > 0);
+  // DTEND is exclusive: same date start and end is a zero-length all-day event, and
+  // a client that drops it leaves the one person who needs this reading nothing.
+  {
+    const d = k => (bad.__text.split("\r\n").find(l => l.startsWith(k)) || "").split(":").pop();
+    check("the notice covers a real day", d("DTEND;VALUE=DATE") > d("DTSTART;VALUE=DATE"));
+  }
 
   asMember();
   const u3 = post({ action:"getIcsUrl", rotate:true });

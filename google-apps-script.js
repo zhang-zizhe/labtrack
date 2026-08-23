@@ -1503,14 +1503,19 @@ function buildIcs_() {
 // only surface this person is looking at is their calendar. So say it there.
 function icsNotice_(text) {
   var stamp = icsUtc_(new Date().getTime());
-  var today = icsDate_(new Date().getTime());
+  var now = new Date();
+  var today = icsDate_(now.getTime());
+  // DTEND is exclusive for an all-day event, so start and end on the same date is a
+  // zero-length event and clients are entitled to drop it — which would leave the
+  // one person who needs to read this seeing nothing at all.
+  var tomorrow = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
   return [
     "BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//LabTrack//Alliance AI Lab//EN",
     "CALSCALE:GREGORIAN", "METHOD:PUBLISH",
     "X-WR-CALNAME:" + icsEsc_(ICS_CAL_NAME),
     "BEGIN:VEVENT",
     "UID:labtrack-notice@alliance-ai-lab", "DTSTAMP:" + stamp,
-    "DTSTART;VALUE=DATE:" + today, "DTEND;VALUE=DATE:" + today,
+    "DTSTART;VALUE=DATE:" + today, "DTEND;VALUE=DATE:" + icsDate_(tomorrow.getTime()),
     "SUMMARY:" + icsEsc_(text),
     "DESCRIPTION:" + icsEsc_("Open LabTrack and use Subscribe on the Calendar tab to get a working address, then remove this one."),
     "STATUS:CONFIRMED", "TRANSP:TRANSPARENT", "END:VEVENT",
